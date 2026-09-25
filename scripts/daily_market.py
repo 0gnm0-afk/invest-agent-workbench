@@ -3,6 +3,7 @@ import argparse
 import csv
 import html
 import json
+import re
 import socket
 import sys
 import time
@@ -18,6 +19,7 @@ from market_collect import audit, run as collect, write_json
 import sector_observation as sector
 import nh_fallback
 from candidate_context import enrich
+import priority_review as priority
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -58,8 +60,20 @@ def seed_check(config):
     return seed, inputs
 
 
+def saved_fallback_summary(fallback):
+    return {'attempted':fallback['attempted'], 'adopted':fallback['adopted'],
+            'unrecovered':fallback.get('unrecovered', fallback['attempted']-fallback['adopted'])}
+
+
 def percent(value):
     return '결측' if value is None else f'{value:.2%}'
+
+
+def inline_links(text):
+    # Escape all text first; activate only local artifact paths, never URLs/user markup.
+    escaped = html.escape(text)
+    return re.sub(r'\[([^\]<>]+)\]\(((?:charts/[A-Za-z0-9-]+\.html)|(?:[A-Za-z0-9_-]+\.json)|(?:sectors/[A-Za-z0-9_.-]+))\)',
+                  r'<a href="\2">\1</a>', escaped)
 
 
 def render(run, output, screening=None, observation=None):
@@ -84,6 +98,14 @@ def render(run, output, screening=None, observation=None):
             lines.insert(lines.index('## 후보와 섹터 맥락')-1,
                 f"NH 표적 보완: 시도 {fb['attempted']} · 채택 {fb['adopted']} · 미복구 {fb['unrecovered']}. "
                 '원 Toss 실패는 원본에 보존; NH 거래량 정밀도는 종목별 표시하고 동일 공급자 섹터 집계에서 제외합니다.')
+        if (output/'priority-review.json').is_file():
+            review = sector.load(output/'priority-review.json')
+            missing_count = sum(g['selected_count'] for g in review['markets'].values())
+            review_lines = priority.report_lines(review,
+                sector.load(output/'priority-charts.json') if (output/'priority-charts.json').is_file()
+                else {'requested':missing_count,'available':0,'failed':missing_count,'rows':[]})
+            at = lines.index('## 후보와 섹터 맥락')
+            lines[at:at] = review_lines
         for row in screening['rows']:
             if row['state'] != 'candidate':
                 continue
@@ -127,7 +149,7 @@ def render(run, output, screening=None, observation=None):
             if line.startswith('|---'):
                 continue
             cells = line.strip('|').split('|')
-            body.append('<tr>'+''.join('<td>'+html.escape(c.strip())+'</td>' for c in cells)+'</tr>')
+            body.append('<tr>'+''.join('<td>'+inline_links(c.strip())+'</td>' for c in cells)+'</tr>')
         else:
             if table:
                 body.append('</table></div>')
@@ -136,7 +158,7 @@ def render(run, output, screening=None, observation=None):
                 level = min(len(line)-len(line.lstrip('#')), 3)
                 body.append(f'<h{level}>'+html.escape(line.lstrip('# '))+f'</h{level}>')
             elif line:
-                body.append('<p>'+html.escape(line)+'</p>')
+                body.append('<p>'+inline_links(line)+'</p>')
     if table:
         body.append('</table></div>')
     page = '<!doctype html><html lang="ko"><meta charset="utf-8"><title>일일 시장 관찰</title><style>body{font-family:system-ui;margin:24px;line-height:1.5}table{border-collapse:collapse;font-size:14px}td{border:1px solid #ccc;padding:8px;min-width:85px}tr:first-child{font-weight:bold;background:#edf2f7}p{overflow-wrap:anywhere}</style><body><nav><a href="sectors/observation.html">섹터 관찰표</a> · <a href="candidates.csv">후보 CSV</a> · <a href="screen.json">후보/제외/결측 상세</a> · <a href="quality.json">품질 상세</a></nav>' + ''.join(body) + '</body></html>'
@@ -153,13 +175,13 @@ def export_sectors(output, report, groups):
     (output/'observation.html').write_text(page, encoding='utf-8')
 
 
-def run(config, source=None, recover_source=None, nh_evidence=None):
+def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=None):
     date = datetime.now(ZoneInfo('Asia/Seoul')).date().isoformat()
-    mode = 'replay' if source else 'recover' if recover_source else 'live'
+    mode = 'review' if saved_run else 'replay' if source else 'recover' if recover_source else 'live'
     output = ROOT/'runtime'/date/(datetime.now(timezone.utc).strftime('%H%M%S')+'-'+mode+'-'+uuid4().hex[:8])
     output.mkdir(parents=True)
     run = {'schema':1, 'state':'running', 'processing_state':'running', 'mode':mode, 'started_at':now(),
-           'output':str(output), 'stages':{s:'not_started' for s in ('inputs','collection','nh_fallback','quality','stock_screen','sector_screen','report')}}
+           'output':str(output), 'stages':{s:'not_started' for s in ('inputs','collection','nh_fallback','quality','stock_screen','sector_screen','priority_review','charts','report')}}
     started = time.monotonic()
     hashes, inputs = {}, {}
     screening = observation = None
@@ -173,18 +195,31 @@ def run(config, source=None, recover_source=None, nh_evidence=None):
         write_json(output/'config.json', config)
         seed, inputs = seed_check(config)
         update('inputs', 'completed')
+        if saved_run:
+            saved_run = Path(saved_run).resolve()
+            prior_manifest = sector.load(saved_run/'manifest.json')
+            check_hashes(prior_manifest['input_hashes'])
+            check_hashes({str(saved_run/p):h for p,h in prior_manifest['output_hashes'].items()})
+            # A saved screen may only be reused with the identical calculation engine.
+            engine_root = Path(config['engine']).resolve()
+            check_hashes({p:h for p,h in prior_manifest['code_hashes'].items()
+                          if Path(p).resolve().is_relative_to(engine_root) or Path(p).name=='stock_screen.py'})
+            source = Path(sector.load(saved_run/'run.json')['market_source'])
+            run['base_screen_source'] = str(saved_run)
+            for name in ('manifest.json','run.json','screen-base.json'):
+                inputs[str(saved_run/name)] = sector.sha(saved_run/name)
         stage = 'collection'
         update(stage, 'running')
         if source or recover_source:
             source = Path(source or recover_source).resolve()
             source_check(source)
-            update(stage, 'saved_source_verified_no_network' if mode == 'replay' else 'saved_toss_source_verified')
+            update(stage, 'saved_source_verified_no_network' if mode in ('replay','review') else 'saved_toss_source_verified')
         else:
             collection_root = output/'collection'
             collect(collection_root, ROOT/'config.json')
             source = Path(sector.load(collection_root/'latest.json')['attempt'])
             update(stage, 'completed')
-        if mode != 'replay':
+        if mode not in ('replay','review'):
             original_source = source
             run['toss_source'] = str(original_source)
             source_check(original_source)
@@ -212,6 +247,9 @@ def run(config, source=None, recover_source=None, nh_evidence=None):
         stage = 'quality'
         update(stage, 'running')
         snapshot = sector.load(source/'snapshot.json')
+        if mode in ('replay','review') and snapshot.get('nh_fallback'):
+            run['nh_fallback'] = saved_fallback_summary(snapshot['nh_fallback'])
+            run['nh_fallback']['provenance'] = 'saved_source_no_new_requests'
         quality = audit(snapshot)
         write_json(output/'quality.json', quality)
         run['quality'] = {k:quality[k] for k in ('state','processing_state','data_complete','quality_issue_series','unexpected_failures')}
@@ -220,8 +258,7 @@ def run(config, source=None, recover_source=None, nh_evidence=None):
         update(stage, quality['processing_state'])
         stage = 'stock_screen'
         update(stage, 'running')
-        screening = screen(snapshot)
-        del snapshot
+        screening = sector.load(saved_run/'screen-base.json') if saved_run else screen(snapshot)
         write_json(output/'screen-base.json', screening)
         update(stage, 'completed')
         stage = 'sector_screen'
@@ -244,7 +281,26 @@ def run(config, source=None, recover_source=None, nh_evidence=None):
         run['candidate_count'] = screening['candidate_count']
         run['sector_coverage'] = observation['coverage']
         update(stage, 'completed_with_limitations')
-        incomplete = not quality['data_complete'] or screening['unavailable_count'] > 0 or any(r['unmatched'] for r in observation['coverage'].values())
+        stage = 'priority_review'
+        update(stage, 'running')
+        review = priority.build(screening, snapshot, config.get('priority_review'))
+        write_json(output/'priority-review.json', review)
+        update(stage, 'completed')
+        stage = 'charts'
+        update(stage, 'running')
+        try:
+            chart_result = priority.charts(review, screening, snapshot, output)
+        except Exception as exc:
+            failures = [{'market':m,'symbol':e['symbol'],'as_of':e['as_of'],'state':'failed',
+                         'reason':'chart_initialization: '+type(exc).__name__+': '+str(exc)}
+                        for m,g in review['markets'].items() for e in g['entries'] if e['selected']]
+            chart_result = {'requested':len(failures),'available':0,'failed':len(failures),'rows':failures}
+        write_json(output/'priority-charts.json', chart_result)
+        run['priority_counts'] = {m:g['selected_count'] for m,g in review['markets'].items()}
+        run['chart_counts'] = {k:chart_result[k] for k in ('requested','available','failed')}
+        update(stage, 'completed_with_exceptions' if chart_result['failed'] else 'completed')
+        del snapshot
+        incomplete = chart_result['failed'] > 0 or not quality['data_complete'] or screening['unavailable_count'] > 0 or any(r['unmatched'] for r in observation['coverage'].values())
         run['state'] = 'failed' if quality['unexpected_failures'] else 'partial' if incomplete else 'succeeded'
         run['processing_state'] = 'failed' if quality['unexpected_failures'] else 'completed_with_exceptions' if incomplete else 'completed'
         stage = 'report'
@@ -282,7 +338,6 @@ def verify(output):
     if audit(snapshot) != sector.load(output/'quality.json'):
         raise ValueError('quality_replay_mismatch')
     base = screen(snapshot)
-    del snapshot
     saved = sector.load(output/'screen.json')
     report, groups, _ = sector.build(source, *[Path(p) for p in seed['roots'][1:]],
         sector.load(output/'sectors/observation.json')['applied_at'], allow_universe_changes=True)
@@ -290,30 +345,52 @@ def verify(output):
         raise ValueError('sector_replay_mismatch')
     if base != sector.load(output/'screen-base.json') or enrich(base, report, groups) != saved:
         raise ValueError('candidate_replay_mismatch')
-    return {'verified':True,'analysis_replayed':True,'network_calls':0,'candidate_count':base['candidate_count'],
+    priority_counts = {}
+    if (output/'priority-review.json').is_file():
+        review = priority.build(saved, snapshot, config.get('priority_review'))
+        if review != sector.load(output/'priority-review.json'):
+            raise ValueError('priority_replay_mismatch')
+        chart_result = sector.load(output/'priority-charts.json')
+        expected = {(m,e['symbol']) for m,g in review['markets'].items() for e in g['entries'] if e['selected']}
+        actual = [(r['market'],r['symbol']) for r in chart_result['rows']]
+        if len(actual) != len(expected) or set(actual) != expected:
+            raise ValueError('priority_chart_membership_mismatch')
+        for row in chart_result['rows']:
+            if row['state'] == 'available':
+                for key in ('path','image','metadata'):
+                    target = (output/row[key]).resolve()
+                    if not target.is_relative_to(output.resolve()) or not target.is_file():
+                        raise ValueError('priority_chart_missing_or_unsafe')
+                if sector.sha(output/row['image']) != row['image_sha256']:
+                    raise ValueError('priority_chart_image_hash_mismatch')
+                if ('href="'+row['path']+'"') not in (output/'report.html').read_text(encoding='utf-8'):
+                    raise ValueError('priority_chart_report_link_missing')
+        priority_counts = {m:g['selected_count'] for m,g in review['markets'].items()}
+    return {'priority_counts':priority_counts,'verified':True,'analysis_replayed':True,'network_calls':0,'candidate_count':base['candidate_count'],
             'universe_rows':len(groups),'sector_groups':len(report['observations']),'state':run['state']}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', type=Path, help='Offline replay of an immutable market attempt')
+    parser.add_argument('--review', type=Path, help='Offline report/priority refresh from a verified saved screen; no market collection')
     parser.add_argument('--verify', type=Path, help='Offline checksum and calculation replay')
     parser.add_argument('--recover', type=Path, help='New run from a saved Toss attempt with NH fallback')
     parser.add_argument('--nh-evidence', type=Path, help='Previously captured NH requests for --recover')
     args = parser.parse_args()
-    if sum(bool(x) for x in (args.source,args.verify,args.recover)) > 1:
-        parser.error('choose source, verify, or recover')
+    if sum(bool(x) for x in (args.source,args.verify,args.recover,args.review)) > 1:
+        parser.error('choose source, verify, recover, or review')
     if args.nh_evidence and not args.recover:
         parser.error('--nh-evidence requires --recover')
     config = sector.load(ROOT/'config.json')
     from contextlib import nullcontext
     no_network = patch.object(socket.socket, 'connect', side_effect=AssertionError('offline_network_forbidden'))
-    with no_network if args.source or args.verify or args.nh_evidence else nullcontext():
+    with no_network if args.source or args.verify or args.nh_evidence or args.review else nullcontext():
         if args.verify:
             result = verify(args.verify.resolve())
         else:
             with instance_lock(ROOT/'runtime'):
-                result = run(config, args.source, args.recover, args.nh_evidence)
+                result = run(config, args.source, args.recover, args.nh_evidence, args.review)
     print(json.dumps(result, ensure_ascii=True), flush=True)
     return 1 if result.get('state') == 'failed' else 2 if result.get('state') == 'partial' else 0
 
