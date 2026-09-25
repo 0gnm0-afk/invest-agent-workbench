@@ -1,4 +1,4 @@
-"""One private market cycle. Toss only; no account, NH, LLM, or publishing calls."""
+"""One private market cycle: Toss collection, qualified NH failure fallback, analysis."""
 import argparse
 import csv
 import html
@@ -16,6 +16,7 @@ from stock_screen import screen_market as screen
 from invest_agent.trading.store import instance_lock
 from market_collect import audit, run as collect, write_json
 import sector_observation as sector
+import nh_fallback
 from candidate_context import enrich
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -78,6 +79,11 @@ def render(run, output, screening=None, observation=None):
                   f"후보 {screening['candidate_count']} · 종목 판단 불가 {screening['unavailable_count']}",
                   '', '## 후보와 섹터 맥락', '', '유니버스 → 스페란데오 S1–S4 → 테이버 위치. 아래는 기존 엔진 순서입니다.', '',
                   '| 시장 | 종목 | 단계·기간 | 테이버 위치 | 섹터 | RS 3M / 6M | 조사 참고 |', '|---|---|---|---|---|---|---|']
+        if run.get('nh_fallback'):
+            fb = run['nh_fallback']
+            lines.insert(lines.index('## 후보와 섹터 맥락')-1,
+                f"NH 표적 보완: 시도 {fb['attempted']} · 채택 {fb['adopted']} · 미복구 {fb['unrecovered']}. "
+                '원 Toss 실패는 원본에 보존; NH 거래량 정밀도는 종목별 표시하고 동일 공급자 섹터 집계에서 제외합니다.')
         for row in screening['rows']:
             if row['state'] != 'candidate':
                 continue
@@ -91,7 +97,12 @@ def render(run, output, screening=None, observation=None):
             label = ctx.get('group_name') or ctx.get('reason') or '결측'
             rs = ' / '.join(percent(horizons.get(h, {}).get('relative_strength')) for h in ('63','126'))
             note = ctx.get('reason') or '; '.join(ctx.get('warnings', [])) or '분모·추세·참여·활동은 상세 JSON/섹터표 참조'
-            cells = [row['market'], f"{row['symbol']} {row.get('name','')}", structure, location, label, rs, note]
+            nh_price = str(row.get('price_basis','')).startswith('nh_')
+            if nh_price:
+                volume_note = ('거래량 하한 추정' if row['market']=='US' else '거래량 이전 Toss 직접 대조')
+                note = 'NH 가격 보완·'+volume_note+'·섹터 분모 제외; '+note
+            cells = [row['market'], f"{row['symbol']}{' [NH]' if nh_price else ''} {row.get('name','')}",
+                     structure, location, label, rs, note]
             lines.append('| ' + ' | '.join(str(x).replace('|','/').replace('\n',' ') for x in cells) + ' |')
         lines += ['', '## 조사 순서', '', '국가별 섹터 RS63 내림차순, 결측은 마지막, 동률은 원 후보 순서입니다. 합성 점수는 없습니다.']
         for market, rows in screening['research_order'].items():
@@ -104,7 +115,7 @@ def render(run, output, screening=None, observation=None):
                   '한국 RS: 같은 Toss 대상의 동일비중 지수, KOSPI는 참고. 미국 RS: Toss SPY 프록시.',
                   '가격 결측은 지표별 제외/null이며 0수익률 대체나 보간하지 않습니다.',
                   '분류 관측 후 7일 초과는 미확인으로 남깁니다. 공식 계산 근거 문서가 오래되면 섹터 계산은 실패로 남깁니다.',
-                  'NH 교차검증·계좌 조회·기업 Evidence·LLM·예약 실행은 이 명령에 포함하지 않습니다.']
+                  'NH는 Toss 전송 실패분의 검증된 가격 보완에만 사용합니다. 계좌 조회·기업 Evidence·LLM·예약 실행은 포함하지 않습니다.']
     text = '\n'.join(lines) + '\n'
     (output/'report.md').write_text(text, encoding='utf-8')
     body, table = [], False
@@ -142,13 +153,13 @@ def export_sectors(output, report, groups):
     (output/'observation.html').write_text(page, encoding='utf-8')
 
 
-def run(config, source=None):
+def run(config, source=None, recover_source=None, nh_evidence=None):
     date = datetime.now(ZoneInfo('Asia/Seoul')).date().isoformat()
-    mode = 'replay' if source else 'live'
+    mode = 'replay' if source else 'recover' if recover_source else 'live'
     output = ROOT/'runtime'/date/(datetime.now(timezone.utc).strftime('%H%M%S')+'-'+mode+'-'+uuid4().hex[:8])
     output.mkdir(parents=True)
     run = {'schema':1, 'state':'running', 'processing_state':'running', 'mode':mode, 'started_at':now(),
-           'output':str(output), 'stages':{s:'not_started' for s in ('inputs','collection','quality','stock_screen','sector_screen','report')}}
+           'output':str(output), 'stages':{s:'not_started' for s in ('inputs','collection','nh_fallback','quality','stock_screen','sector_screen','report')}}
     started = time.monotonic()
     hashes, inputs = {}, {}
     screening = observation = None
@@ -164,15 +175,37 @@ def run(config, source=None):
         update('inputs', 'completed')
         stage = 'collection'
         update(stage, 'running')
-        if source:
-            source = Path(source).resolve()
+        if source or recover_source:
+            source = Path(source or recover_source).resolve()
             source_check(source)
-            update(stage, 'saved_source_verified_no_network')
+            update(stage, 'saved_source_verified_no_network' if mode == 'replay' else 'saved_toss_source_verified')
         else:
             collection_root = output/'collection'
             collect(collection_root, ROOT/'config.json')
             source = Path(sector.load(collection_root/'latest.json')['attempt'])
             update(stage, 'completed')
+        if mode != 'replay':
+            original_source = source
+            run['toss_source'] = str(original_source)
+            source_check(original_source)
+            inputs.update({str(original_source/name):h for name,h in sector.load(original_source/'manifest.json').items()})
+            inputs[str(original_source/'manifest.json')] = sector.sha(original_source/'manifest.json')
+            stage = 'nh_fallback'
+            update(stage, 'running')
+            previous = None
+            latest = ROOT/'runtime/latest.json'
+            if latest.is_file():
+                prior_run = Path(sector.load(latest)['output'])/'run.json'
+                if prior_run.is_file():
+                    previous = sector.load(prior_run).get('market_source')
+            source, fallback, fallback_inputs = nh_fallback.recover(
+                original_source,output/'nh_fallback',config,
+                evidence_root=nh_evidence,prior_source=previous)
+            run['nh_fallback'] = {k:fallback[k] for k in ('attempted','adopted','unrecovered')}
+            inputs.update(fallback_inputs)
+            update(stage, 'completed' if fallback['unrecovered'] == 0 else 'completed_with_exceptions')
+        else:
+            update('nh_fallback', 'not_requested_offline')
         run['market_source'] = str(source)
         inputs.update({str(source/name):h for name,h in sector.load(source/'manifest.json').items()})
         inputs[str(source/'manifest.json')] = sector.sha(source/'manifest.json')
@@ -200,13 +233,14 @@ def run(config, source=None):
         write_json(output/'screen.json', screening)
         with (output/'candidates.csv').open('w',encoding='utf-8-sig',newline='') as stream:
             writer = csv.writer(stream)
-            writer.writerow(['market','symbol','name','candidate_reasons','taver','sector','sector_rs63','sector_rs126','classification_issue'])
+            writer.writerow(['market','symbol','name','candidate_reasons','taver','sector','sector_rs63','sector_rs126','classification_issue','price_basis'])
             for r in screening['rows']:
                 if r['state'] == 'candidate':
                     c = r['sector_context']
                     writer.writerow([r['market'],r['symbol'],r.get('name'),json.dumps(r['candidate_reasons']),
                                      json.dumps(r['taver']),c.get('group_name'),
-                                     *[c.get('horizons',{}).get(h,{}).get('relative_strength') for h in ('63','126')],c.get('reason')])
+                                     *[c.get('horizons',{}).get(h,{}).get('relative_strength') for h in ('63','126')],
+                                     c.get('reason'),r.get('price_basis')])
         run['candidate_count'] = screening['candidate_count']
         run['sector_coverage'] = observation['coverage']
         update(stage, 'completed_with_limitations')
@@ -264,21 +298,26 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', type=Path, help='Offline replay of an immutable market attempt')
     parser.add_argument('--verify', type=Path, help='Offline checksum and calculation replay')
+    parser.add_argument('--recover', type=Path, help='New run from a saved Toss attempt with NH fallback')
+    parser.add_argument('--nh-evidence', type=Path, help='Previously captured NH requests for --recover')
     args = parser.parse_args()
-    if args.source and args.verify:
-        parser.error('choose source or verify')
+    if sum(bool(x) for x in (args.source,args.verify,args.recover)) > 1:
+        parser.error('choose source, verify, or recover')
+    if args.nh_evidence and not args.recover:
+        parser.error('--nh-evidence requires --recover')
     config = sector.load(ROOT/'config.json')
     from contextlib import nullcontext
     no_network = patch.object(socket.socket, 'connect', side_effect=AssertionError('offline_network_forbidden'))
-    with no_network if args.source or args.verify else nullcontext():
+    with no_network if args.source or args.verify or args.nh_evidence else nullcontext():
         if args.verify:
             result = verify(args.verify.resolve())
         else:
             with instance_lock(ROOT/'runtime'):
-                result = run(config, args.source)
+                result = run(config, args.source, args.recover, args.nh_evidence)
     print(json.dumps(result, ensure_ascii=True), flush=True)
     return 1 if result.get('state') == 'failed' else 2 if result.get('state') == 'partial' else 0
 
 
 if __name__ == '__main__':
     raise SystemExit(main())
+
