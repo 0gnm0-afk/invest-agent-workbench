@@ -1,0 +1,8 @@
+runtime/
+judgments/
+__pycache__/
+*.pyc
+.venv/
+.env
+*.log
+secrets/
