@@ -104,7 +104,7 @@ class Evidence:
                 'rate_headers': {p: [json.loads(v) for v in sorted(values)] for p, values in self.limits.items()}}
 
 
-def run(root, config_path=None):
+def run(root, config_path=None, prior_source=None):
     root = Path(root).resolve()
     runtime = Path(__file__).resolve().parents[1] / 'runtime'
     if not root.is_relative_to(runtime.resolve()):
@@ -116,7 +116,8 @@ def run(root, config_path=None):
                           'market_runner': Path(__file__).read_text(encoding='utf-8')})
         if frozen_path.exists():
             frozen = json.loads(frozen_path.read_text(encoding='utf-8'))
-            if config_path is not None or frozen['version'] != version or digest(frozen['config']) != frozen['config_hash']:
+            if (config_path is not None or prior_source is not None or frozen['version'] != version
+                    or digest(frozen['config']) != frozen['config_hash']):
                 raise ValueError('Resume requires unchanged code and frozen config; use a new instance')
             for market, sessions in frozen['sessions'].items():
                 if completed_sessions(market, actual)[-1] != sessions[-1]:
@@ -130,9 +131,21 @@ def run(root, config_path=None):
             config = {'profile': source['profile'], 'markets': ['KR', 'US'],
                       'scope': 'market_only_toss_provided_universe', 'universe_mode': 'exchange_listings',
                       'limit_per_exchange': None}
+            prior = None
+            if prior_source is not None:
+                prior = Path(prior_source).resolve()
+                if not prior.is_relative_to(runtime.resolve()):
+                    raise ValueError('Prior source must stay inside private runtime')
+                manifest = json.loads((prior/'manifest.json').read_text(encoding='utf-8'))
+                with (prior/'snapshot.json').open('rb') as stream:
+                    actual_hash = hashlib.file_digest(stream, 'sha256').hexdigest()
+                if manifest.get('snapshot.json') != actual_hash:
+                    raise ValueError('Prior snapshot hash mismatch')
             frozen = {'config': config, 'config_hash': digest(config), 'version': version,
                       'evaluated_at': actual.isoformat(),
-                      'sessions': {m: completed_sessions(m, actual) for m in config['markets']}}
+                      'sessions': {m: completed_sessions(m, actual) for m in config['markets']},
+                      'prior_source': str(prior) if prior else None,
+                      'prior_snapshot_sha256': actual_hash if prior else None}
             write_json(frozen_path, frozen)
         attempt = root / 'attempts' / actual.strftime('%Y%m%dT%H%M%S%fZ')
         attempt.mkdir(parents=True)
@@ -144,8 +157,25 @@ def run(root, config_path=None):
                                  for e in ('KOSPI', 'NASDAQ', 'NYSE')}}
         try:
             client = TossMarketClient(observer=evidence)
+            prior_rows = {}
+            if frozen.get('prior_source'):
+                prior_path = Path(frozen['prior_source'])/'snapshot.json'
+                with prior_path.open('rb') as stream:
+                    actual_hash = hashlib.file_digest(stream, 'sha256').hexdigest()
+                if actual_hash != frozen['prior_snapshot_sha256']:
+                    raise ValueError('Prior snapshot changed after freeze')
+                previous = json.loads(prior_path.read_text(encoding='utf-8'))
+                if previous.get('profile') == frozen['config']['profile']:
+                    prior_rows = {(row['market'], row['symbol']): row for row in
+                                  previous.get('series', []) + list(previous.get('benchmarks', {}).values())
+                                  if row.get('provider') == 'Toss OpenAPI candles'}
+                del previous
             snapshot = collect(frozen['config'], {}, root / 'cache', client,
-                               now=datetime.fromisoformat(frozen['evaluated_at']))
+                               now=datetime.fromisoformat(frozen['evaluated_at']),
+                               prior_series=prior_rows,
+                               prior_source={'path': frozen['prior_source'],
+                                             'sha256': frozen['prior_snapshot_sha256']}
+                               if prior_rows else None)
             write_json(attempt / 'snapshot.json', snapshot)
             reloaded = json.loads((attempt / 'snapshot.json').read_text(encoding='utf-8'))
             if digest(reloaded) != digest(snapshot):

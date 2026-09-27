@@ -23,13 +23,16 @@ def _route(symbol, market, provider_symbol):
 
 
 def daily_series(get, symbol, market, sessions, *, benchmark=None, provider_symbol=None,
-                 adjusted=True, max_pages=10):
+                 adjusted=True, max_pages=10, stop_on_or_before=None, page_size=200):
     if not sessions or sessions != sorted(set(sessions)):
         raise ValueError('Expected ordered unique completed sessions')
     if not isinstance(adjusted, bool) or not isinstance(max_pages, int) or isinstance(max_pages, bool) or not 1 <= max_pages <= 10:
         raise ValueError('Invalid candle request limits')
+    if (not isinstance(page_size, int) or isinstance(page_size, bool) or not 1 <= page_size <= 200
+            or stop_on_or_before is not None and stop_on_or_before not in sessions):
+        raise ValueError('Invalid incremental candle boundary')
     endpoint, code, index, benchmark_proxy = _route(symbol, market, provider_symbol)
-    params = {'interval': '1d', 'count': 200}
+    params = {'interval': '1d', 'count': page_size}
     if not index:
         params.update(symbol=code, adjusted=str(adjusted).lower())
     expected_currency = 'KRW' if market == 'KR' else 'USD'
@@ -72,7 +75,7 @@ def daily_series(get, symbol, market, sessions, *, benchmark=None, provider_symb
             raise ValueError('Candle page must contain unique descending dates')
         pages.append({'before': params.get('before'), 'returned_count': len(days)})
         cursor = payload.get('nextBefore')
-        if not cursor or days and min(days) <= sessions[0]:
+        if not cursor or days and min(days) <= (stop_on_or_before or sessions[0]):
             finished = True
             break
         if not days or not isinstance(cursor, str) or cursor in cursors:

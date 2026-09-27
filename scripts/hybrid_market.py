@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from invest_agent.trading.contracts import digest
-from invest_agent.trading.market import validate_profile, usable_tail
+from invest_agent.trading.market import check_bars, validate_profile, usable_tail
 from invest_agent.trading.market_provider import completed_sessions
 from invest_agent.trading.runner import atomic_write
 from invest_agent.trading.store import instance_lock
@@ -64,15 +64,16 @@ def make_collector(root):
     return callback
 
 
-def collect(config, account, cache_root, get, *, now=None, refresh=False):
+def collect(config, account, cache_root, get, *, now=None, refresh=False,
+            prior_series=None, prior_source=None):
     now = now or datetime.now(timezone.utc)
     validate_profile(config['profile'])
     root = Path(cache_root).resolve()
     with instance_lock(root):
-        return _collect(config, account, root, get, now, refresh)
+        return _collect(config, account, root, get, now, refresh, prior_series or {}, prior_source)
 
 
-def _collect(config, account, root, get, now, refresh):
+def _collect(config, account, root, get, now, refresh, prior_series, prior_source):
     if config.get('universe_mode') == 'exchange_listings':
         universe, listings = discover(
             get, config['markets'], config.get('limit_per_exchange'),
@@ -125,7 +126,8 @@ def _collect(config, account, root, get, now, refresh):
     })
     stats = {
         'state': 'running', 'requested': len(universe), 'completed': 0, 'received': 0, 'failed': 0,
-        'cache_hits': 0, 'progress_write_failures': 0,
+        'cache_hits': 0, 'incremental_updates': 0, 'full_downloads': 0,
+        'overlap_refreshes': 0, 'progress_write_failures': 0,
     }
 
     def progress():
@@ -138,7 +140,7 @@ def _collect(config, account, root, get, now, refresh):
 
     progress()
 
-    def read_series(market, symbol, benchmark=None, provider_symbol=None, *, raw=False):
+    def read_series(market, symbol, benchmark=None, provider_symbol=None, *, raw=False, listing=None):
         if market not in sessions:
             raise ValueError('completed_sessions_unavailable')
         identity = {
@@ -158,10 +160,58 @@ def _collect(config, account, root, get, now, refresh):
                     return cached['payload'], 'cache'
             except (OSError, ValueError, KeyError, TypeError):
                 pass
-        value = daily_series(
-            get, symbol, market, sessions[market], benchmark=benchmark,
-            provider_symbol=provider_symbol, adjusted=not raw,
-        )
+        previous = prior_series.pop((market, symbol), None) if not raw and not refresh else None
+        previous_bars = previous.get('bars', []) if isinstance(previous, dict) else []
+        if isinstance(previous_bars, list):
+            previous_bars = [bar for bar in previous_bars if bar.get('date') in sessions[market]]
+        prior_dates = [bar.get('date') for bar in previous_bars] if isinstance(previous_bars, list) else []
+        expected_basis = ('toss_index_points_observation_only' if symbol in ('^KS11', '^KQ11')
+                          else 'toss_adjusted_ohlc_no_order_authority')
+        identity_ok = (previous and previous.get('provider') == 'Toss OpenAPI candles'
+                       and previous.get('market') == market and previous.get('symbol') == symbol
+                       and previous.get('benchmark') == benchmark
+                       and previous.get('provider_symbol') == (provider_symbol or
+                           ('KOSPI' if symbol == '^KS11' else 'KOSDAQ' if symbol == '^KQ11' else
+                            'SPY' if symbol == '^GSPC' else symbol.split('.')[0] if market == 'KR' else symbol))
+                       and previous.get('price_basis') == expected_basis
+                       and previous.get('currency') == ('KRW' if market == 'KR' else 'USD')
+                       and (listing is None or all(previous.get(field) == listing.get(field)
+                           for field in ('isin_code', 'listing_exchange_family')))
+                       and prior_dates and prior_dates == sorted(set(prior_dates))
+                       and prior_dates[-1] in sessions[market]
+                       and all(day in sessions[market] for day in prior_dates))
+        if identity_ok:
+            try:
+                check_bars(previous_bars, [day for day in sessions[market] if day <= prior_dates[-1]])
+                full_at = datetime.fromisoformat(previous.get('collection', {}).get(
+                    'full_history_collected_at') or previous['collected_at'])
+                identity_ok = 0 <= (now - full_at).total_seconds() < 30 * 86400
+            except (ValueError, KeyError, TypeError):
+                identity_ok = False
+        mode = 'full'
+        if identity_ok:
+            boundary = prior_dates[-1]
+            gap = len([day for day in sessions[market] if day > boundary])
+            recent = daily_series(get, symbol, market, sessions[market], benchmark=benchmark,
+                                  provider_symbol=provider_symbol, adjusted=True,
+                                  stop_on_or_before=boundary, page_size=min(200, max(32, gap + 32)))
+            recent_by_date = {bar['date']: bar for bar in recent['bars']}
+            old_by_date = {bar['date']: bar for bar in previous_bars}
+            overlap = set(recent_by_date) & set(old_by_date)
+            if boundary in overlap and len(overlap) >= min(5, len(old_by_date)) and all(
+                    old_by_date[day] == recent_by_date[day] for day in overlap):
+                merged = {**old_by_date, **recent_by_date}
+                value = {**recent, 'bars': [merged[day] for day in sorted(merged)]}
+                value.setdefault('collection', {}).update(mode='incremental', overlap_bars=len(overlap),
+                    prior_source=prior_source, full_history_collected_at=full_at.isoformat(),
+                    new_bars=sum(day not in old_by_date for day in recent_by_date))
+                mode = 'incremental'
+            else:
+                mode = 'overlap_refresh'
+        if mode != 'incremental':
+            value = daily_series(get, symbol, market, sessions[market], benchmark=benchmark,
+                                 provider_symbol=provider_symbol, adjusted=not raw)
+            value.setdefault('collection', {}).update(mode=mode, full_history_collected_at=now.isoformat())
         if benchmark is not None and value.get('instrument_type') != 'EQUITY':
             raise ValueError('not_equity')
         value['benchmark'] = benchmark
@@ -172,7 +222,7 @@ def _collect(config, account, root, get, now, refresh):
         atomic_write(path, json.dumps({
             'key': key, 'observed_at': now.isoformat(), 'payload': value, 'hash': digest(value),
         }))
-        return value, 'live'
+        return value, mode
 
     benchmarks = {}
     benchmark_markets = {}
@@ -192,7 +242,8 @@ def _collect(config, account, root, get, now, refresh):
     series, errors = [], []
     cap_version = collector_version()
     def read_equity(row):
-        value, origin = read_series(row['market'], row['symbol'], row['benchmark'], row.get('provider_symbol'))
+        value, origin = read_series(row['market'], row['symbol'], row['benchmark'],
+                                    row.get('provider_symbol'), listing=row)
         cap_fields = {}
         if row.get('quote_time_state') == 'not_provided':
             cap_key = digest({'row': row, 'session': sessions[row['market']][-1],
@@ -228,6 +279,9 @@ def _collect(config, account, root, get, now, refresh):
                 series.append({**row, **value})
                 stats['received'] += 1
                 stats['cache_hits'] += origin == 'cache'
+                stats['incremental_updates'] += origin == 'incremental'
+                stats['full_downloads'] += origin in ('full', 'overlap_refresh')
+                stats['overlap_refreshes'] += origin == 'overlap_refresh'
             except (Exception, SystemExit) as exc:
                 error = {
                     'market': row['market'], 'symbol': row['symbol'],

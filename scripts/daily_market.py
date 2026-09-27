@@ -216,7 +216,18 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
             update(stage, 'saved_source_verified_no_network' if mode in ('replay','review') else 'saved_toss_source_verified')
         else:
             collection_root = output/'collection'
-            collect(collection_root, ROOT/'config.json')
+            previous = None
+            latest = ROOT/'runtime/latest.json'
+            if latest.is_file():
+                prior_run = Path(sector.load(latest)['output'])/'run.json'
+                if prior_run.is_file():
+                    previous = sector.load(prior_run).get('market_source')
+            collect(collection_root, ROOT/'config.json', prior_source=previous)
+            if previous:
+                previous = Path(previous)
+                inputs[str(previous/'snapshot.json')] = sector.sha(previous/'snapshot.json')
+                inputs[str(previous/'manifest.json')] = sector.sha(previous/'manifest.json')
+                run['incremental_seed'] = str(previous)
             source = Path(sector.load(collection_root/'latest.json')['attempt'])
             update(stage, 'completed')
         if mode not in ('replay','review'):
