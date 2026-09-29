@@ -100,6 +100,9 @@ def candidate_bars(snapshot, row, by_series):
     return bars
 
 def build(screen, snapshot, overrides=None):
+    if (overrides or {}).get("strategy") == "pdf_momentum":
+        import momentum_review
+        return momentum_review.build(screen,snapshot,overrides)
     cfg = settings(overrides)
     by_series = {(s['market'],s['symbol']):s for s in snapshot['series']}
     markets = {}
@@ -209,6 +212,9 @@ def write(path,value):
     path.write_text(json.dumps(value,ensure_ascii=False,indent=2,allow_nan=False)+'\n',encoding='utf-8')
 
 def charts(review,screen,snapshot,output,draw=None):
+    if review.get("schema") == 3:
+        import momentum_review
+        return momentum_review.charts(review,screen,snapshot,output,draw_fn=draw)
     from invest_agent.trading import charts as engine_charts
     from invest_agent.trading.chart_history import calculate
     draw = draw or engine_charts.draw
@@ -279,6 +285,9 @@ def charts(review,screen,snapshot,output,draw=None):
             'failed':sum(r['state']=='failed' for r in results),'rows':results}
 
 def report_lines(review,chart_result):
+    if review.get("schema") == 3:
+        import momentum_review
+        return momentum_review.report_lines(review,chart_result)
     if review.get('schema') == 2:
         return taver_review.report_lines(review,chart_result)
     refs = {(r['market'],r['symbol']):r for r in chart_result['rows']}

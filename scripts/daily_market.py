@@ -59,6 +59,13 @@ def seed_check(config):
     # Reuse immutable classification evidence only; do not copy old market results.
     inputs = {p:h for p,h in seed['input_hashes'].items() if not Path(p).is_relative_to(old_market)}
     check_hashes(inputs)
+    if config.get('priority_review',{}).get('strategy') == 'pdf_momentum':
+        from momentum_review import SOURCE
+        path=Path(config['screener_source_pdf'])
+        sector.checked(path,SOURCE['sha256'],{})
+        inputs[str(path.resolve())]=SOURCE['sha256']
+        rules=ROOT/'docs/pdf-momentum-rules.md'
+        inputs[str(rules.resolve())]=sector.sha(rules)
     return seed, inputs
 
 
@@ -74,11 +81,12 @@ def percent(value):
 def inline_links(text):
     # Escape all text first; activate only local artifact paths, never URLs/user markup.
     escaped = html.escape(text)
-    return re.sub(r'\[([^\]<>]+)\]\(((?:charts/[A-Za-z0-9-]+\.html)|(?:[A-Za-z0-9_-]+\.json)|(?:sectors/[A-Za-z0-9_.-]+))\)',
+    return re.sub(r'\[([^\]<>]+)\]\(((?:charts/[A-Za-z0-9-]+\.html)|(?:[A-Za-z0-9_-]+\.(?:json|html))|(?:sectors/[A-Za-z0-9_.-]+))\)',
                   r'<a href="\2">\1</a>', escaped)
 
 
 def render(run, output, screening=None, observation=None):
+    review = None
     lines = ['# 일일 시장 관찰', '', f"실행 상태: **{run['state']}** / 처리: {run['processing_state']}",
              f"모드: {run['mode']} / 시작: {run['started_at']} / 종료: {run.get('finished_at', '진행 중')}",
              '', 'Toss 제공 대상 전수 기준. 거래소 전체와의 동일성을 보증하지 않습니다.',
@@ -111,7 +119,10 @@ def render(run, output, screening=None, observation=None):
                 else {'requested':missing_count,'available':0,'failed':missing_count,'rows':[]})
             at = lines.index('## 후보와 섹터 맥락')
             lines[at:at] = review_lines
-        for row in screening['rows']:
+            if review.get('schema') == 3:
+                lines=lines[:lines.index('## 후보와 섹터 맥락')]
+                lines=[line.replace(f"기존 스페란데오 후보 {screening['candidate_count']}",f"활성 진입 후보 {review['candidate_count']} · 기존 S단계 감사 후보 {screening['candidate_count']}") for line in lines]
+        for row in ([] if review and review.get('schema')==3 else screening['rows']):
             if row['state'] != 'candidate':
                 continue
             ctx = row['sector_context']
@@ -131,11 +142,12 @@ def render(run, output, screening=None, observation=None):
             cells = [row['market'], stock_label(row)+(' [NH]' if nh_price else ''),
                      structure, location, label, rs, note]
             lines.append('| ' + ' | '.join(str(x).replace('|','/').replace('\n',' ') for x in cells) + ' |')
-        lines += ['', '## 조사 순서', '', '국가별 섹터 RS63 내림차순, 결측은 마지막, 동률은 원 후보 순서입니다. 합성 점수는 없습니다.']
-        display_rows = {(r['market'],r['symbol']):r for r in screening['rows']}
-        for market, rows in screening['research_order'].items():
-            lines += ['', f"{market}: " + ', '.join(stock_label(display_rows.get((market,r['symbol']),r),market) for r in rows)]
-        lines += ['', '[스페란데오 전체·탈락/결측 사유](screen.json) · [자료 품질 상세](quality.json)',
+        if not (review and review.get('schema') == 3):
+            lines += ['', '## 조사 순서', '', '국가별 섹터 RS63 내림차순, 결측은 마지막, 동률은 원 후보 순서입니다. 합성 점수는 없습니다.']
+            display_rows = {(r['market'],r['symbol']):r for r in screening['rows']}
+            for market, rows in screening['research_order'].items():
+                lines += ['', f"{market}: " + ', '.join(stock_label(display_rows.get((market,r['symbol']),r),market) for r in rows)]
+        lines += ['', '[기존 S단계 감사 자료](screen.json) · [자료 품질 상세](quality.json)',
                   '[섹터 상태·변화](sectors/observation.html) · [기초 지표 상세](sectors/metrics.html) · [분류 미확인](sectors/unmatched.json)']
     if observation:
         lines += ['', f"분류 적용 시각: {observation['applied_at']}. 원천별 관측일·효력일은 groups.json의 evidence에 보존합니다.",
@@ -172,6 +184,8 @@ def render(run, output, screening=None, observation=None):
         states = sector.load(output/'sectors/signals.json')
         sector_panel = '<style>'+sector_signals.CSS+'</style><h1>섹터 변화 먼저 보기</h1><p>완료 일봉 기준 · 현재 분류로 재생한 관찰 · 추정 거래 비중은 순유입 아님</p>'+sector_signals.cards(states,'sectors/',4)+'<p><a href="sectors/observation.html">전체 섹터 상태·필터·추이 →</a></p>'
     page = '<!doctype html><html lang="ko"><meta charset="utf-8"><title>일일 시장 관찰</title><style>body{font-family:system-ui;margin:24px;line-height:1.5}table{border-collapse:collapse;font-size:14px}td{border:1px solid #ccc;padding:8px;min-width:85px}tr:first-child{font-weight:bold;background:#edf2f7}p{overflow-wrap:anywhere}</style><body><nav><a href="sectors/observation.html">섹터 관찰표</a> · <a href="candidates.csv">후보 CSV</a> · <a href="screen.json">후보/제외/결측 상세</a> · <a href="quality.json">품질 상세</a></nav>' + sector_panel + ''.join(body) + '</body></html>'
+    if review and review.get('schema') == 3:
+        page=page.replace('<a href="screen.json">후보/제외/결측 상세</a>','<a href="entry-scan.html">활성 후보·탈락 근거</a> · <a href="screen.json">기존 S단계 감사 자료</a>')
     (output/'report.html').write_text(page, encoding='utf-8')
 
 
@@ -290,7 +304,8 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
         export_sectors(output/'sectors', observation, groups)
         screening = enrich(screening, observation, groups)
         write_json(output/'screen.json', screening)
-        with (output/'candidates.csv').open('w',encoding='utf-8-sig',newline='') as stream:
+        csv_name='legacy-candidates.csv' if config.get('priority_review',{}).get('strategy')=='pdf_momentum' else 'candidates.csv'
+        with (output/csv_name).open('w',encoding='utf-8-sig',newline='') as stream:
             writer = csv.writer(stream)
             writer.writerow(['market','symbol','name','candidate_reasons','taver','sector','sector_rs63','sector_rs126','classification_issue','price_basis'])
             for r in screening['rows']:
@@ -307,7 +322,13 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
         update(stage, 'running')
         review = priority.build(screening, snapshot, config.get('priority_review'))
         write_json(output/'priority-review.json', review)
-        priority.taver_review.write_scan(output,review)
+        if review.get('schema') == 3:
+            import momentum_review
+            momentum_review.write_outputs(output,review)
+            run['legacy_sperandeo_candidate_count']=screening['candidate_count']
+            run['candidate_count']=review['candidate_count']
+        else:
+            priority.taver_review.write_scan(output,review)
         update(stage, 'completed')
         stage = 'charts'
         update(stage, 'running')
@@ -376,6 +397,7 @@ def verify(output):
     if base != sector.load(output/'screen-base.json') or enrich(base, report, groups) != saved:
         raise ValueError('candidate_replay_mismatch')
     priority_counts = {}
+    active_candidate_count = base['candidate_count']
     if (output/'priority-review.json').is_file():
         review = priority.build(saved, snapshot, config.get('priority_review'))
         if review != sector.load(output/'priority-review.json'):
@@ -400,6 +422,15 @@ def verify(output):
                 if ('href="'+row['path']+'"') not in (output/'report.html').read_text(encoding='utf-8'):
                     raise ValueError('priority_chart_report_link_missing')
         priority_counts = {m:g['selected_count'] for m,g in review['markets'].items()}
+        if review.get('schema') == 3:
+            active_candidate_count=review['candidate_count']
+            with (output/'candidates.csv').open(encoding='utf-8-sig',newline='') as stream:
+                csv_rows=list(csv.DictReader(stream))
+            wanted={(e['market'],e['symbol']) for g in review['markets'].values() for e in g['entries']}
+            if len(csv_rows)!=len(wanted) or {(e['market'],e['symbol']) for e in csv_rows}!=wanted:
+                raise ValueError('active_candidate_csv_mismatch')
+            if run['candidate_count']!=active_candidate_count:
+                raise ValueError('active_candidate_count_mismatch')
     sector_state_counts = {}
     if run['stages'].get('sector_states') == 'completed_with_limitations' and not (output/'sectors/signals.json').is_file():
         raise ValueError('sector_states_output_missing')
@@ -407,7 +438,7 @@ def verify(output):
         states = sector_signals.build(snapshot, groups, report, config.get('sector_states'))
         sector_signals.attach_candidates(states, review, groups, chart_result)
         sector_state_counts = sector_signals.verify_saved(output/'sectors',states)
-    return {'sector_state_counts':sector_state_counts,'priority_counts':priority_counts,'verified':True,'analysis_replayed':True,'network_calls':0,'candidate_count':base['candidate_count'],
+    return {'sector_state_counts':sector_state_counts,'priority_counts':priority_counts,'verified':True,'analysis_replayed':True,'network_calls':0,'candidate_count':active_candidate_count,'legacy_sperandeo_candidate_count':base['candidate_count'],
             'universe_rows':len(groups),'sector_groups':len(report['observations']),'state':run['state']}
 
 

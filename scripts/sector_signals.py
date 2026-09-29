@@ -438,7 +438,7 @@ def stock_table(rows, kind, market=None):
     if not rows:return '<p>해당 종목 없음</p>'
     text='<div class="scroll"><table><thead><tr><th>종목</th><th>최근 수익률</th><th>섹터 내 추정 거래 비중</th><th>후보 경로·근거</th><th>차트</th></tr></thead><tbody>'
     for r in rows:
-        origins=' · '.join({'sperandeo':'스페란데오','taver':'테이버'}.get(v,v) for v in r.get('origins',[])) or '패턴 후보 아님'
+        origins=' · '.join({'sperandeo':'스페란데오','taver':'테이버','pdf_momentum':'PDF 모멘텀'}.get(v,v) for v in r.get('origins',[])) or '패턴 후보 아님'
         reason='; '.join(r.get('reasons',[])) if kind=='candidate' else ''
         link='<a href="../'+esc(r['chart'])+'">저장 차트</a>' if r.get('chart') else esc(r.get('chart_status','우선 차트 대상 아님'))
         text+=f'<tr><td>{esc(stock_label(r,market))}</td><td>{fmt(r.get("return_recent"))}</td><td>{fmt(r.get("proxy_share"))}</td><td>{esc(origins)}<br>{esc(reason)}</td><td>{link}</td></tr>'
