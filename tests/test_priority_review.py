@@ -141,7 +141,9 @@ class ReviewTest(unittest.TestCase):
                           (daily,'seed_check',lambda _:({'roots':[str(source),'a','b']},{})),
                           (daily,'source_check',lambda _:None),(daily,'audit',lambda _:quality),
                           (daily,'screen',lambda _:base),(daily.sector,'build',lambda *a,**kw:(observation,groups,{})),
-                          (daily.sector,'render',lambda _:('sector','sector')),(p,'build',lambda *a,**kw:review)]
+                          (daily.sector,'render',lambda _:('sector','sector')),
+                          (daily.sector_signals,'build',lambda *a,**kw:{'config':daily.sector_signals.DEFAULTS,'markets':{},'sectors':[]}),
+                          (p,'build',lambda *a,**kw:review)]
             for obj,key,value in replacements:stack.enter_context(patch.object(obj,key,value))
             stack.enter_context(patch.object(p,'charts',side_effect=ImportError('injected plotting unavailable')))
             result=daily.run({'engine':tmp},source=source)

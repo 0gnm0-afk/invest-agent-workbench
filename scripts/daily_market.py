@@ -20,6 +20,7 @@ import sector_observation as sector
 import nh_fallback
 from candidate_context import enrich
 import priority_review as priority
+import sector_signals
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -130,7 +131,7 @@ def render(run, output, screening=None, observation=None):
         for market, rows in screening['research_order'].items():
             lines += ['', f"{market}: " + ', '.join(r['symbol'] for r in rows)]
         lines += ['', '[스페란데오 전체·탈락/결측 사유](screen.json) · [자료 품질 상세](quality.json)',
-                  '[섹터 관찰표](sectors/observation.html) · [분류 미확인](sectors/unmatched.json)']
+                  '[섹터 상태·변화](sectors/observation.html) · [기초 지표 상세](sectors/metrics.html) · [분류 미확인](sectors/unmatched.json)']
     if observation:
         lines += ['', f"분류 적용 시각: {observation['applied_at']}. 원천별 관측일·효력일은 groups.json의 evidence에 보존합니다.",
                   '현재 분류로 과거 가격을 묶습니다. 과거 시점 백테스트가 아닙니다.',
@@ -161,7 +162,11 @@ def render(run, output, screening=None, observation=None):
                 body.append('<p>'+inline_links(line)+'</p>')
     if table:
         body.append('</table></div>')
-    page = '<!doctype html><html lang="ko"><meta charset="utf-8"><title>일일 시장 관찰</title><style>body{font-family:system-ui;margin:24px;line-height:1.5}table{border-collapse:collapse;font-size:14px}td{border:1px solid #ccc;padding:8px;min-width:85px}tr:first-child{font-weight:bold;background:#edf2f7}p{overflow-wrap:anywhere}</style><body><nav><a href="sectors/observation.html">섹터 관찰표</a> · <a href="candidates.csv">후보 CSV</a> · <a href="screen.json">후보/제외/결측 상세</a> · <a href="quality.json">품질 상세</a></nav>' + ''.join(body) + '</body></html>'
+    sector_panel = ''
+    if (output/'sectors/signals.json').is_file():
+        states = sector.load(output/'sectors/signals.json')
+        sector_panel = '<style>'+sector_signals.CSS+'</style><h1>섹터 변화 먼저 보기</h1><p>완료 일봉 기준 · 현재 분류로 재생한 관찰 · 추정 거래 비중은 순유입 아님</p>'+sector_signals.cards(states,'sectors/',4)+'<p><a href="sectors/observation.html">전체 섹터 상태·필터·추이 →</a></p>'
+    page = '<!doctype html><html lang="ko"><meta charset="utf-8"><title>일일 시장 관찰</title><style>body{font-family:system-ui;margin:24px;line-height:1.5}table{border-collapse:collapse;font-size:14px}td{border:1px solid #ccc;padding:8px;min-width:85px}tr:first-child{font-weight:bold;background:#edf2f7}p{overflow-wrap:anywhere}</style><body><nav><a href="sectors/observation.html">섹터 관찰표</a> · <a href="candidates.csv">후보 CSV</a> · <a href="screen.json">후보/제외/결측 상세</a> · <a href="quality.json">품질 상세</a></nav>' + sector_panel + ''.join(body) + '</body></html>'
     (output/'report.html').write_text(page, encoding='utf-8')
 
 
@@ -173,6 +178,7 @@ def export_sectors(output, report, groups):
     md, page = sector.render(report)
     (output/'observation.md').write_text(md, encoding='utf-8')
     (output/'observation.html').write_text(page, encoding='utf-8')
+    (output/'metrics.html').write_text(page, encoding='utf-8')
 
 
 def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=None):
@@ -181,7 +187,7 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
     output = ROOT/'runtime'/date/(datetime.now(timezone.utc).strftime('%H%M%S')+'-'+mode+'-'+uuid4().hex[:8])
     output.mkdir(parents=True)
     run = {'schema':1, 'state':'running', 'processing_state':'running', 'mode':mode, 'started_at':now(),
-           'output':str(output), 'stages':{s:'not_started' for s in ('inputs','collection','nh_fallback','quality','stock_screen','sector_screen','priority_review','charts','report')}}
+           'output':str(output), 'stages':{s:'not_started' for s in ('inputs','collection','nh_fallback','quality','stock_screen','sector_screen','priority_review','charts','sector_states','report')}}
     started = time.monotonic()
     hashes, inputs = {}, {}
     screening = observation = None
@@ -311,6 +317,13 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
         run['priority_counts'] = {m:g['selected_count'] for m,g in review['markets'].items()}
         run['chart_counts'] = {k:chart_result[k] for k in ('requested','available','failed')}
         update(stage, 'completed_with_exceptions' if chart_result['failed'] else 'completed')
+        stage = 'sector_states'
+        update(stage, 'running')
+        states = sector_signals.build(snapshot, groups, observation, config.get('sector_states'))
+        sector_signals.attach_candidates(states, review, groups, chart_result)
+        sector_signals.render(states, output/'sectors')
+        run['sector_state_counts'] = dict(sector_signals.Counter(s['current']['state'] for s in states['sectors']))
+        update(stage, 'completed_with_limitations')
         del snapshot
         incomplete = chart_result['failed'] > 0 or not quality['data_complete'] or screening['unavailable_count'] > 0 or any(r['unmatched'] for r in observation['coverage'].values())
         run['state'] = 'failed' if quality['unexpected_failures'] else 'partial' if incomplete else 'succeeded'
@@ -382,7 +395,14 @@ def verify(output):
                 if ('href="'+row['path']+'"') not in (output/'report.html').read_text(encoding='utf-8'):
                     raise ValueError('priority_chart_report_link_missing')
         priority_counts = {m:g['selected_count'] for m,g in review['markets'].items()}
-    return {'priority_counts':priority_counts,'verified':True,'analysis_replayed':True,'network_calls':0,'candidate_count':base['candidate_count'],
+    sector_state_counts = {}
+    if run['stages'].get('sector_states') == 'completed_with_limitations' and not (output/'sectors/signals.json').is_file():
+        raise ValueError('sector_states_output_missing')
+    if (output/'sectors/signals.json').is_file():
+        states = sector_signals.build(snapshot, groups, report, config.get('sector_states'))
+        sector_signals.attach_candidates(states, review, groups, chart_result)
+        sector_state_counts = sector_signals.verify_saved(output/'sectors',states)
+    return {'sector_state_counts':sector_state_counts,'priority_counts':priority_counts,'verified':True,'analysis_replayed':True,'network_calls':0,'candidate_count':base['candidate_count'],
             'universe_rows':len(groups),'sector_groups':len(report['observations']),'state':run['state']}
 
 
