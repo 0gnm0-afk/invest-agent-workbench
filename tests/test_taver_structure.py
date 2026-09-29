@@ -62,6 +62,50 @@ class StructureTests(unittest.TestCase):
         reasons=taver_review.describe(r)
         self.assertTrue(any('하단 가격 비양수' in reason for reason in reasons))
 
+    def test_disabled_skips_scan_and_preserves_sperandeo(self):
+        from test_priority_review import fixture
+        screen,snap=fixture(2); before=copy.deepcopy(screen)
+        with patch.object(taver_review.taver_structure,'analyze',side_effect=AssertionError('disabled scan called')) as scan:
+            review=priority_review.build(screen,snap,{'taver_enabled':False})
+        scan.assert_not_called()
+        self.assertEqual(screen,before)
+        self.assertEqual(review['taver_state'],'disabled')
+        self.assertEqual(review['taver_observations'],[])
+        for group in review['markets'].values():
+            self.assertEqual(group['taver']['entries'],[])
+            self.assertEqual(group['candidate_count'],2)
+            self.assertTrue(all(e['origins']==['sperandeo'] for e in group['entries']))
+        rendered='\n'.join(priority_review.report_lines(review,{'requested':4,'available':0,'failed':4,'rows':[]}))
+        self.assertNotIn('taver-scan.html',rendered)
+        self.assertNotIn('테이버 최대',rendered)
+        self.assertIn('PDF 기반 새 진입 조건은 아직 적용 전',rendered)
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            taver_review.write_scan(Path(tmp),review)
+            self.assertFalse((Path(tmp)/'taver-scan.html').exists())
+
+    def test_disabled_charts_skip_structure_rendering(self):
+        from test_priority_review import fixture
+        import tempfile
+        screen,snap=fixture(1)
+        review=priority_review.build(screen,snap,{'taver_enabled':False})
+        b=bars(40)
+        lines={'primary_window':126,'windows':{}}
+        for group in review['markets'].values(): group['entries'][0]['trendlines']=lines
+        def draw(b,path,*args,**kwargs): path.write_bytes(b'fixture')
+        with tempfile.TemporaryDirectory() as tmp, patch.object(priority_review,'candidate_bars',return_value=b), patch.object(taver_review,'draw_structure',side_effect=AssertionError('disabled chart called')) as structure:
+            result=priority_review.charts(review,screen,snap,Path(tmp),draw=draw)
+            self.assertEqual(result['available'],2)
+            structure.assert_not_called()
+            for row in result['rows']:
+                self.assertNotIn('structure_image',row)
+                self.assertNotIn('테이버',(Path(tmp)/row['path']).read_text(encoding='utf-8'))
+
+    def test_disabled_flag_is_strict_and_old_config_stays_unchanged(self):
+        self.assertNotIn('taver_enabled',priority_review.settings())
+        for value in (0,1,'false',None):
+            with self.assertRaises(ValueError): priority_review.settings({'taver_enabled':value})
+
     def test_settings(self):
         for cfg in ({'windows':[252,252]},{'near_atr':True},{'near_atr':float('nan')},{'min_r2':2},{'short_window':1}):
             with self.assertRaises(ValueError): settings(cfg)

@@ -41,9 +41,12 @@ LABELS = {
 def settings(overrides=None):
     cfg = deepcopy(DEFAULTS)
     overrides = overrides or {}
-    if set(overrides) - set(cfg):
+    if set(overrides) - (set(cfg) | {'taver_enabled'}):
         raise ValueError('unknown_priority_settings')
     cfg.update(overrides)
+    # Omitted flag preserves historical frozen configs; current config disables it.
+    if 'taver_enabled' in cfg and type(cfg['taver_enabled']) is not bool:
+        raise ValueError('invalid_priority_setting:taver_enabled')
     cfg['taver_structure'] = taver_structure.settings(cfg['taver_structure'])
     for key in ('taver_limit_per_market', 'limit_per_market', 'recent_stage_bars', 'intermediate_stage_bars', 'recent_line_bars'):
         if type(cfg[key]) is not int or cfg[key] < 0:
@@ -237,7 +240,8 @@ def charts(review,screen,snapshot,output,draw=None):
                     draw(bars,png,f"{stock_label(entry)} | {entry['as_of']} | {row['currency']} | observation only",
                          row.get('taver',{}).get('primary_ma_period',240 if key[0]=='KR' else 200),chart_data=data)
                 structure_png = folder/(stem+'-structure.png')
-                has_structure = taver_review.draw_structure(bars,structure_png,entry.get('taver_structure',{}),stock_label(entry)+' | '+entry['as_of'])
+                has_structure = (review.get('taver_state') != 'disabled' and
+                    taver_review.draw_structure(bars,structure_png,entry.get('taver_structure',{}),stock_label(entry)+' | '+entry['as_of']))
                 write(folder/(stem+'.json'),{'entry':entry,'history':data['history'],
                     'display_rule':'Line starts at B confirmation; hollow past anchors are retrospective. Stops at first price breach.'})
                 esc = html.escape
@@ -251,7 +255,8 @@ def charts(review,screen,snapshot,output,draw=None):
                     '63/126/252 기간별 선의 유효성·앵커·확정시점은 아래 상세에 보존합니다.']
                 notes += ['후보 경로: '+', '.join(entry.get('origins',[]))+' / 우선 선택: '+', '.join(entry.get('selected_by',[]))]
                 notes += entry.get('taver_reasons',[])
-                notes += ['테이버 선은 기준일 전체 관측으로 정한 회고 작도이며 과거 매매 신호가 아닙니다. 점은 현재 선 기준 과거 하회입니다. 사건 봉 제외 없음.']
+                if has_structure:
+                    notes += ['테이버 선은 기준일 전체 관측으로 정한 회고 작도이며 과거 매매 신호가 아닙니다. 점은 현재 선 기준 과거 하회입니다. 사건 봉 제외 없음.']
                 body = ''.join('<li>'+esc(str(n))+'</li>' for n in notes)
                 detail = esc(json.dumps(entry['trendlines'],ensure_ascii=False,indent=2))
                 page = ('<!doctype html><html lang="ko"><meta charset="utf-8"><title>'+esc(stock_label(entry))+' 검토 차트</title>'

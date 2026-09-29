@@ -23,7 +23,20 @@ def describe(result):
 
 
 def augment(review,screen,snapshot):
-    cfg=review['config']; by_series={(s['market'],s['symbol']):s for s in snapshot['series']}
+    cfg=review['config']
+    if not cfg.get('taver_enabled', True):
+        for group in review['markets'].values():
+            for entry in group['entries']:
+                entry['origins'] = ['sperandeo']
+                entry['selected_by'] = ['sperandeo'] if entry['selected'] else []
+            group.update(sperandeo={'candidate_count':group['candidate_count'],
+                'selected_count':group['selected_count'],'entries':deepcopy(group['entries'])},
+                taver={'state':'disabled','candidate_count':0,'selected_count':0,'entries':[]},
+                overlap_symbols=[])
+        review.update(schema=2,taver_state='disabled',taver_observations=[],
+            taver_policy='테이버 후보 선정 제외. 과거 결과는 별도 보존합니다.')
+        return review
+    by_series={(s['market'],s['symbol']):s for s in snapshot['series']}
     observations=[]
     for row in screen['rows']:
         identity={k:row.get(k) for k in ('market','symbol','name','as_of','price_basis')}
@@ -139,6 +152,10 @@ def draw_structure(bars,path,result,title):
 
 
 def report_lines(review,chart_result):
+    if review.get('taver_state') == 'disabled':
+        from priority_review import report_lines as legacy_report
+        return legacy_report({**review,'schema':1,'policy':review['policy']+
+            ' 테이버 후보 선정은 제외했습니다. 현재 표는 기존 스페란데오 관찰 후보이며 PDF 기반 새 진입 조건은 아직 적용 전입니다.'},chart_result)
     refs={(r['market'],r['symbol']):r for r in chart_result['rows']}
     lines=['','## 독립 후보와 우선 검토','',review['taver_policy'],'',review['policy'],'',
            f"시장별 스페란데오 최대 {review['config']['limit_per_market']}개 + 테이버 최대 {review['config']['taver_limit_per_market']}개. 중복은 두 이유를 보존하고 차트는 하나로 통합합니다.",
@@ -170,6 +187,8 @@ def report_lines(review,chart_result):
 
 
 def write_scan(output,review):
+    if review.get('taver_state') == 'disabled':
+        return
     import html
     esc=html.escape
     rows=[]

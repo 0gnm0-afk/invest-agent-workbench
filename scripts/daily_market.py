@@ -102,6 +102,9 @@ def render(run, output, screening=None, observation=None):
                 '원 Toss 실패는 원본에 보존; NH 거래량 정밀도는 종목별 표시하고 동일 공급자 섹터 집계에서 제외합니다.')
         if (output/'priority-review.json').is_file():
             review = sector.load(output/'priority-review.json')
+            if review.get('taver_state') == 'disabled':
+                lines = [line.replace('공통 유니버스 뒤 두 후보 경로는 독립입니다. ', '')
+                         .replace('테이버 위치', '장기 이평 위치') for line in lines]
             missing_count = sum(g['selected_count'] for g in review['markets'].values())
             review_lines = priority.report_lines(review,
                 sector.load(output/'priority-charts.json') if (output/'priority-charts.json').is_file()
