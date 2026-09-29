@@ -411,7 +411,7 @@ def cards(result, prefix='', limit=None):
             body+='<p><strong>'+esc(m.get('summary','자료 부족'))+'</strong></p>'
             body+=f'<div class="muted">{esc(s["previous_label"])} → {esc(m["label"])}</div><ul>'
             body+=''.join('<li>'+esc(x)+'</li>' for x in reasons(s))+'</ul>'
-            leaders=', '.join(r['symbol'] for r in s['leaders']) or '자료 없음'
+            leaders=', '.join((r.get('name') or r['symbol']) if market == 'KR' else r['symbol'] for r in s['leaders']) or '자료 없음'
             body+=f'<p class="muted">거래 주도: {esc(leaders)}</p><a href="{prefix+filename(s)}">추이·종목·후보 확인 →</a></article>'
         body+='</div><p class="empty" hidden>해당 조건의 섹터가 없습니다.</p></section>'
     return body
