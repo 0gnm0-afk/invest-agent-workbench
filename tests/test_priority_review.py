@@ -28,9 +28,9 @@ class ReviewTest(unittest.TestCase):
         result=p.build(screen,snap)
         self.assertEqual(screen,before)
         for group in result['markets'].values():
-            self.assertEqual(group['selected_count'],15)
+            self.assertEqual(group['selected_count'],10)
             self.assertEqual(len(group['entries']),20)
-            self.assertEqual(group['selected_symbols'],[f'S{i:02}' for i in range(15)])
+            self.assertEqual(group['selected_symbols'],[f'S{i:02}' for i in range(10)])
             self.assertTrue(all(e['selection_reason'] for e in group['entries']))
             self.assertIn('전체 후보 유지',group['entries'][-1]['selection_reason'])
 

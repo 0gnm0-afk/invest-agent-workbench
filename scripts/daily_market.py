@@ -90,8 +90,8 @@ def render(run, output, screening=None, observation=None):
                   f"수집 시작/종료: {run['data_times']['fetched_at']} / {run['data_times']['collected_until']}",
                   f"수신 {q['received']}/{q['requested']} · 일봉 실패 {q['failed']} · 품질 이슈 시계열 {q['quality_issue_series']}",
                   f"원자료 상태 {q['state']} · 처리 {q['processing_state']} · 완전성 {q['data_complete']}",
-                  f"후보 {screening['candidate_count']} · 종목 판단 불가 {screening['unavailable_count']}",
-                  '', '## 후보와 섹터 맥락', '', '유니버스 → 스페란데오 S1–S4 → 테이버 위치. 아래는 기존 엔진 순서입니다.', '',
+                  f"기존 스페란데오 후보 {screening['candidate_count']} · 종목 판단 불가 {screening['unavailable_count']}",
+                  '', '## 후보와 섹터 맥락', '', '공통 유니버스 뒤 두 후보 경로는 독립입니다. 아래 표는 기존 스페란데오 전체 후보와 이평 위치를 원순서로 보존합니다.', '',
                   '| 시장 | 종목 | 단계·기간 | 테이버 위치 | 섹터 | RS 3M / 6M | 조사 참고 |', '|---|---|---|---|---|---|---|']
         if run.get('nh_fallback'):
             fb = run['nh_fallback']
@@ -129,7 +129,7 @@ def render(run, output, screening=None, observation=None):
         lines += ['', '## 조사 순서', '', '국가별 섹터 RS63 내림차순, 결측은 마지막, 동률은 원 후보 순서입니다. 합성 점수는 없습니다.']
         for market, rows in screening['research_order'].items():
             lines += ['', f"{market}: " + ', '.join(r['symbol'] for r in rows)]
-        lines += ['', '[후보 전체·탈락/결측 사유](screen.json) · [자료 품질 상세](quality.json)',
+        lines += ['', '[스페란데오 전체·탈락/결측 사유](screen.json) · [자료 품질 상세](quality.json)',
                   '[섹터 관찰표](sectors/observation.html) · [분류 미확인](sectors/unmatched.json)']
     if observation:
         lines += ['', f"분류 적용 시각: {observation['applied_at']}. 원천별 관측일·효력일은 groups.json의 evidence에 보존합니다.",
@@ -296,6 +296,7 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
         update(stage, 'running')
         review = priority.build(screening, snapshot, config.get('priority_review'))
         write_json(output/'priority-review.json', review)
+        priority.taver_review.write_scan(output,review)
         update(stage, 'completed')
         stage = 'charts'
         update(stage, 'running')
@@ -372,6 +373,10 @@ def verify(output):
                     target = (output/row[key]).resolve()
                     if not target.is_relative_to(output.resolve()) or not target.is_file():
                         raise ValueError('priority_chart_missing_or_unsafe')
+                if row.get('structure_image'):
+                    target = (output/row['structure_image']).resolve()
+                    if not target.is_relative_to(output.resolve()) or not target.is_file() or sector.sha(target)!=row['structure_image_sha256']:
+                        raise ValueError('taver_chart_image_hash_mismatch')
                 if sector.sha(output/row['image']) != row['image_sha256']:
                     raise ValueError('priority_chart_image_hash_mismatch')
                 if ('href="'+row['path']+'"') not in (output/'report.html').read_text(encoding='utf-8'):

@@ -9,11 +9,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from invest_agent.trading import trendlines
+from invest_agent.trading import taver_structure
+import taver_review
 from invest_agent.trading.market import usable_tail, check_bars
 from invest_agent.trading.structure_math import atr
 
 DEFAULTS = {
-    'limit_per_market': 15, 'recent_stage_bars': 5, 'intermediate_stage_bars': 20,
+    'limit_per_market': 10, 'taver_limit_per_market': 10, 'taver_structure': {}, 'recent_stage_bars': 5, 'intermediate_stage_bars': 20,
     'near_ma_atr': 1.0, 'recent_line_bars': 5, 'resistance_approach_atr': 0.5,
     'trend_window': 126, 'sector_positive_rs': 0.0, 'sector_breadth_fraction': 0.5,
     'sort_fields': ['recency_band', 'ma_band', 'line_band', 'sector_rs_band',
@@ -41,7 +43,8 @@ def settings(overrides=None):
     if set(overrides) - set(cfg):
         raise ValueError('unknown_priority_settings')
     cfg.update(overrides)
-    for key in ('limit_per_market', 'recent_stage_bars', 'intermediate_stage_bars', 'recent_line_bars'):
+    cfg['taver_structure'] = taver_structure.settings(cfg['taver_structure'])
+    for key in ('taver_limit_per_market', 'limit_per_market', 'recent_stage_bars', 'intermediate_stage_bars', 'recent_line_bars'):
         if type(cfg[key]) is not int or cfg[key] < 0:
             raise ValueError('invalid_priority_setting:'+key)
     if cfg['intermediate_stage_bars'] < cfg['recent_stage_bars'] or cfg['trend_window'] not in (63,126,252):
@@ -173,8 +176,8 @@ def build(screen, snapshot, overrides=None):
             'selected_symbols':[e['symbol'] for e in selected], 'entries':entries,
             'distribution':{field:dict(Counter(str(e['axes'][field]) for e in entries))
                             for field in ('recency_band','ma_band','line_band','sector_rs_band')}}
-    return {'schema':1,'authority':'human_chart_review_order_only','policy':POLICY+' 현재 적용 sort_fields: '+', '.join(cfg['sort_fields'])+' (앞 축부터 비교, 마지막 동률은 원순서).','config':cfg,
-            'session_dates':screen['session_dates'],'markets':markets}
+    return taver_review.augment({'schema':1,'authority':'human_chart_review_order_only','policy':POLICY+' 현재 적용 sort_fields: '+', '.join(cfg['sort_fields'])+' (앞 축부터 비교, 마지막 동률은 원순서).','config':cfg,
+            'session_dates':screen['session_dates'],'markets':markets}, screen, snapshot)
 
 def confirmed_overlay(price,bars,offset,result):
     """Reuse engine line coordinates; draw actionable segment only after confirmation."""
@@ -221,6 +224,8 @@ def charts(review,screen,snapshot,output,draw=None):
                 row = rows[key]
                 bars = candidate_bars(snapshot,row,series)
                 data = calculate(bars,key[0])
+                if entry.get('trendlines') is None:
+                    entry = {**entry, 'trendlines': trendlines.analyze(bars)}
                 if entry['trendlines'].get('state') == 'analysis_error':
                     raise ValueError(entry['trendlines']['reason'])
                 data['trendlines'] = deepcopy(entry['trendlines'])
@@ -229,7 +234,9 @@ def charts(review,screen,snapshot,output,draw=None):
                 # Local adapter; never modify the public engine or its legacy renderer.
                 with patch.object(engine_charts,'trend_overlay',confirmed_overlay):
                     draw(bars,png,f"{entry['symbol']} {entry['name']} | {entry['as_of']} | {row['currency']} | observation only",
-                         row['taver']['primary_ma_period'],chart_data=data)
+                         row.get('taver',{}).get('primary_ma_period',240 if key[0]=='KR' else 200),chart_data=data)
+                structure_png = folder/(stem+'-structure.png')
+                has_structure = taver_review.draw_structure(bars,structure_png,entry.get('taver_structure',{}),entry['symbol']+' | '+entry['as_of'])
                 write(folder/(stem+'.json'),{'entry':entry,'history':data['history'],
                     'display_rule':'Line starts at B confirmation; hollow past anchors are retrospective. Stops at first price breach.'})
                 esc = html.escape
@@ -241,6 +248,9 @@ def charts(review,screen,snapshot,output,draw=None):
                     'NH 미국 거래량은 천 주 단위 하한 추정이며 해당 가격은 섹터 집계 분모에서 제외됩니다.' if str(entry['price_basis']).startswith('nh_') else 'Toss 수정가격·수정거래량. 시장별 세션·거래량 집계 한계는 원 품질 기록을 따릅니다.',
                     f"표시 이력: {data['history']['state']} ({data['history']['available_daily_bars']}/{data['history']['required_daily_bars']} 일봉)",
                     '63/126/252 기간별 선의 유효성·앵커·확정시점은 아래 상세에 보존합니다.']
+                notes += ['후보 경로: '+', '.join(entry.get('origins',[]))+' / 우선 선택: '+', '.join(entry.get('selected_by',[]))]
+                notes += entry.get('taver_reasons',[])
+                notes += ['테이버 선은 기준일 전체 관측으로 정한 회고 작도이며 과거 매매 신호가 아닙니다. 점은 현재 선 기준 과거 하회입니다. 사건 봉 제외 없음.']
                 body = ''.join('<li>'+esc(str(n))+'</li>' for n in notes)
                 detail = esc(json.dumps(entry['trendlines'],ensure_ascii=False,indent=2))
                 page = ('<!doctype html><html lang="ko"><meta charset="utf-8"><title>'+esc(entry['symbol'])+' 검토 차트</title>'
@@ -249,9 +259,13 @@ def charts(review,screen,snapshot,output,draw=None):
                     '<p>자료 완료 세션 '+esc(entry['as_of'])+' · 조사 편의용 · 수익률 예측/매매 신호 아님</p>'
                     '<img src="'+stem+'.png" alt="확정 이후 추세선과 장기 이동평균 차트"><ul>'+body+'</ul>'
                     '<details><summary>기간별 추세선·유효한 선이 없는 사유</summary><pre>'+detail+'</pre></details></html>')
+                if has_structure:
+                    page = page.replace('</html>', '<h2>테이버 장기 구조 · 기간 민감도</h2><img style="max-width:100%" src="'+structure_png.name+'"><details><summary>작도·기간·이탈·이력 상세</summary><pre>'+esc(json.dumps(entry.get('taver_structure'),ensure_ascii=False,indent=2))+'</pre></details></html>')
                 (folder/(stem+'.html')).write_text(page,encoding='utf-8')
                 record.update(state='available',path='charts/'+stem+'.html',image='charts/'+stem+'.png',metadata='charts/'+stem+'.json',
                               image_sha256=hashlib.sha256(png.read_bytes()).hexdigest())
+                if has_structure:
+                    record.update(structure_image='charts/'+structure_png.name,structure_image_sha256=hashlib.sha256(structure_png.read_bytes()).hexdigest())
             except Exception as exc:
                 record['reason'] = type(exc).__name__+': '+str(exc)
             results.append(record)
@@ -259,6 +273,8 @@ def charts(review,screen,snapshot,output,draw=None):
             'failed':sum(r['state']=='failed' for r in results),'rows':results}
 
 def report_lines(review,chart_result):
+    if review.get('schema') == 2:
+        return taver_review.report_lines(review,chart_result)
     refs = {(r['market'],r['symbol']):r for r in chart_result['rows']}
     lines = ['', '## 우선 검토 목록', '', review['policy'],
         f"기본 상한: 시장별 {review['config']['limit_per_market']}개. 설정·전체 후보별 선택/미선택 이유: [우선 검토 상세](priority-review.json).",'']
