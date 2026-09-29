@@ -5,6 +5,7 @@ import hashlib
 import html
 import json
 import math
+from display_names import stock_label
 from pathlib import Path
 from unittest.mock import patch
 
@@ -233,10 +234,10 @@ def charts(review,screen,snapshot,output,draw=None):
                 png = folder/(stem+'.png')
                 # Local adapter; never modify the public engine or its legacy renderer.
                 with patch.object(engine_charts,'trend_overlay',confirmed_overlay):
-                    draw(bars,png,f"{entry['symbol']} {entry['name']} | {entry['as_of']} | {row['currency']} | observation only",
+                    draw(bars,png,f"{stock_label(entry)} | {entry['as_of']} | {row['currency']} | observation only",
                          row.get('taver',{}).get('primary_ma_period',240 if key[0]=='KR' else 200),chart_data=data)
                 structure_png = folder/(stem+'-structure.png')
-                has_structure = taver_review.draw_structure(bars,structure_png,entry.get('taver_structure',{}),entry['symbol']+' | '+entry['as_of'])
+                has_structure = taver_review.draw_structure(bars,structure_png,entry.get('taver_structure',{}),stock_label(entry)+' | '+entry['as_of'])
                 write(folder/(stem+'.json'),{'entry':entry,'history':data['history'],
                     'display_rule':'Line starts at B confirmation; hollow past anchors are retrospective. Stops at first price breach.'})
                 esc = html.escape
@@ -253,9 +254,9 @@ def charts(review,screen,snapshot,output,draw=None):
                 notes += ['테이버 선은 기준일 전체 관측으로 정한 회고 작도이며 과거 매매 신호가 아닙니다. 점은 현재 선 기준 과거 하회입니다. 사건 봉 제외 없음.']
                 body = ''.join('<li>'+esc(str(n))+'</li>' for n in notes)
                 detail = esc(json.dumps(entry['trendlines'],ensure_ascii=False,indent=2))
-                page = ('<!doctype html><html lang="ko"><meta charset="utf-8"><title>'+esc(entry['symbol'])+' 검토 차트</title>'
+                page = ('<!doctype html><html lang="ko"><meta charset="utf-8"><title>'+esc(stock_label(entry))+' 검토 차트</title>'
                     '<style>body{font-family:system-ui;margin:24px;line-height:1.6}img{max-width:100%}pre{white-space:pre-wrap}</style>'
-                    '<a href="../report.html">보고서로</a><h1>'+esc(entry['market']+' '+entry['symbol']+' '+entry['name'])+'</h1>'
+                    '<a href="../report.html">보고서로</a><h1>'+esc(entry['market']+' '+stock_label(entry))+'</h1>'
                     '<p>자료 완료 세션 '+esc(entry['as_of'])+' · 조사 편의용 · 수익률 예측/매매 신호 아님</p>'
                     '<img src="'+stem+'.png" alt="확정 이후 추세선과 장기 이동평균 차트"><ul>'+body+'</ul>'
                     '<details><summary>기간별 추세선·유효한 선이 없는 사유</summary><pre>'+detail+'</pre></details></html>')
@@ -285,7 +286,7 @@ def report_lines(review,chart_result):
             if not e['selected']:
                 continue
             ref = refs.get((market,e['symbol']),{'state':'failed','reason':'chart_not_generated'})
-            name = e['symbol']+' '+e['name']
+            name = stock_label(e,market)
             link = f"[{name}]({ref['path']})" if ref['state']=='available' else name+' (차트 실패: '+ref['reason']+')'
             sec = e['sector']
             fmt = lambda v:'결측' if v is None else f'{v:.2%}'

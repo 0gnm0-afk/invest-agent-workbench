@@ -8,6 +8,7 @@ import socket
 import sys
 import time
 from datetime import datetime, timezone
+from display_names import stock_label
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
@@ -124,12 +125,13 @@ def render(run, output, screening=None, observation=None):
             if nh_price:
                 volume_note = ('거래량 하한 추정' if row['market']=='US' else '거래량 이전 Toss 직접 대조')
                 note = 'NH 가격 보완·'+volume_note+'·섹터 분모 제외; '+note
-            cells = [row['market'], f"{row['symbol']}{' [NH]' if nh_price else ''} {row.get('name','')}",
+            cells = [row['market'], stock_label(row)+(' [NH]' if nh_price else ''),
                      structure, location, label, rs, note]
             lines.append('| ' + ' | '.join(str(x).replace('|','/').replace('\n',' ') for x in cells) + ' |')
         lines += ['', '## 조사 순서', '', '국가별 섹터 RS63 내림차순, 결측은 마지막, 동률은 원 후보 순서입니다. 합성 점수는 없습니다.']
+        display_rows = {(r['market'],r['symbol']):r for r in screening['rows']}
         for market, rows in screening['research_order'].items():
-            lines += ['', f"{market}: " + ', '.join(r['symbol'] for r in rows)]
+            lines += ['', f"{market}: " + ', '.join(stock_label(display_rows.get((market,r['symbol']),r),market) for r in rows)]
         lines += ['', '[스페란데오 전체·탈락/결측 사유](screen.json) · [자료 품질 상세](quality.json)',
                   '[섹터 상태·변화](sectors/observation.html) · [기초 지표 상세](sectors/metrics.html) · [분류 미확인](sectors/unmatched.json)']
     if observation:

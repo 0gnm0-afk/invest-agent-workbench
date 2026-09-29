@@ -8,6 +8,7 @@ import html
 import math
 import statistics as st
 from collections import Counter, defaultdict
+from display_names import stock_label
 from pathlib import Path
 
 from sector_basis import series_basis, comparison_issue
@@ -411,7 +412,7 @@ def cards(result, prefix='', limit=None):
             body+='<p><strong>'+esc(m.get('summary','자료 부족'))+'</strong></p>'
             body+=f'<div class="muted">{esc(s["previous_label"])} → {esc(m["label"])}</div><ul>'
             body+=''.join('<li>'+esc(x)+'</li>' for x in reasons(s))+'</ul>'
-            leaders=', '.join((r.get('name') or r['symbol']) if market == 'KR' else r['symbol'] for r in s['leaders']) or '자료 없음'
+            leaders=', '.join(stock_label(r,market) if market == 'KR' else r['symbol'] for r in s['leaders']) or '자료 없음'
             body+=f'<p class="muted">거래 주도: {esc(leaders)}</p><a href="{prefix+filename(s)}">추이·종목·후보 확인 →</a></article>'
         body+='</div><p class="empty" hidden>해당 조건의 섹터가 없습니다.</p></section>'
     return body
@@ -433,14 +434,14 @@ def chart(history, key, title, unit='%'):
     return f'<div><h3>{esc(title)}</h3><svg viewBox="0 0 600 200" role="img" aria-label="{esc(title)}"><text x="5" y="35" font-size="13">{esc(fmt(high,unit))}</text><text x="5" y="155" font-size="13">{esc(fmt(low,unit))}</text>{lines}{dots}<text x="70" y="184" font-size="12">{history[0]["date"]}</text><text x="480" y="184" font-size="12">{history[-1]["date"]}</text></svg></div>'
 
 
-def stock_table(rows, kind):
+def stock_table(rows, kind, market=None):
     if not rows:return '<p>해당 종목 없음</p>'
     text='<div class="scroll"><table><thead><tr><th>종목</th><th>최근 수익률</th><th>섹터 내 추정 거래 비중</th><th>후보 경로·근거</th><th>차트</th></tr></thead><tbody>'
     for r in rows:
         origins=' · '.join({'sperandeo':'스페란데오','taver':'테이버'}.get(v,v) for v in r.get('origins',[])) or '패턴 후보 아님'
         reason='; '.join(r.get('reasons',[])) if kind=='candidate' else ''
         link='<a href="../'+esc(r['chart'])+'">저장 차트</a>' if r.get('chart') else esc(r.get('chart_status','우선 차트 대상 아님'))
-        text+=f'<tr><td>{esc(r["symbol"])} {esc(r.get("name",""))}</td><td>{fmt(r.get("return_recent"))}</td><td>{fmt(r.get("proxy_share"))}</td><td>{esc(origins)}<br>{esc(reason)}</td><td>{link}</td></tr>'
+        text+=f'<tr><td>{esc(stock_label(r,market))}</td><td>{fmt(r.get("return_recent"))}</td><td>{fmt(r.get("proxy_share"))}</td><td>{esc(origins)}<br>{esc(reason)}</td><td>{link}</td></tr>'
     return text+'</tbody></table></div>'
 
 
@@ -469,9 +470,9 @@ def render(result, output):
             body+=chart(hist,key,title,unit)
         body+='</div><h2>상태 변경 기록</h2>'
         body+='<ul>'+''.join('<li>'+esc(r['date']+' · '+r['from']+' → '+r['to']+(' · 구성 변경 동반' if r['cohort_changed'] else ''))+'</li>' for r in reversed(s['transitions']))+'</ul>' if s['transitions'] else '<p>표시 기간 내 상태 변경 없음</p>'
-        body+='<h2>거래 주도 종목</h2><p>추정 거래대금 순서입니다. 기존 패턴 후보가 아닌 종목도 포함합니다.</p>'+stock_table(s['leaders'],'leader')
-        body+='<h2>가격 약세 기여 종목</h2><p>최근 구간 개별 수익률이 낮은 순서입니다. 동일비중 기초금액 기준 기여 참고이며 복리 섹터 지수의 정확한 기여도 분해가 아닙니다.</p>'+stock_table(s['weak_contributors'],'weak')
-        body+='<h2>이 섹터의 독립 패턴 후보</h2><p>전체 후보를 보존합니다. 차트는 기존 우선 선정 종목에 제공됩니다.</p>'+stock_table(s.get('candidates',[]),'candidate')
+        body+='<h2>거래 주도 종목</h2><p>추정 거래대금 순서입니다. 기존 패턴 후보가 아닌 종목도 포함합니다.</p>'+stock_table(s['leaders'],'leader',s['market'])
+        body+='<h2>가격 약세 기여 종목</h2><p>최근 구간 개별 수익률이 낮은 순서입니다. 동일비중 기초금액 기준 기여 참고이며 복리 섹터 지수의 정확한 기여도 분해가 아닙니다.</p>'+stock_table(s['weak_contributors'],'weak',s['market'])
+        body+='<h2>이 섹터의 독립 패턴 후보</h2><p>전체 후보를 보존합니다. 차트는 기존 우선 선정 종목에 제공됩니다.</p>'+stock_table(s.get('candidates',[]),'candidate',s['market'])
         body+='<details><summary>계산 기간·분모·판정 기준·일별 근거</summary>'
         body+=f'<p>계산 시작 {esc(m.get("lookback_start"))} · 직전 구간 시작 {esc(m.get("previous_start"))} · 최근 구간 시작 {esc(m.get("current_start"))}. 섹터 {m.get("used",0)}/{m.get("matched",0)}, 시장 {m.get("market_used",0)}/{m.get("market_target",0)}종목. 매 관측일 두 비교 구간은 같은 구성으로 계산합니다. 날짜 사이 구성 변경은 별도 표시합니다.</p>'
         body+='<p>기본 판정: 활동 변화 ±'+fmt(c['activity_change'])+'; 비중 변화 '+fmt(c['share_change'])+' 및 '+fmt(c['share_change_floor'],'%p')+' 이상; RS 변화 '+fmt(c['rs_change'],'%p')+' 이상. 거래 급증 '+fmt(c['surge_level'],'배')+' 이상 및 가격 '+fmt(c['price_weakness'])+' 이하. 강세 유지는 RS 양수·지수 추세선 위·추세선 상승을 함께 요구합니다.</p>'

@@ -1,4 +1,5 @@
 """Independent Taver scan and two review queues over the common universe gate."""
+from display_names import stock_label
 from copy import deepcopy
 from invest_agent.trading import taver_structure
 from invest_agent.trading.market import usable_tail, check_bars
@@ -151,7 +152,7 @@ def report_lines(review,chart_result):
             for e in group['entries']:
                 if not e['selected']: continue
                 ref=refs.get((market,e['symbol']),{})
-                name=e['symbol']+' '+(e.get('name') or '')
+                name=stock_label(e,market)
                 link=f"[{name}]({ref['path']})" if ref.get('state')=='available' else name+' (차트 실패: '+ref.get('reason','미생성')+')'
                 values=[e['rank'],link,'양쪽 후보' if e['symbol'] in g['overlap_symbols'] else '단독', '; '.join(e['reasons'])]
                 lines.append('| '+' | '.join(str(v).replace('|','/').replace('\n',' ') for v in values)+' |')
@@ -160,7 +161,7 @@ def report_lines(review,chart_result):
         for e in g['entries']:
             if not e['selected']: continue
             ref=refs.get((market,e['symbol']),{})
-            link=f"[{e['symbol']}]({ref['path']})" if ref.get('state')=='available' else e['symbol']
+            link=f"[{stock_label(e,market)}]({ref['path']})" if ref.get('state')=='available' else stock_label(e,market)
             labels={'sperandeo':'스페란데오','taver':'테이버'}
             lines.append('| '+link+' | '+', '.join(labels[v] for v in e['origins'])+' | '+', '.join(labels[v] for v in e['selected_by'])+' |')
         lines.append('')
@@ -173,8 +174,8 @@ def write_scan(output,review):
     esc=html.escape
     rows=[]
     for o in review['taver_observations']:
-        values=[o.get('market'),o.get('symbol'),o.get('name'),o.get('as_of'),o['state'],o['candidate'],
+        values=[o.get('market'),stock_label(o),o.get('as_of'),o['state'],o['candidate'],
                 o.get('sperandeo_candidate'),'; '.join(o.get('reasons',[]))]
         rows.append('<tr>'+''.join('<td>'+esc(str(v))+'</td>' for v in values)+'</tr>')
-    page='<!doctype html><meta charset="utf-8"><title>전체 테이버 탐색</title><style>body{font:14px system-ui;margin:24px}td,th{padding:8px;border-bottom:1px solid #ddd}table{border-collapse:collapse}</style><h1>전체 테이버 탐색</h1><p><a href="report.html">보고서</a> · 기준일 '+esc(str(review['session_dates']))+'</p><p>'+esc(review['taver_policy'])+'</p><table><tr>'+''.join('<th>'+s+'</th>' for s in ['시장','종목','이름','기준일','상태','테이버 후보','스페란데오 후보','근거'])+'</tr>'+''.join(rows)+'</table>'
+    page='<!doctype html><meta charset="utf-8"><title>전체 테이버 탐색</title><style>body{font:14px system-ui;margin:24px}td,th{padding:8px;border-bottom:1px solid #ddd}table{border-collapse:collapse}</style><h1>전체 테이버 탐색</h1><p><a href="report.html">보고서</a> · 기준일 '+esc(str(review['session_dates']))+'</p><p>'+esc(review['taver_policy'])+'</p><table><tr>'+''.join('<th>'+s+'</th>' for s in ['시장','종목','기준일','상태','테이버 후보','스페란데오 후보','근거'])+'</tr>'+''.join(rows)+'</table>'
     (output/'taver-scan.html').write_text(page,encoding='utf-8')
