@@ -203,13 +203,15 @@ def export_sectors(output, report, groups):
     (output/'metrics.html').write_text(page, encoding='utf-8')
 
 
-def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=None):
+def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=None, *, session_cutoff=None, evaluated_at=None, prior_result=None):
     date = datetime.now(ZoneInfo('Asia/Seoul')).date().isoformat()
     mode = 'review' if saved_run else 'replay' if source else 'recover' if recover_source else 'live'
     output = ROOT/'runtime'/date/(datetime.now(timezone.utc).strftime('%H%M%S')+'-'+mode+'-'+uuid4().hex[:8])
     output.mkdir(parents=True)
     run = {'schema':1, 'state':'running', 'processing_state':'running', 'mode':mode, 'started_at':now(),
            'output':str(output), 'stages':{s:'not_started' for s in ('inputs','collection','nh_fallback','quality','stock_screen','sector_screen','priority_review','charts','sector_states','report')}}
+    if session_cutoff:
+        run.update(session_cutoff=session_cutoff, evaluated_at=evaluated_at)
     started = time.monotonic()
     hashes, inputs = {}, {}
     screening = observation = None
@@ -250,7 +252,13 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
                 prior_run = Path(sector.load(latest)['output'])/'run.json'
                 if prior_run.is_file():
                     previous = sector.load(prior_run).get('market_source')
-            collect(collection_root, ROOT/'config.json', prior_source=previous)
+            if prior_result:
+                from daily_launch import DailyLaunch
+                checked_prior = DailyLaunch(ROOT).checked_run(prior_result)
+                previous = checked_prior.get('market_source')
+                inputs[str(Path(prior_result)/'run.json')] = sector.sha(Path(prior_result)/'run.json')
+            kwargs = {'session_cutoff':session_cutoff,'evaluated_at':evaluated_at} if session_cutoff else {}
+            collect(collection_root, ROOT/'config.json', prior_source=previous, **kwargs)
             if previous:
                 previous = Path(previous)
                 inputs[str(previous/'snapshot.json')] = sector.sha(previous/'snapshot.json')
@@ -272,6 +280,9 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
                 prior_run = Path(sector.load(latest)['output'])/'run.json'
                 if prior_run.is_file():
                     previous = sector.load(prior_run).get('market_source')
+            if prior_result:
+                from daily_launch import DailyLaunch
+                previous = DailyLaunch(ROOT).checked_run(prior_result).get('market_source')
             source, fallback, fallback_inputs = nh_fallback.recover(
                 original_source,output/'nh_fallback',config,
                 evidence_root=nh_evidence,prior_source=previous)
@@ -463,11 +474,20 @@ def main():
     parser.add_argument('--verify', type=Path, help='Offline checksum and calculation replay')
     parser.add_argument('--recover', type=Path, help='New run from a saved Toss attempt with NH fallback')
     parser.add_argument('--nh-evidence', type=Path, help='Previously captured NH requests for --recover')
+    parser.add_argument('--session-cutoff', help='Dashboard-only latest permitted session date')
+    parser.add_argument('--evaluated-at', help='Frozen timezone-aware first launch timestamp')
+    parser.add_argument('--prior-run', type=Path, help='Verified prior result for incremental seed after a failed attempt')
     args = parser.parse_args()
     if sum(bool(x) for x in (args.source,args.verify,args.recover,args.review)) > 1:
         parser.error('choose source, verify, recover, or review')
     if args.nh_evidence and not args.recover:
         parser.error('--nh-evidence requires --recover')
+    if bool(args.session_cutoff) != bool(args.evaluated_at) or args.session_cutoff and any((args.source,args.verify,args.recover,args.review)):
+        parser.error('cutoff/evaluated-at must be paired and live-only')
+    if args.session_cutoff:
+        from daily_launch import plan_for
+        if plan_for(datetime.fromisoformat(args.evaluated_at))['cutoff'] != args.session_cutoff:
+            parser.error('cutoff must match the first launch KST previous date')
     config = sector.load(ROOT/'config.json')
     from contextlib import nullcontext
     no_network = patch.object(socket.socket, 'connect', side_effect=AssertionError('offline_network_forbidden'))
@@ -476,7 +496,7 @@ def main():
             result = verify(args.verify.resolve())
         else:
             with instance_lock(ROOT/'runtime'):
-                result = run(config, args.source, args.recover, args.nh_evidence, args.review)
+                result = run(config, args.source, args.recover, args.nh_evidence, args.review, session_cutoff=args.session_cutoff, evaluated_at=args.evaluated_at, prior_result=args.prior_run)
     print(json.dumps(result, ensure_ascii=True), flush=True)
     return 1 if result.get('state') == 'failed' else 2 if result.get('state') == 'partial' else 0
 

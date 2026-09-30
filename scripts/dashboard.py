@@ -5,6 +5,10 @@ import mimetypes
 import secrets
 import sqlite3
 import threading
+import time
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+from daily_launch import DailyLaunch
 import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,7 +18,8 @@ from chart_history import HistoryStore, timeframe
 from chart_workspace import WorkspaceStore, Conflict, moving_averages
 
 
-def handler_for(data, stocks, assets, token, workspace_path=None):
+def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None, daily_status=None):
+    initial_view = (data, stocks)
     store = WorkspaceStore(workspace_path or ROOT / "runtime/chart-workspaces.sqlite3")
     histories = HistoryStore((Path(workspace_path).parent if workspace_path else ROOT / 'runtime') / 'chart-history.sqlite3')
     class Handler(BaseHTTPRequestHandler):
@@ -33,6 +38,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None):
             self.wfile.write(body)
 
         def do_GET(self):
+            data, stocks = views['view'] if views is not None else initial_view
             expected = '127.0.0.1:' + str(self.server.server_port)
             if self.headers.get('Host') != expected or self.headers.get('Origin', 'http://' + expected) != 'http://' + expected:
                 return self.send(b'{"error":"local_origin_required"}', status=403)
@@ -44,6 +50,8 @@ def handler_for(data, stocks, assets, token, workspace_path=None):
                 return self.send(b'{"error":"invalid_timeframe"}', status=400)
             if path == '/health':
                 return self.send(json.dumps({'app': 'invest-workbench', 'token': token}).encode())
+            if path == '/api/daily-update':
+                return self.send(json.dumps(daily_status() if daily_status else {'enabled':False}, ensure_ascii=False).encode('utf-8'))
             if path == '/api/home':
                 return self.send(json.dumps(data, ensure_ascii=False, allow_nan=False).encode('utf-8'))
             if path.startswith('/api/chart-state/'):
@@ -92,6 +100,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None):
             return self.send(file.read_bytes(), kind + ('; charset=utf-8' if kind.startswith('text/') else ''))
 
         def do_POST(self):
+            data, stocks = views['view'] if views is not None else initial_view
             path = urllib.parse.urlsplit(self.path).path
             query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query, keep_blank_values=True)
             try:
@@ -140,14 +149,56 @@ def main():
     parser.add_argument('--build-only', action='store_true')
     parser.add_argument('--ready-file', type=Path)
     parser.add_argument('--port', type=int, default=0)
+    parser.add_argument('--daily-refresh', action='store_true', help='One market update per KST launch day')
+    parser.add_argument('--retry-market', action='store_true', help='Explicitly request another market attempt today')
     args = parser.parse_args()
-    output, data, stocks = build(refresh=not args.saved_accounts)
+    if args.retry_market and not args.daily_refresh:
+        parser.error('--retry-market requires --daily-refresh')
+    if args.build_only and args.daily_refresh:
+        parser.error('--build-only is saved-market only')
+    daily = DailyLaunch(ROOT) if args.daily_refresh else None
+    started = datetime.now(timezone.utc)
+    day = started.astimezone(ZoneInfo('Asia/Seoul')).date().isoformat()
+    base_run = daily.display_run() if daily else None
+    live = {'record':{'day':day,'state':'running','stage':'starting','targets':{}},'ready':False}
+    output, data, stocks = build(refresh=not args.saved_accounts and not daily, market_run=base_run)
+    views = {'view':(data, stocks)}
+    def daily_status():
+        if not daily:
+            return {'enabled':False}
+        try:
+            record = live['record'] if live['ready'] else daily.read(day) or live['record']
+        except (OSError, ValueError):
+            record = live['record']
+        return {**daily.public(record), 'enabled':True,'view_ready':live['ready'],
+                'reused':live['record'].get('reused',False)}
+    def prepare():
+        try:
+            record = daily.once(started, retry=args.retry_market)
+            while record.get('following'):
+                live['record'] = record
+                time.sleep(.5)
+                record = daily.once(started)
+            live['record'] = record
+            update = daily.public(record)
+            refresh_accounts = not args.saved_accounts and not record.get('reused')
+            if record.get('display_run') == base_run and not refresh_accounts:
+                # Same immutable market/account view: no second adapter/risk calculation.
+                views['view'] = ({**data, 'daily_update':update}, stocks)
+            else:
+                result_output, result_data, result_stocks = build(
+                    refresh=refresh_accounts, market_run=record.get('display_run'), daily_update=update)
+                views['view'] = (result_data, result_stocks)
+        except Exception:
+            live['record'] = {**live['record'],'state':'failed','error':'dashboard_preparation_failed'}
+        finally:
+            live['ready'] = True
     if args.build_only:
         print(json.dumps({'output': str(output), 'market_state': data['market']['state'],
                           'account_query_state': data['accounts']['query_state']}))
         return
     token = secrets.token_urlsafe(18)
-    server = ThreadingHTTPServer(('127.0.0.1', args.port), handler_for(data, stocks, ROOT / 'dashboard', token))
+    server = ThreadingHTTPServer(('127.0.0.1', args.port), handler_for(data, stocks, ROOT / 'dashboard', token, views=views, daily_status=daily_status))
     server.daemon_threads = True
     ready = {'url': 'http://127.0.0.1:' + str(server.server_port), 'output': str(output), 'token': token}
     if args.ready_file:
@@ -155,6 +206,8 @@ def main():
     print(json.dumps(ready), flush=True)
     if args.open_browser:
         webbrowser.open(ready['url'])
+    if daily:
+        threading.Thread(target=prepare, daemon=True).start()
     server.serve_forever()
 
 

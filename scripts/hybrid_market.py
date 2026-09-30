@@ -10,6 +10,7 @@ from invest_agent.trading.market_provider import completed_sessions
 from invest_agent.trading.runner import atomic_write
 from invest_agent.trading.store import instance_lock
 from toss_candles import daily_series
+from daily_launch import capped_sessions
 from toss_universe import discover
 from market_quality import complete_cap, error_disposition
 
@@ -34,7 +35,7 @@ def collector_version():
     folder = Path(__file__).parent
     return digest([folder.joinpath(name).read_text(encoding='utf-8') for name in (
         'hybrid_market.py', 'toss_universe.py', 'toss_candles.py',
-        'toss_market_client.py', 'toss_api.py', 'market_quality.py', 'market_lifecycle.json',
+        'toss_market_client.py', 'toss_api.py', 'market_quality.py', 'market_lifecycle.json', 'daily_launch.py',
     )])
 
 
@@ -113,7 +114,7 @@ def _collect(config, account, root, get, now, refresh, prior_series, prior_sourc
     )
     for market in sorted({row['market'] for row in universe} | risk_markets):
         try:
-            sessions[market] = completed_sessions(market, now)
+            sessions[market] = capped_sessions(completed_sessions(market, now), config.get('session_cutoff'))
         except (ValueError, KeyError, IndexError):
             scope_errors.append({'scope': market, 'stage': 'calendar', 'reason': 'completed_sessions_unavailable'})
 

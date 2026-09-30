@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from hybrid_market import collect, collector_version
+from daily_launch import capped_sessions
 from invest_agent.trading.contracts import digest
 from invest_agent.trading.market import check_bars, usable_tail
 from invest_agent.trading.market_provider import completed_sessions
@@ -104,7 +105,7 @@ class Evidence:
                 'rate_headers': {p: [json.loads(v) for v in sorted(values)] for p, values in self.limits.items()}}
 
 
-def run(root, config_path=None, prior_source=None):
+def run(root, config_path=None, prior_source=None, *, session_cutoff=None, evaluated_at=None):
     root = Path(root).resolve()
     runtime = Path(__file__).resolve().parents[1] / 'runtime'
     if not root.is_relative_to(runtime.resolve()):
@@ -112,6 +113,9 @@ def run(root, config_path=None, prior_source=None):
     with instance_lock(root):
         frozen_path = root / 'frozen.json'
         actual = datetime.now(timezone.utc)
+        evaluated = datetime.fromisoformat(evaluated_at) if evaluated_at else actual
+        if evaluated.tzinfo is None or not 0 <= (actual-evaluated).total_seconds() <= 86400:
+            raise ValueError('Invalid collection evaluation time')
         version = digest({'collector': collector_version(),
                           'market_runner': Path(__file__).read_text(encoding='utf-8')})
         if frozen_path.exists():
@@ -120,7 +124,7 @@ def run(root, config_path=None, prior_source=None):
                     or digest(frozen['config']) != frozen['config_hash']):
                 raise ValueError('Resume requires unchanged code and frozen config; use a new instance')
             for market, sessions in frozen['sessions'].items():
-                if completed_sessions(market, actual)[-1] != sessions[-1]:
+                if capped_sessions(completed_sessions(market, actual), frozen['config'].get('session_cutoff'))[-1] != sessions[-1]:
                     raise ValueError('Completed session changed; use a new instance')
             if not 0 <= (actual - datetime.fromisoformat(frozen['evaluated_at'])).total_seconds() <= 86400:
                 raise ValueError('Resume window expired; use a new instance')
@@ -131,6 +135,8 @@ def run(root, config_path=None, prior_source=None):
             config = {'profile': source['profile'], 'markets': ['KR', 'US'],
                       'scope': 'market_only_toss_provided_universe', 'universe_mode': 'exchange_listings',
                       'limit_per_exchange': None}
+            if session_cutoff is not None:
+                config['session_cutoff'] = session_cutoff
             prior = None
             if prior_source is not None:
                 prior = Path(prior_source).resolve()
@@ -142,8 +148,8 @@ def run(root, config_path=None, prior_source=None):
                 if manifest.get('snapshot.json') != actual_hash:
                     raise ValueError('Prior snapshot hash mismatch')
             frozen = {'config': config, 'config_hash': digest(config), 'version': version,
-                      'evaluated_at': actual.isoformat(),
-                      'sessions': {m: completed_sessions(m, actual) for m in config['markets']},
+                      'evaluated_at': evaluated.isoformat(),
+                      'sessions': {m: capped_sessions(completed_sessions(m, evaluated), session_cutoff) for m in config['markets']},
                       'prior_source': str(prior) if prior else None,
                       'prior_snapshot_sha256': actual_hash if prior else None}
             write_json(frozen_path, frozen)

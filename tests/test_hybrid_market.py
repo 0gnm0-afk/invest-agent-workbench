@@ -46,6 +46,20 @@ class TossMarketPipelineTests(unittest.TestCase):
         return h.collect(self.config, kwargs.pop('account', {}), self.root, lambda *args: None,
                          now=kwargs.pop('now', self.now), **kwargs)
 
+    def test_dashboard_cutoff_reaches_candle_collector(self):
+        self.config['session_cutoff']='2026-09-10'
+        original=self.candle_series
+        def bounded(get,symbol,market,days,**kwargs):
+            self.assertEqual(days[-1],'2026-09-10')
+            result=original(get,symbol,market,days,**kwargs)
+            result['bars']=[b for b in result['bars'] if b['date']<=days[-1]]
+            return result
+        self.candles.side_effect=bounded
+        result=self.run_collect()
+        self.assertEqual(result['sessions']['KR'][-1],'2026-09-10')
+        self.assertEqual(result['sessions']['US'][-1],'2026-09-10')
+        self.assertTrue(all(r['bars'][-1]['date']=='2026-09-10' for r in result['series']))
+
     def test_kr_and_us_use_toss_and_completed_series_are_cached(self):
         first = self.run_collect()
         self.assertEqual(first['collection_stats']['received'], 2)

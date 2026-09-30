@@ -67,6 +67,28 @@ function accountDetail(alias) {
 }
 function missing(){ $('#main').innerHTML='<div class="empty"><strong>저장된 항목을 찾을 수 없습니다.</strong><a href="#home">작업대로 돌아가기</a></div>'; }
 async function route(){const version=++routeVersion;if(!await WorkbenchWorkspace.closeActive()){history.replaceState(null,'',lastRouteHash||'#home');return;}if(version!==routeVersion)return;lastRouteHash=location.hash;WorkbenchCharts.clear();const [page,...args]=(location.hash.slice(1)||'home').split('/').map(decodeURIComponent);document.querySelectorAll('[data-nav]').forEach(a=>a.classList.toggle('active',a.dataset.nav===page||page==='stock'&&a.dataset.nav==='screen'||page==='account'&&a.dataset.nav==='accounts'||page==='sector'&&a.dataset.nav==='sectors'));$('#breadcrumb').textContent=({home:'작업대',screen:'스크리닝',sectors:'섹터 관찰',sector:'섹터 상세',accounts:'나의 계좌',account:'계좌 상세',stock:'종목 상세'})[page]||'작업대';try{if(page==='home')home();else if(page==='screen')screen();else if(page==='sectors')sectors();else if(page==='sector')sectorDetail(...args);else if(page==='accounts')accounts();else if(page==='account')accountDetail(...args);else if(page==='stock')await stockDetail(...args,version);else missing();window.scrollTo(0,0);}catch(e){$('#main').innerHTML='<div class="empty"><strong>화면 자료를 표시하지 못했습니다.</strong>'+esc(e.message)+'<br><a href="#home">작업대로</a></div>';console.error(e);}}
-fetch('/api/home').then(r=>{if(!r.ok)throw Error('dashboard_load_failed');return r.json();}).then(d=>{DATA=d;window.addEventListener('hashchange',route);route();}).catch(e=>{$('#main').textContent='저장 자료 불러오기 실패: '+e.message;});
+fetch('/api/home').then(r=>{if(!r.ok)throw Error('dashboard_load_failed');return r.json();}).then(d=>{DATA=d;window.addEventListener('hashchange',route);route();pollDaily();}).catch(e=>{$('#main').textContent='저장 자료 불러오기 실패: '+e.message;});
 
 $('.skip').onclick = event => { event.preventDefault(); $('#main').focus(); };
+
+async function pollDaily() {
+ const host=$('#daily-update');let published=false;
+ const stages={starting:'저장 자료 준비',calendar:'완료 거래일 확인',inputs:'입력 확인',collection:'종가 자료 수집',nh_fallback:'실패 종목 보완',quality:'자료 검사',stock_screen:'스크리닝 계산',sector_screen:'섹터 계산',priority_review:'후보 선별',charts:'차트 저장',sector_states:'섹터 상태 계산',report:'보고서 저장',finished:'화면 준비',waiting:'다른 실행을 기다리는 중'};
+ async function apply(){const r=await fetch('/api/home');if(!r.ok)throw Error();const next=await r.json();if(!await WorkbenchWorkspace.closeActive())return;DATA=next;published=true;await route();}
+ async function check(){
+  try{
+   const response=await fetch('/api/daily-update');if(!response.ok)throw Error();const u=await response.json();
+   if(!u.enabled){host.hidden=true;return;}
+   host.hidden=false;const busy=!u.view_ready;const bad=['failed','interrupted'].includes(u.state);
+   const label=busy?'오늘의 종가·스크리닝 갱신 중':({succeeded:'오늘의 갱신 완료',partial:'오늘의 갱신 완료 · 일부 자료 결측',failed:'오늘의 갱신에 오류가 있습니다',interrupted:'오늘의 갱신이 중단됐습니다'})[u.state]||'오늘의 저장 결과';
+   host.classList.toggle('error',bad);const p=u.progress;
+   host.innerHTML=`<strong>${esc(label)}</strong><span>${esc(u.day)} · 목표 종가 KR ${esc(u.targets?.KR||'확인 중')} / US ${esc(u.targets?.US||'확인 중')}<br>${busy?esc(stages[u.stage]||'갱신 중')+(p?.requested?' · '+num(p.completed,0)+' / '+num(p.requested,0)+'종목':''):(u.reused?'오늘 실행 기록 재사용 · 수집·스크리닝 재실행 없음':'하루 첫 실행 처리')} ${u.finished_at?'· '+stamp(u.finished_at):''}${u.error?'<br>'+esc(u.error==='market_authentication_http_403'?'Toss 인증 거절(403). API 접근 확인이 필요합니다.':u.error==='previous_launch_interrupted'?'이전 실행이 끝나기 전에 중단됐습니다.':'갱신 결과를 확인하지 못했습니다.'):''}${u.display_stale?'<br>갱신 전 저장 결과를 표시합니다. 아래 실제 자료 기준일을 확인하세요.':''}${bad?'<br>같은 날에는 자동으로 재시도하지 않습니다.':''}</span>`;
+   if(u.view_ready&&!published){
+    if(!location.hash||location.hash==='#home')await apply();
+    else{const button=document.createElement('button');button.textContent='갱신 결과 열기';button.onclick=async()=>{await apply();if(published)button.remove();};host.append(button);}
+   }
+   if(!u.view_ready)setTimeout(check,2000);
+  }catch{host.hidden=false;host.textContent='갱신 상태를 확인하지 못했습니다. 현재 화면의 자료 기준일을 확인하세요.';}
+ }
+ await check();
+}

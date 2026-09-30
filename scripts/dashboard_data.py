@@ -32,10 +32,11 @@ def checked(path, expected):
     return load(path)
 
 
-def saved_market(root=ROOT):
-    """Never fall back from a failed latest attempt to an older successful run."""
-    latest = load(root / 'runtime/latest.json')
-    run_dir = Path(latest['output']).resolve()
+def saved_market(root=ROOT, run_dir=None):
+    """Default to latest attempt; explicit prior views require a separate daily failure banner."""
+    if run_dir is None:
+        run_dir = load(root / 'runtime/latest.json')['output']
+    run_dir = Path(run_dir).resolve()
     if not run_dir.is_relative_to((root / 'runtime').resolve()):
         raise ValueError('latest_outside_private_runtime')
     manifest = load(run_dir / 'manifest.json')
@@ -204,13 +205,13 @@ def account_view(config, output, refresh=True, risk_market=None):
     return result
 
 
-def build(root=ROOT, refresh=True):
+def build(root=ROOT, refresh=True, *, market_run=None, daily_update=None):
     config = load(root / 'config.json')
     sys.path.insert(0, str(Path(config['engine']) / 'src'))
     output = root / 'runtime/dashboard' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     output.mkdir(parents=True)
     try:
-        market = saved_market(root)
+        market = saved_market(root, market_run)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         market = {'state': 'unavailable', 'errors': ['saved_market_unavailable:' + type(exc).__name__],
                   'entries': [], 'sectors': [], 'stocks': {}, 'session_dates': {}, 'quality': {},
@@ -218,6 +219,8 @@ def build(root=ROOT, refresh=True):
     accounts = account_view(config, output, refresh, market.pop('_risk_market', None))
     stocks = market.pop('stocks')
     data = {'generated_at': now(), 'market': market, 'accounts': accounts}
+    if daily_update is not None:
+        data['daily_update'] = daily_update
     write(output / 'dashboard.json', data)
     # Prices remain in the immutable market source, projected in memory only.
     # Do not duplicate hundreds of MB of full-universe bars on every launch.
