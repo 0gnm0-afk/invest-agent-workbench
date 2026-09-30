@@ -6,6 +6,7 @@ from pathlib import Path
 from invest_agent.trading import momentum_watch as watch, momentum_entry as engine, base_structure as base
 from invest_agent.trading.market import usable_tail
 from display_names import stock_label
+from display_format import money, currency_for, display_analysis
 
 def signal_key(s):return base.rank(s) if s['route']=='base_watch' else watch.key(s)
 def rs_label(rs):return f'{rs:.1f}' if rs is not None else '미산출'
@@ -91,13 +92,13 @@ def table(entries,refs,phase=None):
     if not selected:return '<p class="muted">이 단계의 우선 표시 종목이 없습니다.</p>'
     text='<div class="scroll"><table><thead><tr><th>종목 / 경로</th><th>관찰 단계·모양</th><th>피벗 / 거리</th><th>구조 무효화 / 위험</th><th>횡보 하단·상단 / 거리비</th><th>다음 확인·주의</th></tr></thead><tbody>'
     for e in selected:
-        s=e['entry_signal'];ref=refs.get((e['market'],e['symbol']),{});name=esc(stock_label(e))
+        currency=currency_for(e);s=e['entry_signal'];ref=refs.get((e['market'],e['symbol']),{});name=esc(stock_label(e))
         if ref.get('state')=='available':name='<a href="'+esc(ref['path'])+'">'+name+'</a>'
         else:name+=' <small>차트 생성 실패</small>'
         b=e.get('route_signals',{}).get('base_watch')
-        base_text=(esc(b['label'])+f"<br>하단 {b['structure_stop']:.2f} / 상단 {b['pivot']:.2f}<br>하단 거리 {b['structure_risk_pct']:.1%} · 상단 여지 {b['range_upside_pct']:.1%}<br>거리비 {b['range_reward_risk']:.2f}배") if b else '—'
+        base_text=(esc(b['label'])+f"<br>하단 {money(b['structure_stop'],currency)} / 상단 {money(b['pivot'],currency)}<br>하단 거리 {b['structure_risk_pct']:.1%} · 상단 여지 {b['range_upside_pct']:.1%}<br>거리비 {b['range_reward_risk']:.2f}배") if b else '—'
         pending=s['pending'] or ['완료봉 기준 진입 조건 충족·다음 세션 유지 확인']
-        text+='<tr><td>'+name+'<small>'+esc(' / '.join(ROUTES[x] for x in e['origins']))+'</small></td><td><span class="tag">'+LABELS[s['phase']]+'</span><br>'+esc(s['label'])+'</td><td>'+f"{s['pivot']:.2f}<br>{s['pivot_gap_pct']:.1%}"+'</td><td>'+f"{s['structure_stop']:.2f}<br>{s['structure_risk_pct']:.1%}"+'</td><td>'+base_text+'</td><td>'+ '<br>'.join(esc(x) for x in pending+s['warnings'])+'</td></tr>'
+        text+='<tr><td>'+name+'<small>'+esc(' / '.join(ROUTES[x] for x in e['origins']))+'</small></td><td><span class="tag">'+LABELS[s['phase']]+'</span><br>'+esc(s['label'])+'</td><td>'+f"{money(s['pivot'],currency)}<br>{s['pivot_gap_pct']:.1%}"+'</td><td>'+f"{money(s['structure_stop'],currency)}<br>{s['structure_risk_pct']:.1%}"+'</td><td>'+base_text+'</td><td>'+ '<br>'.join(esc(x) for x in pending+s['warnings'])+'</td></tr>'
     return text+'</tbody></table></div>'
 
 def render(run,output,screening=None,observation=None):
@@ -138,7 +139,7 @@ def write_outputs(output,review):
             reason+='; 횡보 '+str(near['base_bars'])+'봉: '+', '.join(labels[k] for k in near['rejections'])
         if not reason and not s:reason=o['state']
         label=LABELS.get(phase,'대상 제외')
-        rows.append('<tr data-phase="'+phase+'"><td>'+esc(o['market'])+'</td><td>'+esc(stock_label(o))+'</td><td>'+label+'</td><td>'+esc(' / '.join(dict.fromkeys(x['label'] for x in o.get('signals',[]))))+'</td><td>'+esc(reason)+'</td><td><details><summary>계산 근거</summary><pre>'+esc(json.dumps(o,ensure_ascii=False,indent=2))+'</pre></details></td></tr>')
+        rows.append('<tr data-phase="'+phase+'"><td>'+esc(o['market'])+'</td><td>'+esc(stock_label(o))+'</td><td>'+label+'</td><td>'+esc(' / '.join(dict.fromkeys(x['label'] for x in o.get('signals',[]))))+'</td><td>'+esc(reason)+'</td><td><details><summary>계산 근거</summary><pre>'+esc(json.dumps(display_analysis(o,currency_for(o)),ensure_ascii=False,indent=2))+'</pre></details></td></tr>')
     script='''const q=document.getElementById('q'),p=document.getElementById('phase');function filter(){for(const r of document.querySelectorAll('tbody tr')){const phase=r.dataset.phase;r.hidden=!r.textContent.toLowerCase().includes(q.value.toLowerCase())||(p.value==='candidates'?phase==='excluded':p.value!=='all'&&p.value!==phase);}}q.addEventListener('input',filter);p.addEventListener('change',filter);filter();'''
     page='<h1>전체 관찰 후보·단계·제외 이유</h1><a href="report.html">스크리너 보고서</a><p>완료 세션 '+esc(review['session_dates'])+'</p><input id="q" placeholder="종목명·심볼 검색"><select id="phase"><option value="candidates">관찰 포함 후보만</option>'+''.join('<option value="'+k+'">'+v+'</option>' for k,v in LABELS.items())+'<option value="excluded">대상 제외</option><option value="all">전체 대상</option></select><div class="scroll"><table><thead><tr><th>시장</th><th>종목</th><th>단계</th><th>모양</th><th>다음 확인 / 제외 이유</th><th>근거</th></tr></thead><tbody>'+''.join(rows)+'</tbody></table></div>'
     (output/'entry-scan.html').write_text('<!doctype html><html lang="ko"><meta charset="utf-8"><title>관찰 후보 전체 목록</title><style>'+CSS+'</style><main>'+page+'</main><script>'+script+'</script></html>',encoding='utf-8')

@@ -14,8 +14,8 @@ window.WorkbenchCharts = (() => {
     const refs = series.map(s => {
       const ref = chart.addSeries(s.type === 'candles' ? L.CandlestickSeries : s.type === 'volume' ? L.HistogramSeries : L.LineSeries,
         {...(s.type === 'candles' ? {upColor: '#238b78', downColor: '#cc6963', borderVisible: false, wickUpColor: '#238b78', wickDownColor: '#cc6963'} : {color: s.color || '#218775', lineWidth: 2}),
-         priceLineVisible: false, lastValueVisible: s.type !== 'volume', title: s.label, ...s.options}, s.pane || 0);
-      ref.setData(s.data); return {ref, label: s.label};
+         priceLineVisible: false, lastValueVisible: s.type !== 'volume', title: s.label, ...s.options, ...(s.currency ? {priceFormat: {type: 'custom', minMove: s.currency === 'KRW' ? 1 : .01, formatter: value => WorkbenchFormat.money(value, s.currency)}} : {})}, s.pane || 0);
+      ref.setData(s.data); return {ref, label: s.label, currency: s.currency};
     });
     if (series.some(s => s.pane === 1)) chart.panes()[1].setHeight(80);
     chart.timeScale().fitContent();
@@ -23,8 +23,8 @@ window.WorkbenchCharts = (() => {
     const legend = options.legend;
     if (legend) chart.subscribeCrosshairMove(p => {
       if (!p.time) { legend.textContent = '차트 위에서 날짜별 수치를 확인하세요.'; return; }
-      legend.textContent = String(p.time) + '  ·  ' + refs.map(({ref,label}) => {
-        const point = p.seriesData.get(ref); return label + ': ' + (point ? Number(point.close ?? point.value).toLocaleString('ko-KR', {maximumFractionDigits: 2}) : '결측');
+      legend.textContent = String(p.time) + '  ·  ' + refs.map(({ref,label,currency}) => {
+        const point = p.seriesData.get(ref); return label + ': ' + (point ? (currency ? WorkbenchFormat.money(point.close ?? point.value, currency) : Number(point.close ?? point.value).toLocaleString('ko-KR', {maximumFractionDigits: 2})) : '결측');
       }).join('  /  ');
     });
     mounted.push(chart); return chart;

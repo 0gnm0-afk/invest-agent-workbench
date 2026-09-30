@@ -9,6 +9,7 @@ from pathlib import Path
 from invest_agent.trading import momentum_entry as model
 from invest_agent.trading.market import usable_tail,check_bars
 from display_names import stock_label
+from display_format import money, currency_for, price_text, display_analysis
 
 SOURCE={'title':'최고의 주식을 고르는 대가들의 노하우','publisher':'DB금융투자','date':'2023-08-21',
         'pdf_pages':45,'sha256':'26ddc0f066941c5406f59d8da2dad84681548a9a55e93ad63c417955e91149d7'}
@@ -121,7 +122,7 @@ def draw(bars,path,entry):
     from matplotlib import pyplot as plt
     from matplotlib.patches import Rectangle
     from invest_agent.trading.charts import _TITLE_FONT
-    event=entry['entry_signal'];dates={b['date']:i for i,b in enumerate(bars)}
+    currency=currency_for(entry);event=entry['entry_signal'];dates={b['date']:i for i,b in enumerate(bars)}
     start=max(0,min(len(bars)-100,dates.get(event['base_start'],len(bars)-160)-10));shown=bars[start:]
     fig,(ax,vol)=plt.subplots(2,1,figsize=(14,8),sharex=True,gridspec_kw={'height_ratios':[4,1]})
     try:
@@ -134,8 +135,8 @@ def draw(bars,path,entry):
             xs=[i-start for i in range(start,len(bars)) if i+1>=n]
             ax.plot(xs,[model.sma(bars,n,x+start+1) for x in xs],lw=1,color=color,label=f'SMA {n}')
         known=dates.get(event['known_at'],start)-start
-        ax.hlines(event['pivot'],max(known,0),len(shown)-1,color='#1d4ed8',ls='--',label=f"Pivot {event['pivot']:.2f}")
-        ax.hlines(event['structure_stop'],max(known,0),len(shown)-1,color='#c54848',ls=':',label=f"Structure invalidation {event['structure_stop']:.2f}")
+        ax.hlines(event['pivot'],max(known,0),len(shown)-1,color='#1d4ed8',ls='--',label=f"Pivot {money(event['pivot'],currency)}")
+        ax.hlines(event['structure_stop'],max(known,0),len(shown)-1,color='#c54848',ls=':',label=f"Structure invalidation {money(event['structure_stop'],currency)}")
         zone=event.get('entry_zone')
         if zone:ax.fill_between([max(known,0),len(shown)-1],zone['lower_exclusive'],zone['upper_inclusive'],color='#3b82f6',alpha=.1,label='Entry review zone')
         ax.axvspan(max(0,dates.get(event['base_start'],start)-start),max(0,dates.get(event['base_end'],start)-start),color='#999',alpha=.08,label='Pre-breakout base')
@@ -146,10 +147,12 @@ def draw(bars,path,entry):
             ax.set_xlim(-1,len(shown)+10)
             for level,color in [(event['pivot'],'#1d4ed8'),(event['structure_stop'],'#c54848')]:
                 ax.hlines(level,max(known,0),len(shown)+5,color=color,ls='--',lw=1)
-                ax.text(len(shown)+1,level,f'{level:.2f}',color=color,fontsize=8)
+                ax.text(len(shown)+1,level,money(level,currency),color=color,fontsize=8)
             ax.scatter(len(shown)-1,bars[-1]['close'],marker='o',s=35,color='#111827',label='Observation only')
         ax.set_title(stock_label(entry)+' | '+event.get('phase_label','진입 조건 충족')+' · '+event['label']+' | '+entry['as_of'],fontfamily=_TITLE_FONT)
-        ax.set_ylabel(entry.get('currency') or ('KRW' if entry['market']=='KR' else 'USD'))
+        ax.set_ylabel(currency)
+        from matplotlib.ticker import FuncFormatter
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda value, _: money(value,currency)))
         ax.legend(loc='upper left',fontsize=8);ax.grid(alpha=.15)
         xs=[i-start for i in range(start,len(bars)) if i>=50]
         vol.plot(xs,[sum(b['volume'] for b in bars[x+start-50:x+start])/50 for x in xs],color='#111',lw=1,label='Prior 50-day volume')
@@ -173,9 +176,9 @@ def charts(review,screen,snapshot,output,draw_fn=None):
                 esc=html.escape
                 body='<h1>'+esc(stock_label(e))+'</h1><p>완료 세션 '+esc(e['as_of'])+' · '+esc(' / '.join('바닥·눌림 횡보' if x=='base_watch' else '스페란데오' if x=='sperandeo' and review.get('schema')==4 else ROUTES[x] for x in e['origins']))+'</p>'
                 body+='<p>'+esc(e.get('entry_signal',{}).get('phase_label','진입 조건 충족'))+' · 재무/기관/질적 조건 미검증 · 자동 주문 없음</p><img style="max-width:100%" src="'+stem+'.png">'
-                body+='<ul>'+''.join('<li>'+esc(x)+'</li>' for x in e['reasons'])+'</ul>'
+                body+='<ul>'+''.join('<li>'+esc(price_text(x,currency_for(e)))+'</li>' for x in e['reasons'])+'</ul>'
                 body+='<p>구조 무효화 참고선은 자동 손절 주문이 아닙니다. 갭·슬리피지·현재 장중 가격을 반영하지 않습니다.</p>'
-                body+='<details><summary>조건·원수치·패턴 근거·미검증 항목</summary><pre>'+esc(json.dumps(e['analysis'],ensure_ascii=False,indent=2))+'</pre></details>'
+                body+='<details><summary>조건·원수치·패턴 근거·미검증 항목</summary><pre>'+esc(json.dumps(display_analysis(e['analysis'],currency_for(e)),ensure_ascii=False,indent=2))+'</pre></details>'
                 (folder/(stem+'.html')).write_text('<!doctype html><html lang="ko"><meta charset="utf-8"><title>'+esc(stock_label(e))+'</title><style>body{font:15px system-ui;margin:24px}pre{white-space:pre-wrap}</style><a href="../report.html">보고서</a>'+body+'</html>',encoding='utf-8')
                 row.update(state='available',path='charts/'+stem+'.html',image='charts/'+stem+'.png',metadata='charts/'+stem+'.json',image_sha256=hashlib.sha256(image.read_bytes()).hexdigest())
             except Exception as exc:row['reason']=type(exc).__name__+': '+str(exc)
@@ -204,7 +207,7 @@ def report_lines(review,chart_result):
             for symbol in group['selected_symbols']:
                 e=by_symbol[symbol];v=min([x for x in e['analysis']['active_events'] if x['route']==route],key=lambda x:(x['age_sessions'],x['structure_risk_pct']))
                 ref=refs.get((market,symbol),{});name=stock_label(e);link=f"[{name}]({ref['path']})" if ref.get('state')=='available' else name+' (차트 생성 실패)'
-                lines.append(f"| {link} | {v['breakout_date']} · {v['label']} | {e['analysis']['rs_percentile']:.1f} / {v['volume_ratio']:.2f}배 | {v['pivot']:.2f} ~ {v['entry_zone']['upper_inclusive']:.2f} | {v['extension_pct']:.1%} / {v['structure_risk_pct']:.1%} |")
+                lines.append(f"| {link} | {v['breakout_date']} · {v['label']} | {e['analysis']['rs_percentile']:.1f} / {v['volume_ratio']:.2f}배 | {money(v['pivot'],currency_for(e))} ~ {money(v['entry_zone']['upper_inclusive'],currency_for(e))} | {v['extension_pct']:.1%} / {v['structure_risk_pct']:.1%} |")
             lines.append('')
     lines += [f"차트 {chart_result['available']}/{chart_result['requested']} · 실패 {chart_result['failed']}. 중복 경로는 동일 종목 차트로 연결합니다.",'']
     return lines
@@ -225,7 +228,7 @@ def write_outputs(output,review):
         selected=o.get('main_candidate') or o.get('sperandeo_candidate')
         reason='; '.join(REASONS.get(k,k) for k in o.get('rejections',[]))
         state='차트 진입 후보' if selected else REASONS.get(o['state'],o['state'])
-        rows.append('<tr data-candidate="'+str(bool(selected)).lower()+'"><td>'+esc(o['market'])+'</td><td>'+esc(stock_label(o))+'</td><td>'+esc(state)+'</td><td>'+esc(reason)+'</td><td><details><summary>근거</summary><pre>'+esc(json.dumps(o,ensure_ascii=False,indent=2))+'</pre></details></td></tr>')
+        rows.append('<tr data-candidate="'+str(bool(selected)).lower()+'"><td>'+esc(o['market'])+'</td><td>'+esc(stock_label(o))+'</td><td>'+esc(state)+'</td><td>'+esc(reason)+'</td><td><details><summary>근거</summary><pre>'+esc(json.dumps(display_analysis(o,currency_for(o)),ensure_ascii=False,indent=2))+'</pre></details></td></tr>')
     page='<!doctype html><html lang="ko"><meta charset="utf-8"><title>전체 진입 판정</title><style>body{font:14px system-ui;margin:24px}td{padding:8px;border-bottom:1px solid #ccc}pre{white-space:pre-wrap;max-width:750px}</style><a href="report.html">보고서</a><h1>전체 진입 판정·제외 이유</h1><p>자료 완료 세션 '+esc(str(review['session_dates']))+'</p><input id="q" placeholder="종목명/심볼 검색"><label><input type="checkbox" id="active">진입 후보만</label><table><thead><tr><th>시장</th><th>종목</th><th>상태</th><th>조건</th><th>원수치</th></tr></thead><tbody>'+''.join(rows)+'</tbody></table><script>const q=document.getElementById("q"),a=document.getElementById("active");function filter(){for(const r of document.querySelectorAll("tbody tr")){r.hidden=(!r.textContent.toLowerCase().includes(q.value.toLowerCase()))||(a.checked&&r.dataset.candidate!=="true");}}q.addEventListener("input",filter);a.addEventListener("change",filter);</script></html>'
     (output/'entry-scan.html').write_text(page,encoding='utf-8')
     rules=Path(__file__).resolve().parents[1]/'docs/pdf-momentum-rules.md'
