@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from us_toss_history import Collector, read_checked, parse_page
+from us_toss_history import Collector, read_checked, parse_page, save_checked
 from toss_market_client import TossMarketClient
 
 
@@ -40,6 +40,12 @@ class HistoryTests(unittest.TestCase):
             r=Collector(td,fake).collect_one({'symbol':'AAPL'},'2026-09-30')
             self.assertEqual(r['state'],'failed');self.assertEqual(len(r['bars']),1)
             self.assertIn('cursor_not_descending',r['error'])
+            save_checked(Path(td)/'collection.json',{'end':'2026-09-30','scope':'synthetic'})
+            save_checked(Path(td)/'universe.json',{'rows':[{'symbol':'AAPL'}]})
+            from verify_us_toss_history import verify
+            result=verify(td,require_finished=True)
+            self.assertEqual(result['counts'],{'failed':1})
+            self.assertTrue(result['all_attempted'])
 
     def test_opt_in_rate_preserves_default_and_provider_limit(self):
         import io

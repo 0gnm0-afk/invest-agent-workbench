@@ -30,7 +30,7 @@ def verify(root, require_finished=False):
     counts=Counter();rows=[];earliest=Counter();total=0;raw_count=0
     manifest={}
     for symbol,d in sorted(packets.items()):
-        merged={};last_cursor=None;previous=None
+        merged={};last_cursor=None
         for n,key in enumerate(d['responses']):
             p=root/'responses'/(key+'.json.gz')
             raw=p.read_bytes();packet=json.loads(gzip.decompress(raw))
@@ -42,11 +42,13 @@ def verify(root, require_finished=False):
             manifest[str(p.relative_to(root))]=hashlib.sha256(raw).hexdigest();raw_count+=1
             try:
                 page,last_cursor=parse_page(packet['payload'],config['end'])
-                if last_cursor:
-                    assert datetime.fromisoformat(last_cursor)<datetime.fromisoformat(params['before']), 'cursor_not_descending'
+                bad_cursor = bool(last_cursor) and datetime.fromisoformat(last_cursor)>=datetime.fromisoformat(params['before'])
                 for b in page:
                     assert b['date'] not in merged or merged[b['date']]==b, 'conflicting_overlap'
                     merged[b['date']]=b
+                if bad_cursor:
+                    assert d['state']=='failed' and n==len(d['responses'])-1 and 'cursor_not_descending' in d.get('error',''), 'unreported_cursor_failure'
+                    break
             except (ValueError,KeyError,TypeError):
                 assert d['state']=='failed' and n==len(d['responses'])-1, 'unreported_parse_failure'
                 break
