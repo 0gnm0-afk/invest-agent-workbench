@@ -212,7 +212,7 @@ def write(path,value):
     path.write_text(json.dumps(value,ensure_ascii=False,indent=2,allow_nan=False)+'\n',encoding='utf-8')
 
 def charts(review,screen,snapshot,output,draw=None):
-    if review.get("schema") == 3:
+    if review.get("schema") in (3,4):
         import momentum_review
         return momentum_review.charts(review,screen,snapshot,output,draw_fn=draw)
     from invest_agent.trading import charts as engine_charts
@@ -285,7 +285,7 @@ def charts(review,screen,snapshot,output,draw=None):
             'failed':sum(r['state']=='failed' for r in results),'rows':results}
 
 def report_lines(review,chart_result):
-    if review.get("schema") == 3:
+    if review.get("schema") in (3,4):
         import momentum_review
         return momentum_review.report_lines(review,chart_result)
     if review.get('schema') == 2:

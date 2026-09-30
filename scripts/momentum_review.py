@@ -28,6 +28,10 @@ def write(path,value):path.write_text(json.dumps(value,ensure_ascii=False,indent
 
 
 def build(screen,snapshot,overrides):
+    if 'watchlist' in overrides:
+        import watch_review
+        old={k:v for k,v in overrides.items() if k!='watchlist'}
+        return watch_review.augment(build(screen,snapshot,old),screen,snapshot,overrides['watchlist'])
     allowed={'strategy','limit_per_market','sperandeo_limit_per_market','taver_enabled','momentum'}
     if set(overrides)-allowed:raise ValueError('unknown_pdf_priority_setting')
     if overrides.get('taver_enabled',False) is not False:raise ValueError('taver_excluded_from_pdf_strategy')
@@ -132,11 +136,19 @@ def draw(bars,path,entry):
         known=dates.get(event['known_at'],start)-start
         ax.hlines(event['pivot'],max(known,0),len(shown)-1,color='#1d4ed8',ls='--',label=f"Pivot {event['pivot']:.2f}")
         ax.hlines(event['structure_stop'],max(known,0),len(shown)-1,color='#c54848',ls=':',label=f"Structure invalidation {event['structure_stop']:.2f}")
-        zone=event['entry_zone'];ax.fill_between([max(known,0),len(shown)-1],zone['lower_exclusive'],zone['upper_inclusive'],color='#3b82f6',alpha=.1,label='Entry review zone')
+        zone=event.get('entry_zone')
+        if zone:ax.fill_between([max(known,0),len(shown)-1],zone['lower_exclusive'],zone['upper_inclusive'],color='#3b82f6',alpha=.1,label='Entry review zone')
         ax.axvspan(max(0,dates.get(event['base_start'],start)-start),max(0,dates.get(event['base_end'],start)-start),color='#999',alpha=.08,label='Pre-breakout base')
-        i=dates[event['breakout_date']]-start
-        ax.scatter(i,event['breakout_close'],marker='^',s=90,color='#111827',zorder=5,label='Confirmed close breakout')
-        ax.set_title(stock_label(entry)+' | '+event['label']+' | '+entry['as_of'],fontfamily=_TITLE_FONT)
+        if event.get('breakout_date'):
+            i=dates[event['breakout_date']]-start
+            ax.scatter(i,event['breakout_close'],marker='^',s=90,color='#111827',zorder=5,label='Confirmed close breakout')
+        else:
+            ax.set_xlim(-1,len(shown)+10)
+            for level,color in [(event['pivot'],'#1d4ed8'),(event['structure_stop'],'#c54848')]:
+                ax.hlines(level,max(known,0),len(shown)+5,color=color,ls='--',lw=1)
+                ax.text(len(shown)+1,level,f'{level:.2f}',color=color,fontsize=8)
+            ax.scatter(len(shown)-1,bars[-1]['close'],marker='o',s=35,color='#111827',label='Observation only')
+        ax.set_title(stock_label(entry)+' | '+event.get('phase_label','진입 조건 충족')+' · '+event['label']+' | '+entry['as_of'],fontfamily=_TITLE_FONT)
         ax.set_ylabel(entry.get('currency') or ('KRW' if entry['market']=='KR' else 'USD'))
         ax.legend(loc='upper left',fontsize=8);ax.grid(alpha=.15)
         xs=[i-start for i in range(start,len(bars)) if i>=50]
@@ -159,8 +171,8 @@ def charts(review,screen,snapshot,output,draw_fn=None):
                 b=usable_tail(model.completed(series[(e['market'],e['symbol'])]['bars'],e['as_of']),snapshot['sessions'][e['market']])
                 image=folder/(stem+'.png');draw_fn(b,image,e);write(folder/(stem+'.json'),{'entry':e,'source':SOURCE})
                 esc=html.escape
-                body='<h1>'+esc(stock_label(e))+'</h1><p>완료 세션 '+esc(e['as_of'])+' · '+esc(' / '.join(ROUTES[x] for x in e['origins']))+'</p>'
-                body+='<p>차트 진입 검토 후보 · 재무/기관/질적 조건 미검증 · 자동 주문 없음</p><img style="max-width:100%" src="'+stem+'.png">'
+                body='<h1>'+esc(stock_label(e))+'</h1><p>완료 세션 '+esc(e['as_of'])+' · '+esc(' / '.join('스페란데오' if x=='sperandeo' and review.get('schema')==4 else ROUTES[x] for x in e['origins']))+'</p>'
+                body+='<p>'+esc(e.get('entry_signal',{}).get('phase_label','진입 조건 충족'))+' · 재무/기관/질적 조건 미검증 · 자동 주문 없음</p><img style="max-width:100%" src="'+stem+'.png">'
                 body+='<ul>'+''.join('<li>'+esc(x)+'</li>' for x in e['reasons'])+'</ul>'
                 body+='<p>구조 무효화 참고선은 자동 손절 주문이 아닙니다. 갭·슬리피지·현재 장중 가격을 반영하지 않습니다.</p>'
                 body+='<details><summary>조건·원수치·패턴 근거·미검증 항목</summary><pre>'+esc(json.dumps(e['analysis'],ensure_ascii=False,indent=2))+'</pre></details>'
@@ -172,6 +184,9 @@ def charts(review,screen,snapshot,output,draw_fn=None):
 
 
 def report_lines(review,chart_result):
+    if review.get('schema')==4:
+        import watch_review
+        return watch_review.report_lines(review,chart_result)
     refs={(r['market'],r['symbol']):r for r in chart_result['rows']}
     lines=['','## 적극적 진입 검토 — 차트 조건 충족','',review['policy'],
         '테이버 선정 제외. 재무·기관·신제품·코드33 미검증. 후보가 없으면 조건을 완화해 채우지 않습니다.',
@@ -196,6 +211,9 @@ def report_lines(review,chart_result):
 
 
 def write_outputs(output,review):
+    if review.get('schema')==4:
+        import watch_review
+        return watch_review.write_outputs(output,review)
     esc=html.escape
     with (output/'candidates.csv').open('w',encoding='utf-8-sig',newline='') as stream:
         writer=csv.writer(stream);writer.writerow(['market','symbol','name','as_of','origins','selected','pattern','breakout_date','pivot','entry_upper','structure_stop','rs_percentile','volume_ratio','unverified'])

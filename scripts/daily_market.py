@@ -86,6 +86,9 @@ def inline_links(text):
 
 
 def render(run, output, screening=None, observation=None):
+    if (output/'priority-review.json').is_file() and sector.load(output/'priority-review.json').get('schema')==4:
+        import watch_review
+        return watch_review.render(run,output,screening,observation)
     review = None
     lines = ['# 일일 시장 관찰', '', f"실행 상태: **{run['state']}** / 처리: {run['processing_state']}",
              f"모드: {run['mode']} / 시작: {run['started_at']} / 종료: {run.get('finished_at', '진행 중')}",
@@ -119,10 +122,10 @@ def render(run, output, screening=None, observation=None):
                 else {'requested':missing_count,'available':0,'failed':missing_count,'rows':[]})
             at = lines.index('## 후보와 섹터 맥락')
             lines[at:at] = review_lines
-            if review.get('schema') == 3:
+            if review.get('schema') in (3,4):
                 lines=lines[:lines.index('## 후보와 섹터 맥락')]
                 lines=[line.replace(f"기존 스페란데오 후보 {screening['candidate_count']}",f"활성 진입 후보 {review['candidate_count']} · 기존 S단계 감사 후보 {screening['candidate_count']}") for line in lines]
-        for row in ([] if review and review.get('schema')==3 else screening['rows']):
+        for row in ([] if review and review.get('schema') in (3,4) else screening['rows']):
             if row['state'] != 'candidate':
                 continue
             ctx = row['sector_context']
@@ -142,7 +145,7 @@ def render(run, output, screening=None, observation=None):
             cells = [row['market'], stock_label(row)+(' [NH]' if nh_price else ''),
                      structure, location, label, rs, note]
             lines.append('| ' + ' | '.join(str(x).replace('|','/').replace('\n',' ') for x in cells) + ' |')
-        if not (review and review.get('schema') == 3):
+        if not (review and review.get('schema') in (3,4)):
             lines += ['', '## 조사 순서', '', '국가별 섹터 RS63 내림차순, 결측은 마지막, 동률은 원 후보 순서입니다. 합성 점수는 없습니다.']
             display_rows = {(r['market'],r['symbol']):r for r in screening['rows']}
             for market, rows in screening['research_order'].items():
@@ -184,7 +187,7 @@ def render(run, output, screening=None, observation=None):
         states = sector.load(output/'sectors/signals.json')
         sector_panel = '<style>'+sector_signals.CSS+'</style><h1>섹터 변화 먼저 보기</h1><p>완료 일봉 기준 · 현재 분류로 재생한 관찰 · 추정 거래 비중은 순유입 아님</p>'+sector_signals.cards(states,'sectors/',4)+'<p><a href="sectors/observation.html">전체 섹터 상태·필터·추이 →</a></p>'
     page = '<!doctype html><html lang="ko"><meta charset="utf-8"><title>일일 시장 관찰</title><style>body{font-family:system-ui;margin:24px;line-height:1.5}table{border-collapse:collapse;font-size:14px}td{border:1px solid #ccc;padding:8px;min-width:85px}tr:first-child{font-weight:bold;background:#edf2f7}p{overflow-wrap:anywhere}</style><body><nav><a href="sectors/observation.html">섹터 관찰표</a> · <a href="candidates.csv">후보 CSV</a> · <a href="screen.json">후보/제외/결측 상세</a> · <a href="quality.json">품질 상세</a></nav>' + sector_panel + ''.join(body) + '</body></html>'
-    if review and review.get('schema') == 3:
+    if review and review.get('schema') in (3,4):
         page=page.replace('<a href="screen.json">후보/제외/결측 상세</a>','<a href="entry-scan.html">활성 후보·탈락 근거</a> · <a href="screen.json">기존 S단계 감사 자료</a>')
     (output/'report.html').write_text(page, encoding='utf-8')
 
@@ -322,11 +325,12 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
         update(stage, 'running')
         review = priority.build(screening, snapshot, config.get('priority_review'))
         write_json(output/'priority-review.json', review)
-        if review.get('schema') == 3:
+        if review.get('schema') in (3,4):
             import momentum_review
             momentum_review.write_outputs(output,review)
             run['legacy_sperandeo_candidate_count']=screening['candidate_count']
             run['candidate_count']=review['candidate_count']
+            if review.get('schema')==4:run['entry_candidate_count']=review['entry_candidate_count']
         else:
             priority.taver_review.write_scan(output,review)
         update(stage, 'completed')
@@ -422,7 +426,7 @@ def verify(output):
                 if ('href="'+row['path']+'"') not in (output/'report.html').read_text(encoding='utf-8'):
                     raise ValueError('priority_chart_report_link_missing')
         priority_counts = {m:g['selected_count'] for m,g in review['markets'].items()}
-        if review.get('schema') == 3:
+        if review.get('schema') in (3,4):
             active_candidate_count=review['candidate_count']
             with (output/'candidates.csv').open(encoding='utf-8-sig',newline='') as stream:
                 csv_rows=list(csv.DictReader(stream))
@@ -431,6 +435,16 @@ def verify(output):
                 raise ValueError('active_candidate_csv_mismatch')
             if run['candidate_count']!=active_candidate_count:
                 raise ValueError('active_candidate_count_mismatch')
+            if review.get('schema')==4:
+                if run.get('entry_candidate_count')!=review['entry_candidate_count']:
+                    raise ValueError('entry_candidate_count_mismatch')
+                lookup={(e['market'],e['symbol']):e for g in review['markets'].values() for e in g['entries']}
+                for row in csv_rows:
+                    if row['phase']!=lookup[(row['market'],row['symbol'])]['phase']:
+                        raise ValueError('candidate_phase_csv_mismatch')
+                for group in review['markets'].values():
+                    if sum(group['phase_counts'].values())!=group['candidate_count']:
+                        raise ValueError('candidate_phase_count_mismatch')
     sector_state_counts = {}
     if run['stages'].get('sector_states') == 'completed_with_limitations' and not (output/'sectors/signals.json').is_file():
         raise ValueError('sector_states_output_missing')
