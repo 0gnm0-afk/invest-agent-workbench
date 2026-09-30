@@ -26,7 +26,7 @@ def daily_series(get, symbol, market, sessions, *, benchmark=None, provider_symb
                  adjusted=True, max_pages=10, stop_on_or_before=None, page_size=200):
     if not sessions or sessions != sorted(set(sessions)):
         raise ValueError('Expected ordered unique completed sessions')
-    if not isinstance(adjusted, bool) or not isinstance(max_pages, int) or isinstance(max_pages, bool) or not 1 <= max_pages <= 10:
+    if not isinstance(adjusted, bool) or not isinstance(max_pages, int) or isinstance(max_pages, bool) or not 1 <= max_pages <= 40:
         raise ValueError('Invalid candle request limits')
     if (not isinstance(page_size, int) or isinstance(page_size, bool) or not 1 <= page_size <= 200
             or stop_on_or_before is not None and stop_on_or_before not in sessions):

@@ -10,11 +10,13 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from dashboard_data import ROOT, build
+from chart_history import HistoryStore, timeframe
 from chart_workspace import WorkspaceStore, Conflict, moving_averages
 
 
 def handler_for(data, stocks, assets, token, workspace_path=None):
     store = WorkspaceStore(workspace_path or ROOT / "runtime/chart-workspaces.sqlite3")
+    histories = HistoryStore((Path(workspace_path).parent if workspace_path else ROOT / 'runtime') / 'chart-history.sqlite3')
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass
@@ -35,6 +37,11 @@ def handler_for(data, stocks, assets, token, workspace_path=None):
             if self.headers.get('Host') != expected or self.headers.get('Origin', 'http://' + expected) != 'http://' + expected:
                 return self.send(b'{"error":"local_origin_required"}', status=403)
             path = urllib.parse.urlsplit(self.path).path
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query, keep_blank_values=True)
+            try:
+                frame = timeframe(query.get('timeframe', ['1d'])[0])
+            except ValueError:
+                return self.send(b'{"error":"invalid_timeframe"}', status=400)
             if path == '/health':
                 return self.send(json.dumps({'app': 'invest-workbench', 'token': token}).encode())
             if path == '/api/home':
@@ -44,7 +51,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None):
                 if key not in stocks:
                     return self.send(b'{"error":"unknown_stock"}', status=404)
                 try:
-                    result = store.read(key)
+                    result = store.read(key if frame == '1d' else key + '|' + frame)
                     return self.send(json.dumps({**result, 'token': token}, ensure_ascii=False).encode('utf-8'))
                 except (sqlite3.Error, OSError, ValueError):
                     return self.send(b'{"error":"workspace_read_failed"}', status=503)
@@ -55,10 +62,15 @@ def handler_for(data, stocks, assets, token, workspace_path=None):
                 try:
                     query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query, keep_blank_values=True)
                     periods = [int(n) for n in query.get('periods', ['20,50,150,200'])[0].split(',') if n]
-                    result = moving_averages(stocks[key], periods)
+                    result = moving_averages(histories.view(stocks[key], frame), periods)
                     return self.send(json.dumps(result, allow_nan=False).encode())
                 except (ValueError, TypeError):
                     return self.send(b'{"error":"invalid_periods"}', status=400)
+            if path.startswith('/api/chart/'):
+                key = urllib.parse.unquote(path[len('/api/chart/'):])
+                if key not in stocks:
+                    return self.send(b'{"error":"unknown_stock"}', status=404)
+                return self.send(json.dumps(histories.view(stocks[key], frame), ensure_ascii=False, allow_nan=False).encode('utf-8'))
             if path.startswith('/api/stock/'):
                 key = urllib.parse.unquote(path[len('/api/stock/'):])
                 value = stocks.get(key)
@@ -66,7 +78,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None):
                     value = {'state': 'unavailable', 'reason': 'saved_price_series_missing', 'bars': []}
                 return self.send(json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8'))
             names = {'/': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css',
-                     '/drawing-tools.js': 'drawing-tools.js', '/chart-workspace.js': 'chart-workspace.js', '/chart-tools.css': 'chart-tools.css', '/format.js': 'format.js', '/charts.js': 'charts.js', '/workbench.png': 'workbench.png',
+                     '/stock-chart.js': 'stock-chart.js', '/drawing-tools.js': 'drawing-tools.js', '/chart-workspace.js': 'chart-workspace.js', '/chart-tools.css': 'chart-tools.css', '/format.js': 'format.js', '/charts.js': 'charts.js', '/workbench.png': 'workbench.png',
                      '/vendor/lightweight-charts.js': 'vendor/lightweight-charts.js',
                      '/vendor/NOTICE': 'vendor/NOTICE', '/vendor/LICENSE': 'vendor/LICENSE'}
             if path not in names:
@@ -81,7 +93,12 @@ def handler_for(data, stocks, assets, token, workspace_path=None):
 
         def do_POST(self):
             path = urllib.parse.urlsplit(self.path).path
-            if not path.startswith('/api/chart-state/'):
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query, keep_blank_values=True)
+            try:
+                frame = timeframe(query.get('timeframe', ['1d'])[0])
+            except ValueError:
+                return self.send(b'{"error":"invalid_timeframe"}', status=400)
+            if not path.startswith(('/api/chart-state/', '/api/chart-history/')):
                 return self.send(b'{"error":"read_only"}', status=405)
             expected = '127.0.0.1:' + str(self.server.server_port)
             if (self.headers.get('Host') != expected or self.headers.get('Origin') != 'http://' + expected
@@ -89,7 +106,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None):
                 return self.send(b'{"error":"local_origin_required"}', status=403)
             if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
                 return self.send(b'{"error":"json_required"}', status=415)
-            key = urllib.parse.unquote(path[len('/api/chart-state/'):])
+            key = urllib.parse.unquote(path.rsplit('/', 1)[-1])
             if key not in stocks:
                 return self.send(b'{"error":"unknown_stock"}', status=404)
             try:
@@ -98,9 +115,14 @@ def handler_for(data, stocks, assets, token, workspace_path=None):
                     return self.send(b'{"error":"invalid_body_size"}', status=413)
                 self.connection.settimeout(5)
                 body = json.loads(self.rfile.read(length))
+                if path.startswith('/api/chart-history/'):
+                    if not isinstance(body, dict) or set(body) != {'retry'} or type(body['retry']) is not bool:
+                        raise ValueError('invalid_history_request')
+                    result = histories.ensure(stocks[key], retry=body['retry'])
+                    return self.send(json.dumps(result, ensure_ascii=False, allow_nan=False).encode('utf-8'))
                 if not isinstance(body, dict) or set(body) != {'revision', 'state'}:
                     raise ValueError('invalid_body')
-                result = store.save(key, body['revision'], body['state'])
+                result = store.save(key if frame == '1d' else key + '|' + frame, body['revision'], body['state'])
                 self.send(json.dumps(result).encode())
             except Conflict:
                 self.send(b'{"error":"workspace_changed_elsewhere"}', status=409)

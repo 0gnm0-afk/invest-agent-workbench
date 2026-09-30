@@ -9,7 +9,8 @@ window.WorkbenchWorkspace = (() => {
     if(active===current){current.destroy();active=null;}return true;
   }
   async function mount({host,plot,stock,market,symbol,currency,legend,isCurrent}) {
-    const key=encodeURIComponent(market+':'+symbol),url='/api/chart-state/'+key;
+    const frame=stock.timeframe||'1d', frameName=({'1d':'일봉','1w':'주봉','1mo':'월봉'})[frame];
+    const key=encodeURIComponent(market+':'+symbol),url='/api/chart-state/'+key+'?timeframe='+frame;
     const bars=stock.bars||[];
     if(!bars.length){host.innerHTML='<div class="empty">검증된 가격 이력이 없어 이동평균·작도를 사용할 수 없습니다.</div>';return;}
     let packet;
@@ -23,7 +24,7 @@ window.WorkbenchWorkspace = (() => {
       <button data-tool="select" class="selected">선택·이동</button><button data-tool="trend">추세선</button><button data-tool="channel">평행 채널</button><button data-tool="horizontal">수평선</button><button data-tool="box">박스</button><button data-tool="measure">구간 측정</button>
       <span class="tool-divider"></span><button data-action="undo" title="Ctrl+Z">실행 취소</button><button data-action="redo" title="Ctrl+Shift+Z">다시 실행</button><button data-action="delete">선택 삭제</button><button data-action="save" class="primary">저장</button>
       <span class="save-state" role="status" aria-live="polite"></span></div>
-      <p class="drawing-hint"></p><div class="chart-controls"><details class="averages-control"><summary>이동평균선 · 일봉 SMA</summary><div class="average-list"></div><form class="average-add"><label>추가 기간 <input name="period" type="number" min="1" max="500" value="30" required aria-label="추가 SMA 기간"></label><button>추가</button><small>1~500봉 · 최대 6개 · 종가 기준</small></form><p class="average-status" role="status"></p></details><details class="drawing-control"><summary>작도 목록·정밀 편집 <span class="drawing-count"></span></summary><div class="drawing-list"></div><div class="drawing-editor"></div></details></div>`;
+      <p class="drawing-hint"></p><div class="chart-controls"><details class="averages-control"><summary>이동평균선 · ${frameName} SMA</summary><div class="average-list"></div><form class="average-add"><label>추가 기간 <input name="period" type="number" min="1" max="500" value="30" required aria-label="추가 SMA 기간"></label><button>추가</button><small>1~500봉 · 최대 6개 · 종가 기준</small></form><p class="average-status" role="status"></p></details><details class="drawing-control"><summary>작도 목록·정밀 편집 <span class="drawing-count"></span></summary><div class="drawing-list"></div><div class="drawing-editor"></div></details></div>`;
     const q=s=>host.querySelector(s),qa=s=>host.querySelectorAll(s);
     function status(text,bad=false){q('.save-state').textContent=text;q('.save-state').classList.toggle('error-text',bad);}
     function dirty(){return JSON.stringify(state)!==lastSaved;}
@@ -68,14 +69,14 @@ window.WorkbenchWorkspace = (() => {
       averageRefs.forEach(ref=>chart.removeSeries(ref));averageRefs=[];averageLabels.clear();
       const requested=state.averages.filter(a=>a.visible);q('.average-status').textContent='이동평균 계산 자료를 읽는 중…';
       try {
-        const r=await fetch('/api/averages/'+key+'?periods='+requested.map(a=>a.period).join(','));if(!r.ok)throw Error();const values=await r.json();
+        const r=await fetch('/api/averages/'+key+'?periods='+requested.map(a=>a.period).join(',')+'&timeframe='+frame);if(!r.ok)throw Error();const values=await r.json();
         if(dead||version!==averageVersion)return;
         for(const a of requested) {
           const ref=chart.addSeries(LightweightCharts.LineSeries,{color:a.color,lineWidth:a.width,title:'SMA '+a.period,priceLineVisible:false,lastValueVisible:false,priceFormat:{type:'custom',minMove:currency==='KRW'?1:.01,formatter:v=>WorkbenchFormat.money(v,currency)}});
           ref.setData(values[a.period]);averageRefs.push(ref);averageLabels.set(ref,a.period);
         }
         const unavailable=requested.filter(a=>!(values[a.period]||[]).some(p=>p.value!=null)).map(a=>a.period);
-        q('.average-status').textContent=unavailable.length?`이력 부족·결측: SMA ${unavailable.join(', ')} · 없는 값을 채우지 않습니다.`:'Python 계산 · 현재 화면 앞의 저장 이력까지 사용 · 완료 일봉 기준';
+        q('.average-status').textContent=unavailable.length?`이력 부족·결측: SMA ${unavailable.join(', ')} · 없는 값을 채우지 않습니다.`:`Python 계산 · ${frameName} 종가 SMA · 마지막 주/월은 기준일까지의 부분 봉일 수 있습니다.`;
       } catch {if(!dead&&version===averageVersion)q('.average-status').textContent='이동평균 자료 조회 실패. 설정을 다시 적용하거나 화면을 다시 여세요.';}
     }
     async function save() {
@@ -128,7 +129,7 @@ window.WorkbenchWorkspace = (() => {
     refresh();renderAverages();loadAverages();status(packet.updated_at?'저장본 복원됨':'새 작업 · 변경 시 자동 저장');
     const missing=state.drawings.filter(d=>d.points.some(p=>!bars.some(b=>b.date===p.time))).length;
     if(missing)q('.drawing-hint').textContent=`현재 가격 이력에 없는 날짜의 작도 ${missing}개는 보존하며 차트에 표시하지 않습니다. 목록에서 수정할 수 있습니다.`;
-    active={save,destroy(){dead=true;clearTimeout(timer);averageVersion++;drawings.destroy();document.removeEventListener('keydown',keyboard);window.removeEventListener('beforeunload',beforeUnload);},range(value){chart.timeScale().setVisibleLogicalRange({from:value==='all'?0:Math.max(0,bars.length-Number(value)),to:bars.length-1});}};
+    active={save,destroy(){dead=true;clearTimeout(timer);averageVersion++;drawings.destroy();document.removeEventListener('keydown',keyboard);window.removeEventListener('beforeunload',beforeUnload);},range(value){let from=0;if(value!=='all'){const end=new Date(bars.at(-1).date+'T00:00:00Z');end.setUTCMonth(end.getUTCMonth()-Number(value));const start=end.toISOString().slice(0,10);from=bars.findIndex(b=>b.date>=start);if(from<0)from=bars.length-1;}chart.timeScale().setVisibleLogicalRange({from,to:bars.length-1});}};
     return active;
   }
   return {mount,closeActive};
