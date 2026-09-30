@@ -81,7 +81,7 @@ def classify(m, c):
 
 
 def metrics(members, eligible, totals, n, b, c):
-    ratios, valid = {}, []
+    ratios, valid, excluded = {}, [], {}
     for symbol in members:
         bars = eligible[symbol]
         values = []
@@ -90,11 +90,15 @@ def metrics(members, eligible, totals, n, b, c):
             if base <= 0:
                 break
             values.append(bars[i]['volume']/base)
-        if len(values) == 3*n:
+        if len(values) != 3*n:
+            excluded[symbol] = 'relative_volume_baseline_zero'
+        elif st.fmean(values[:n]) <= 0 or st.fmean(values[n:2*n]) <= 0:
+            excluded[symbol] = 'comparison_activity_zero'
+        else:
             ratios[symbol] = values
             valid.append(symbol)
     if not valid:
-        return dict(issues=['상대 거래량 비교 불가'], activity_now=None, growth=None, acceleration=None), []
+        return dict(issues=['상대 거래량 비교 불가'], activity_now=None, growth=None, acceleration=None, activity_used=0, activity_exclusions=excluded), []
     daily = [st.median(ratios[s][i] for s in valid) for i in range(3*n)]
     old, prev, now = [st.fmean(daily[i:i+n]) for i in (0, n, 2*n)]
     growth, previous_growth = change(now, prev), change(prev, old)
@@ -109,8 +113,8 @@ def metrics(members, eligible, totals, n, b, c):
                     return_recent=eligible[s][-1]['close']/eligible[s][-n-1]['close']-1)
                for s in contributors[:5]]
     issues = []
-    if len(valid)/max(1,len(members)) < c['min_coverage'] or any(stock_growth[s] is None for s in valid):
-        issues.append('상대 거래량 유효 비율 부족 또는 0분모')
+    if len(valid) < c['min_members'] or len(valid)/max(1,len(members)) < c['min_coverage']:
+        issues.append('상대 거래량 유효 구성 부족: 최소 종목 수 또는 비율 미달')
     if share_now is None or share_prev is None:
         issues.append('시장 거래 비중 분모 부족')
     return dict(issues=issues, activity_now=now, activity_previous=prev, activity_earlier=old,
@@ -121,14 +125,14 @@ def metrics(members, eligible, totals, n, b, c):
                 return_recent=curve[-1]/curve[-n-1]-1,
                 share_now=share_now, share_change=change(share_now,share_prev) if share_now is not None else None,
                 top3_share=divide(sum(sorted(recent_proxy.values(),reverse=True)[:3]),sum(recent_proxy.values())),
-                activity_used=len(valid)), leaders
+                activity_used=len(valid), activity_exclusions=excluded), leaders
 
 
 def build(snapshot, groups, sectors, overrides=None):
     c = settings(overrides); n, b = c['window'], c['baseline']; required=b+3*n
     out = dict(schema=1, settings=c, markets={}, items=[], network_calls=0,
                limitations=['relative_volume_not_net_cash_flow', 'current_classification_not_historical_backtest',
-                            'early_observation_rule_not_validated_prediction', 'KR_fine_industries_not_ready'])
+                            'early_observation_rule_not_validated_prediction', 'KR_uses_existing_WICS_sectors'])
     definitions = baskets(groups, sectors)
     names = {(r['market'],r['symbol']):r.get('name',r['symbol']) for r in snapshot.get('universe',[])}
     for market in ('KR','US'):
@@ -137,7 +141,16 @@ def build(snapshot, groups, sectors, overrides=None):
         sessions, universe, prepared = prepare(snapshot, market, snapshot['sessions'][market][-1], c)
         rows = [r for r in groups if r['market']==market]
         classification_coverage = sum(r.get('group_state')=='matched' for r in rows)/max(1,len(universe))
-        items = [dict(d,history=[],current={},leaders=[]) for d in definitions if d['market']==market]
+        def freshness(selected):
+            values = [r.get('classification_freshness',{}) for r in selected if r.get('group_state')=='matched']
+            dates = [v['oldest_observed_at'] for v in values if v.get('oldest_observed_at')]
+            ends = [v['latest_observed_at'] for v in values if v.get('latest_observed_at')]
+            source_dates = [v['source_as_of'] for v in values if v.get('source_as_of')]
+            return dict(refresh_due=sum(v.get('state')=='refresh_due' for v in values),
+                        observed_from=min(dates) if dates else None, observed_until=max(ends) if ends else None,
+                        source_as_of=min(source_dates) if source_dates else None)
+        items = [dict(d,history=[],current={},leaders=[],classification=freshness([r for r in rows if r['symbol'] in d['members']]))
+                 for d in definitions if d['market']==market]
         for end in range(max(required-1,len(sessions)-c['history']),len(sessions)):
             dates=sessions[end-required+1:end+1]; eligible,excluded=cohort(prepared,dates)
             totals=[sum(v[i]['close']*v[i]['volume'] for v in eligible.values()) for i in range(required)]
@@ -148,7 +161,7 @@ def build(snapshot, groups, sectors, overrides=None):
                 if len(members)<c['min_members']:issues.append('최소 구성 종목 부족')
                 if len(members)/max(1,len(item['members']))<c['min_coverage']:issues.append('구성 시세 비율 부족')
                 if len(eligible)/max(1,len(universe))<c['min_coverage']:issues.append('시장 시세 비율 부족')
-                if classification_coverage<c['min_coverage']:issues.append('시장 분류 비율 부족·분류 만료 포함')
+                if classification_coverage<c['min_coverage']:issues.append('시장 분류 비율 부족·미확인 또는 충돌')
                 m.update(date=dates[-1],used=len(members),matched=len(item['members']),
                     start=dates[0],current_start=dates[-n],previous_start=dates[-2*n],earlier_start=dates[-3*n],
                     cohort_hash=hashlib.sha256('|'.join(sorted(members)).encode()).hexdigest())
@@ -165,7 +178,7 @@ def build(snapshot, groups, sectors, overrides=None):
         # Fine industries first, then broad sectors; each list compares acceleration, never size.
         candidates.sort(key=lambda i:(i['level']!='industry',-i['current']['acceleration'],-i['current']['growth'],i['code']))
         picks=candidates[:c['home_limit']]
-        out['markets'][market]=dict(as_of=sessions[-1],classification_coverage=classification_coverage,
+        out['markets'][market]=dict(as_of=sessions[-1],classification=freshness(rows),classification_coverage=classification_coverage,
             matched=sum(r.get('group_state')=='matched' for r in rows),target=len(universe),
             industry_members=sum(d['member_count'] for d in items if d['level']=='industry'),
             selected=[i['code'] for i in picks],qualifying=len(candidates),

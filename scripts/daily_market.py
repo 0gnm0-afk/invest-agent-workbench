@@ -157,7 +157,7 @@ def render(run, output, screening=None, observation=None):
                   '현재 분류로 과거 가격을 묶습니다. 과거 시점 백테스트가 아닙니다.',
                   '한국 RS: 같은 Toss 대상의 동일비중 지수, KOSPI는 참고. 미국 RS: Toss SPY 프록시.',
                   '가격 결측은 지표별 제외/null이며 0수익률 대체나 보간하지 않습니다.',
-                  '분류 관측 후 7일 초과는 미확인으로 남깁니다. 공식 계산 근거 문서가 오래되면 섹터 계산은 실패로 남깁니다.',
+                  '직접 확인한 WICS/Finviz 분류는 7일 경과 시 갱신 필요로 표시하고 분석에 유지합니다. 충돌·미확인은 제외합니다. 공식 계산 근거 문서가 오래되면 섹터 계산은 실패로 남깁니다.',
                   'NH는 Toss 전송 실패분의 검증된 가격 보완에만 사용합니다. 계좌 조회·기업 Evidence·LLM·예약 실행은 포함하지 않습니다.']
     text = '\n'.join(lines) + '\n'
     (output/'report.md').write_text(text, encoding='utf-8')

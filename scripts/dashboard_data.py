@@ -48,6 +48,8 @@ def saved_market(root=ROOT, run_dir=None):
               'finished_at': run.get('finished_at'), 'coverage': run.get('sector_coverage'),
               'entries': [], 'sectors': [], 'stocks': {}, 'errors': [], 'session_dates': {},
               'candidate_count': None, 'entry_candidate_count': None}
+    review = {'markets': {'KR': {'entries': []}, 'US': {'entries': []}}}
+    observation = {}
     try:
         review = artifact('priority-review.json')
         if review.get('schema') != 4 or review.get('strategy') != 'pdf_momentum':
@@ -78,13 +80,21 @@ def saved_market(root=ROOT, run_dir=None):
                                   'collected_at', 'bars')}
     from sector_focus import cached, screen_groups
     from invest_agent.trading.store import BusyError
-    result['screen_groups'] = screen_groups(result['entries'], snapshot.get('universe', []))
     try:
         groups = artifact('sectors/groups.json')
         config = load(root/'config.json') if (root/'config.json').exists() else {}
+        if config.get('sector_manifest'):
+            from sector_projection import cached as project
+            projected = project(root, run_dir, config, source.parent, observation, review)
+            groups = projected['groups']
+            horizons = {(s['market'],s['group_code']):s['horizons'] for s in projected['observation']['observations']}
+            result['sectors'] = [dict(s,horizons=horizons[(s['market'],s['group_code'])]) for s in projected['signals']['sectors']]
+            result['coverage'] = projected['observation']['coverage']
+            result['classification_policy'] = projected['policy']
         result['focus'] = cached(root, run_dir, snapshot, groups, result['sectors'], sha(source), config.get('sector_focus'))
     except (OSError, ValueError, KeyError, TypeError, BusyError) as exc:
         result['focus'] = {'items': [], 'markets': {}, 'error': '자료 또는 캐시 확인 필요 ('+type(exc).__name__+')'}
+    result['screen_groups'] = screen_groups(result['entries'], snapshot.get('universe', []))
     return result
 
 

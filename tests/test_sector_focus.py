@@ -110,6 +110,21 @@ class FocusTests(unittest.TestCase):
             file=next(Path(t).glob('runtime/sector-focus/*/focus.json'));file.write_text('{}')
             with self.assertRaisesRegex(ValueError,'hash_mismatch'):f.cached(Path(t),'run',snap,g,o['observations'],'source')
 
+    def test_zero_activity_member_is_excluded_without_blocking_sufficient_cohort(self):
+        bars=[dict(close=10,volume=100) for _ in range(35)]
+        halted=[dict(close=10,volume=100 if i<20 else 0) for i in range(35)]
+        series={str(i):copy.deepcopy(bars if i<9 else halted) for i in range(10)}
+        m,_=f.metrics(list(series),series,[10000]*35,5,20,f.DEFAULTS)
+        self.assertEqual(m['issues'],[])
+        self.assertEqual(m['activity_used'],9)
+        self.assertEqual(m['activity_exclusions'],{'9':'comparison_activity_zero'})
+        self.assertEqual(m['activity_now'],1)
+        self.assertEqual(m['growth'],0)
+        for i in range(7,10):series[str(i)]=halted
+        m,_=f.metrics(list(series),series,[10000]*35,5,20,f.DEFAULTS)
+        self.assertTrue(m['issues'])
+        self.assertEqual(m['activity_used'],7)
+
     def test_invalid_settings(self):
         for c in ({'extra':1},{'window':0},{'min_coverage':2},{'min_acceleration':float('nan')},{'home_limit':True}):
             with self.assertRaises(ValueError):f.settings(c)

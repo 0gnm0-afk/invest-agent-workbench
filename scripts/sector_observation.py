@@ -54,6 +54,28 @@ def age_issue(observed, applied):
     return 'future_observation' if age < 0 else 'stale_classification' if age > 7 else None
 
 
+def classification_age_issue(observed, applied):
+    """Direct taxonomy evidence does not expire; impossible dates still block."""
+    try:
+        return 'future_observation' if stamp(observed) > stamp(applied) else None
+    except (TypeError, ValueError):
+        return 'invalid_classification_timestamp'
+
+
+def classification_freshness(records, applied):
+    dates = [d for r in records for d in
+             [r.get('observed_at'), *r.get('context_observed_at', []),
+              r['classification_as_of']+'T00:00:00+09:00' if r.get('classification_as_of') else None] if d]
+    observed = [r['observed_at'] for r in records if r.get('observed_at')]
+    as_of = [r['classification_as_of'] for r in records if r.get('classification_as_of')]
+    invalid = any(classification_age_issue(d, applied) for d in dates)
+    age = max(((stamp(applied)-stamp(d)).total_seconds()/86400 for d in dates), default=None) if not invalid else None
+    return dict(state='unverified' if invalid or age is None else 'refresh_due' if age > 7 else 'recent',
+                oldest_observed_at=min(observed, key=stamp) if observed and not invalid else None,
+                latest_observed_at=max(observed, key=stamp) if observed and not invalid else None,
+                source_as_of=min(as_of) if as_of else None, max_age_days=age, evaluated_at=applied)
+
+
 def checked(path, expected, inputs):
     path = Path(path).resolve()
     actual = sha(path)
@@ -143,7 +165,7 @@ def group_rows(original, evidence, nh_root, applied, inputs):
                                     'identity_method': 'exact_ticker_and_published_exchange_no_isin'})
     public = load_public(evidence, checked, load, inputs, SECTORS)
     wics = load_wics(evidence, checked, load, inputs)
-    external_reviews = load_reviews(evidence, checked, load, inputs, applied, age_issue)
+    external_reviews = load_reviews(evidence, checked, load, inputs, applied, classification_age_issue)
     symbol_counts = Counter(r['provider_symbol'] for r in original if r['market']=='US')
     result = []
     for original_row in original:
@@ -160,7 +182,7 @@ def group_rows(original, evidence, nh_root, applied, inputs):
         if market == 'US' and symbol in external_reviews:
             row['external_review'] = external_reviews[symbol]
             sector, issue, proofs = select_classification(public.get(symbol, []), us.get(symbol),
-                row['exchange'], symbol_counts[symbol] == 1, applied, age_issue, classification_only=True)
+                row['exchange'], symbol_counts[symbol] == 1, applied, classification_age_issue, classification_only=True)
             row['external_finviz_sector'] = sector if issue is None else None
             row['external_finviz_issue'] = issue
             row['external_finviz_evidence'] = proofs
@@ -169,7 +191,7 @@ def group_rows(original, evidence, nh_root, applied, inputs):
             continue
         if market == 'US':
             sector, reason, proofs = select_classification(public.get(symbol,[]),us.get(symbol),
-                row['exchange'],symbol_counts[symbol]==1,applied,age_issue)
+                row['exchange'],symbol_counts[symbol]==1,applied,classification_age_issue)
             row['evidence'] = proofs
             if public:
                 row['mapping_version'] = 'sector-observation-v2-finviz-public'
@@ -187,7 +209,7 @@ def group_rows(original, evidence, nh_root, applied, inputs):
                     row['nh_master_codes'] = {k: candidates[0][k] for k in ('sUpCodeM', 'sUpCodeL', 'sUpCodeS')}
                 proofs = wics['records'].get(symbol, [])
                 row['evidence'] = proofs
-                selected, reason = select_wics(proofs, applied, age_issue)
+                selected, reason = select_wics(proofs, applied, classification_age_issue)
                 if reason:
                     row['reason'] = reason
                 else:
@@ -250,6 +272,9 @@ def group_rows(original, evidence, nh_root, applied, inputs):
                 row['reason'] = reason
                 continue
             row.update(group_code=code, group_name=labels.pop(), group_state='matched')
+    for row in result:
+        if row['group_taxonomy'] in ('KR_WICS_SECTOR', 'US_FINVIZ_SECTOR'):
+            row['classification_freshness'] = classification_freshness(row['evidence'], applied)
     return result
 
 
