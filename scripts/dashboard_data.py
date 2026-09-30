@@ -1,4 +1,4 @@
-"""Read-only view adapter. No market collection or screening calculations."""
+"""Read-only view adapter. No market collection or stock screening. Cached sector attention projection only."""
 import hashlib
 import json
 import sys
@@ -76,6 +76,15 @@ def saved_market(root=ROOT, run_dir=None):
         result['stocks'][s['market'] + ':' + s['symbol']] = {
             k: s.get(k) for k in ('market', 'symbol', 'name', 'currency', 'provider', 'price_basis',
                                   'collected_at', 'bars')}
+    from sector_focus import cached, screen_groups
+    from invest_agent.trading.store import BusyError
+    result['screen_groups'] = screen_groups(result['entries'], snapshot.get('universe', []))
+    try:
+        groups = artifact('sectors/groups.json')
+        config = load(root/'config.json') if (root/'config.json').exists() else {}
+        result['focus'] = cached(root, run_dir, snapshot, groups, result['sectors'], sha(source), config.get('sector_focus'))
+    except (OSError, ValueError, KeyError, TypeError, BusyError) as exc:
+        result['focus'] = {'items': [], 'markets': {}, 'error': '자료 또는 캐시 확인 필요 ('+type(exc).__name__+')'}
     return result
 
 
