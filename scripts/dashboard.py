@@ -5,6 +5,7 @@ import mimetypes
 import secrets
 import threading
 import urllib.parse
+import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from dashboard_data import ROOT, build
@@ -62,6 +63,7 @@ def handler_for(data, stocks, assets, token):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--open-browser', action='store_true')
     parser.add_argument('--saved-accounts', action='store_true')
     parser.add_argument('--build-only', action='store_true')
     parser.add_argument('--ready-file', type=Path)
@@ -79,6 +81,8 @@ def main():
     if args.ready_file:
         args.ready_file.write_text(json.dumps(ready), encoding='utf-8')
     print(json.dumps(ready), flush=True)
+    if args.open_browser:
+        webbrowser.open(ready['url'])
     server.serve_forever()
 
 
