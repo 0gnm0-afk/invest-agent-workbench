@@ -169,9 +169,9 @@ def charts(review,screen,snapshot,output,draw_fn=None):
             row={'market':e['market'],'symbol':e['symbol'],'as_of':e['as_of'],'state':'failed'}
             try:
                 b=usable_tail(model.completed(series[(e['market'],e['symbol'])]['bars'],e['as_of']),snapshot['sessions'][e['market']])
-                image=folder/(stem+'.png');draw_fn(b,image,e);write(folder/(stem+'.json'),{'entry':e,'source':SOURCE})
+                image=folder/(stem+'.png');draw_fn(b,image,e);write(folder/(stem+'.json'),{'entry':e,'source':({'basis':'user_requested_base_watch_operational_assumptions','rules':'B1-B6'} if e['entry_signal']['route']=='base_watch' else SOURCE)})
                 esc=html.escape
-                body='<h1>'+esc(stock_label(e))+'</h1><p>완료 세션 '+esc(e['as_of'])+' · '+esc(' / '.join('스페란데오' if x=='sperandeo' and review.get('schema')==4 else ROUTES[x] for x in e['origins']))+'</p>'
+                body='<h1>'+esc(stock_label(e))+'</h1><p>완료 세션 '+esc(e['as_of'])+' · '+esc(' / '.join('바닥·눌림 횡보' if x=='base_watch' else '스페란데오' if x=='sperandeo' and review.get('schema')==4 else ROUTES[x] for x in e['origins']))+'</p>'
                 body+='<p>'+esc(e.get('entry_signal',{}).get('phase_label','진입 조건 충족'))+' · 재무/기관/질적 조건 미검증 · 자동 주문 없음</p><img style="max-width:100%" src="'+stem+'.png">'
                 body+='<ul>'+''.join('<li>'+esc(x)+'</li>' for x in e['reasons'])+'</ul>'
                 body+='<p>구조 무효화 참고선은 자동 손절 주문이 아닙니다. 갭·슬리피지·현재 장중 가격을 반영하지 않습니다.</p>'
