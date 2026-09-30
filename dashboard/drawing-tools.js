@@ -1,0 +1,150 @@
+/* Date/price anchors; SVG projection follows the Lightweight Charts public scales. */
+window.DrawingTools = (() => {
+  const count = {trend:2, channel:3, horizontal:1, box:2, measure:2};
+  const labels = {trend:'추세선',channel:'평행 채널',horizontal:'수평선',box:'박스',measure:'구간 측정'};
+  const clone = x => JSON.parse(JSON.stringify(x));
+  function channel(points) {
+    const [a,b,c] = points, slope = (b.y-a.y)/(b.x-a.x);
+    const offset = c.y - (a.y + slope*(c.x-a.x));
+    return [a,b,{x:b.x,y:b.y+offset},{x:a.x,y:a.y+offset}];
+  }
+  function measure(points, bars, currency) {
+    const [a,b] = points, delta = b.price-a.price;
+    const ia=bars.findIndex(x=>x.date===a.time), ib=bars.findIndex(x=>x.date===b.time);
+    const days=Math.round((Date.parse(b.time)-Date.parse(a.time))/86400000);
+    return `${delta>=0?'+':''}${WorkbenchFormat.money(delta,currency)} ${currency} · ${delta>=0?'+':''}${(delta/a.price*100).toFixed(2)}% · ${Math.abs(ib-ia)}봉 간격 · ${Math.abs(days)}일`;
+  }
+  function attach({element, chart, series, bars, currency, getDrawings, onChange, onSelect, onHint}) {
+    const NS='http://www.w3.org/2000/svg';
+    const svg=document.createElementNS(NS,'svg');
+    svg.classList.add('drawing-layer');svg.setAttribute('aria-label','가격 차트 작도 영역');
+    element.append(svg);
+    let mode='select', selected=null, draft=[], hover=null, drag=null, frame=0, removed=false, signature='';
+    const dates=new Map(bars.map((b,i)=>[b.date,i]));
+    function node(tag,attrs,parent=svg) {
+      const n=document.createElementNS(NS,tag);for(const [k,v] of Object.entries(attrs))n.setAttribute(k,v);parent.append(n);return n;
+    }
+    function index(time) {
+      if(dates.has(time)) return dates.get(time);
+      // Preserve off-history drawings in storage; never snap them to unrelated candles.
+      return null;
+    }
+    function xy(p) {const i=index(p.time);return i==null?null:{x:chart.timeScale().logicalToCoordinate(i),y:series.priceToCoordinate(p.price)};}
+    function point(event) {
+      const r=svg.getBoundingClientRect(),x=event.clientX-r.left,y=event.clientY-r.top;
+      const logical=chart.timeScale().coordinateToLogical(x), price=series.coordinateToPrice(y);
+      if(logical==null||price==null||price<=0||x<0||y<0||x>r.width||y>r.height)return null;
+      const i=Math.max(0,Math.min(bars.length-1,Math.round(logical)));
+      return {time:bars[i].date,price};
+    }
+    function render() {
+      if(removed)return;
+      const w=chart.timeScale().width(),h=chart.panes()[0].getHeight();
+      const all=getDrawings().map(d=>({d,p:d.points.map(xy)})).sort((a,b)=>Number(a.d.id===selected)-Number(b.d.id===selected));
+      if(draft.length) {
+        const ps=[...draft];if(hover&&ps.length<count[mode])ps.push(hover);
+        if(ps.length===count[mode])all.push({d:{kind:mode,points:ps,color:'#218775',width:2,extend:false},p:ps.map(xy)});
+      }
+      const sig=JSON.stringify([w,h,all,mode,selected,draft,hover]);
+      if(signature!==sig) {
+        signature=sig;svg.replaceChildren();svg.setAttribute('width',w);svg.setAttribute('height',h);
+        svg.style.pointerEvents=count[mode]?'auto':'none';
+        svg.style.cursor=count[mode]?'crosshair':'default';
+        if(count[mode])node('rect',{width:w,height:h,fill:'transparent','pointer-events':'all'});
+        for(const {d,p} of all) {
+          if(p.some(v=>!v||v.x==null||v.y==null||!Number.isFinite(v.x+v.y)))continue;
+          const g=node('g',{'data-id':d.id||'',opacity:d.id?1:.65,'aria-label':labels[d.kind]});
+          const [a,b]=p, stroke=d.color;
+          function line(v1,v2,dash='') {
+            node('line',{x1:v1.x,y1:v1.y,x2:v2.x,y2:v2.y,stroke:'transparent','stroke-width':14,'pointer-events':mode==='select'?'stroke':'none'},g);
+            node('line',{x1:v1.x,y1:v1.y,x2:v2.x,y2:v2.y,stroke,'stroke-width':d.width,'stroke-dasharray':dash,'pointer-events':'none'},g);
+          }
+          if(d.kind==='horizontal') {
+            line({x:0,y:a.y},{x:w,y:a.y});
+            const text=node('text',{x:8,y:a.y-7,fill:stroke,'font-size':12,'pointer-events':'none'},g);
+            text.textContent=WorkbenchFormat.money(d.points[0].price,currency)+' '+currency;
+          } else if(d.kind==='box'||d.kind==='measure') {
+            node('rect',{x:Math.min(a.x,b.x),y:Math.min(a.y,b.y),width:Math.max(1,Math.abs(b.x-a.x)),height:Math.max(1,Math.abs(b.y-a.y)),fill:stroke,'fill-opacity':.10,stroke,'stroke-width':d.width,'pointer-events':mode==='select'?'all':'none'},g);
+            if(d.kind==='measure') {
+              line(a,b,'4 3');
+              const parts=measure(d.points,bars,currency).split(' · '), lines=[parts.slice(0,2).join(' · '),parts.slice(2).join(' · ')];
+              const labelWidth=Math.min(w-10,Math.max(...lines.map(t=>t.length))*7);
+              const x=Math.max(5,Math.min(Math.min(a.x,b.x),w-labelWidth-5)),y=Math.max(17,Math.min(a.y,b.y)-23);
+              const text=node('text',{x,y,fill:stroke,'font-size':12,'paint-order':'stroke',stroke:'#fff','stroke-width':3,'pointer-events':'none'},g);
+              lines.forEach((value,i)=>{node('tspan',{x,dy:i?15:0},text).textContent=value;});
+            }
+          } else if(a.x!==b.x) {
+            const slope=(b.y-a.y)/(b.x-a.x), start=d.extend&&b.x<a.x?b:a, end=d.extend?{x:w,y:a.y+slope*(w-a.x)}:b;
+            line(start,end);
+            if(d.kind==='channel') {
+              const q=channel(p), offset=q[3].y-a.y;
+              const upperStart={x:start.x,y:start.y+offset},upperEnd={x:end.x,y:end.y+offset};
+              node('polygon',{points:[start,end,upperEnd,upperStart].map(v=>`${v.x},${v.y}`).join(' '),fill:stroke,'fill-opacity':.10,'pointer-events':mode==='select'?'all':'none'},g);
+              line(upperStart,upperEnd);line({x:start.x,y:start.y+offset/2},{x:end.x,y:end.y+offset/2},'5 4');
+            }
+          }
+          if(d.id===selected&&mode==='select')p.forEach((v,i)=>node('circle',{cx:v.x,cy:v.y,r:6,fill:'#fff',stroke,'stroke-width':2,'data-point':i,'pointer-events':'all',cursor:'move'},g));
+        }
+        for(const p of draft){const v=xy(p);if(v)node('circle',{cx:v.x,cy:v.y,r:4,fill:'#218775','pointer-events':'none'});}
+      }
+      frame=requestAnimationFrame(render);
+    }
+    function select(id) {mode='select';draft=[];hover=null;selected=id;onSelect(id);signature='';}
+    function setMode(next) {
+      mode=next;draft=[];hover=null;drag=null;signature='';
+      onHint(count[mode]?`${labels[mode]}: ${count[mode]}개 지점을 차례로 클릭하세요. Esc로 취소.`:'선택한 도형의 원형 점은 끝점 수정, 선·영역은 전체 이동입니다. 빈 영역은 차트 이동·확대에 사용합니다.');
+    }
+    function down(e) {
+      if(e.button!==0)return;
+      const p=point(e);if(!p)return;
+      if(count[mode]) {
+        e.preventDefault();e.stopPropagation();
+        if((mode==='trend'||mode==='channel')&&draft.length===1&&draft[0].time===p.time){onHint('두 번째 점은 다른 날짜를 선택하세요.');return;}
+        draft.push(p);
+        if(draft.length===count[mode]) {
+          if(getDrawings().length>=100){draft=[];onHint('종목당 최대 100개입니다. 필요 없는 도형을 삭제하세요.');return;}
+          const drawing={id:crypto.randomUUID(),kind:mode,points:clone(draft),color:'#218775',width:2,extend:false};
+          onChange([...getDrawings(),drawing]);setMode('select');select(drawing.id);
+        }else onHint(`${labels[mode]}: ${count[mode]-draft.length}개 지점을 더 클릭하세요.`);
+      } else {
+        const group=e.target.closest('[data-id]'),id=group?.getAttribute('data-id');
+        if(!id)return;
+        e.preventDefault();e.stopPropagation();select(id);
+        const d=getDrawings().find(v=>v.id===id);
+        drag={id,start:p,original:clone(d),all:clone(getDrawings()),handle:e.target.hasAttribute('data-point')?Number(e.target.getAttribute('data-point')):null,moved:false};
+        svg.setPointerCapture(e.pointerId);
+      }
+    }
+    function move(e) {
+      const p=point(e);if(!p)return;hover=p;
+      if(!drag)return;
+      const d=clone(drag.original);
+      if(drag.handle!=null)d.points[drag.handle]=p;
+      else {
+        let delta=dates.get(p.time)-dates.get(drag.start.time);
+        const ids=d.points.map(v=>dates.get(v.time));
+        delta=Math.max(-Math.min(...ids),Math.min(bars.length-1-Math.max(...ids),delta));
+        const priceDelta=p.price-drag.start.price;
+        d.points=d.points.map((v,i)=>({time:bars[ids[i]+delta].date,price:v.price+priceDelta}));
+      }
+      if(d.points.some(v=>v.price<=0)||((d.kind==='trend'||d.kind==='channel')&&d.points[0].time===d.points[1].time))return;
+      drag.moved=true;
+      onChange(drag.all.map(v=>v.id===d.id?d:v),{preview:true});
+    }
+    function up(e) {
+      if(!drag)return;
+      if(svg.hasPointerCapture(e.pointerId))svg.releasePointerCapture(e.pointerId);
+      const before=drag.all,moved=drag.moved;drag=null;
+      if(moved)onChange(getDrawings(),{before});
+    }
+    function cancel() {
+      if(drag){const old=drag.all;drag=null;onChange(old,{preview:true});}
+      draft=[];hover=null;signature='';
+    }
+    svg.addEventListener('pointerdown',down);svg.addEventListener('pointermove',move);svg.addEventListener('pointerup',up);
+    svg.addEventListener('pointercancel',cancel);
+    setMode('select');frame=requestAnimationFrame(render);
+    return {setMode,select,cancel,destroy(){removed=true;cancelAnimationFrame(frame);svg.remove();}};
+  }
+  return {attach,measure,channel,labels,count};
+})();

@@ -27,6 +27,7 @@ window.WorkbenchCharts = (() => {
         const point = p.seriesData.get(ref); return label + ': ' + (point ? (currency ? WorkbenchFormat.money(point.close ?? point.value, currency) : Number(point.close ?? point.value).toLocaleString('ko-KR', {maximumFractionDigits: 2})) : '결측');
       }).join('  /  ');
     });
+    options.onReady?.(chart, refs);
     mounted.push(chart); return chart;
   }
   function lineData(rows, key, scale = 1) { return rows.map(r => ({time: r.date, ...(r[key] == null ? {} : {value: r[key] * scale})})); }

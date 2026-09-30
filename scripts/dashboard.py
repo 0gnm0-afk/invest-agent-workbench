@@ -3,15 +3,18 @@ import argparse
 import json
 import mimetypes
 import secrets
+import sqlite3
 import threading
 import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from dashboard_data import ROOT, build
+from chart_workspace import WorkspaceStore, Conflict, moving_averages
 
 
-def handler_for(data, stocks, assets, token):
+def handler_for(data, stocks, assets, token, workspace_path=None):
+    store = WorkspaceStore(workspace_path or ROOT / "runtime/chart-workspaces.sqlite3")
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass
@@ -36,6 +39,26 @@ def handler_for(data, stocks, assets, token):
                 return self.send(json.dumps({'app': 'invest-workbench', 'token': token}).encode())
             if path == '/api/home':
                 return self.send(json.dumps(data, ensure_ascii=False, allow_nan=False).encode('utf-8'))
+            if path.startswith('/api/chart-state/'):
+                key = urllib.parse.unquote(path[len('/api/chart-state/'):])
+                if key not in stocks:
+                    return self.send(b'{"error":"unknown_stock"}', status=404)
+                try:
+                    result = store.read(key)
+                    return self.send(json.dumps({**result, 'token': token}, ensure_ascii=False).encode('utf-8'))
+                except (sqlite3.Error, OSError, ValueError):
+                    return self.send(b'{"error":"workspace_read_failed"}', status=503)
+            if path.startswith('/api/averages/'):
+                key = urllib.parse.unquote(path[len('/api/averages/'):])
+                if key not in stocks:
+                    return self.send(b'{"error":"unknown_stock"}', status=404)
+                try:
+                    query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query, keep_blank_values=True)
+                    periods = [int(n) for n in query.get('periods', ['20,50,150,200'])[0].split(',') if n]
+                    result = moving_averages(stocks[key], periods)
+                    return self.send(json.dumps(result, allow_nan=False).encode())
+                except (ValueError, TypeError):
+                    return self.send(b'{"error":"invalid_periods"}', status=400)
             if path.startswith('/api/stock/'):
                 key = urllib.parse.unquote(path[len('/api/stock/'):])
                 value = stocks.get(key)
@@ -43,7 +66,7 @@ def handler_for(data, stocks, assets, token):
                     value = {'state': 'unavailable', 'reason': 'saved_price_series_missing', 'bars': []}
                 return self.send(json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8'))
             names = {'/': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css',
-                     '/format.js': 'format.js', '/charts.js': 'charts.js', '/workbench.png': 'workbench.png',
+                     '/drawing-tools.js': 'drawing-tools.js', '/chart-workspace.js': 'chart-workspace.js', '/chart-tools.css': 'chart-tools.css', '/format.js': 'format.js', '/charts.js': 'charts.js', '/workbench.png': 'workbench.png',
                      '/vendor/lightweight-charts.js': 'vendor/lightweight-charts.js',
                      '/vendor/NOTICE': 'vendor/NOTICE', '/vendor/LICENSE': 'vendor/LICENSE'}
             if path not in names:
@@ -57,7 +80,34 @@ def handler_for(data, stocks, assets, token):
             return self.send(file.read_bytes(), kind + ('; charset=utf-8' if kind.startswith('text/') else ''))
 
         def do_POST(self):
-            self.send(b'{"error":"read_only"}', status=405)
+            path = urllib.parse.urlsplit(self.path).path
+            if not path.startswith('/api/chart-state/'):
+                return self.send(b'{"error":"read_only"}', status=405)
+            expected = '127.0.0.1:' + str(self.server.server_port)
+            if (self.headers.get('Host') != expected or self.headers.get('Origin') != 'http://' + expected
+                    or not secrets.compare_digest(self.headers.get('X-Workbench-Token', ''), token)):
+                return self.send(b'{"error":"local_origin_required"}', status=403)
+            if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
+                return self.send(b'{"error":"json_required"}', status=415)
+            key = urllib.parse.unquote(path[len('/api/chart-state/'):])
+            if key not in stocks:
+                return self.send(b'{"error":"unknown_stock"}', status=404)
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= 131072:
+                    return self.send(b'{"error":"invalid_body_size"}', status=413)
+                self.connection.settimeout(5)
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict) or set(body) != {'revision', 'state'}:
+                    raise ValueError('invalid_body')
+                result = store.save(key, body['revision'], body['state'])
+                self.send(json.dumps(result).encode())
+            except Conflict:
+                self.send(b'{"error":"workspace_changed_elsewhere"}', status=409)
+            except (ValueError, TypeError, KeyError):
+                self.send(b'{"error":"invalid_workspace"}', status=400)
+            except (sqlite3.Error, OSError):
+                self.send(b'{"error":"workspace_save_failed"}', status=503)
     return Handler
 
 
