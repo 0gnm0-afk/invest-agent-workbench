@@ -43,7 +43,10 @@ def _http_error_code(exc, prefix):
 
 
 class TossMarketClient:
-    def __init__(self, observer=None):
+    def __init__(self, observer=None, *, min_interval=.25):
+        if isinstance(min_interval, bool) or not isinstance(min_interval, (int, float)) or not .05 <= min_interval <= 1:
+            raise ValueError('invalid_market_request_interval')
+        self._min_interval = min_interval
         self._observer = observer
         try:
             self._token = get_token()
@@ -101,7 +104,7 @@ class TossMarketClient:
                     limit = response.headers.get('X-RateLimit-Limit')
                     if limit and limit.isdigit() and int(limit) > 0:
                         with self._lock:
-                            self._interval = max(.25, 1 / int(limit))
+                            self._interval = max(self._min_interval, 1 / int(limit))
                     payload = json.load(response)
                     self._observe(path, params, 200, response.headers, started, payload)
                     return payload
