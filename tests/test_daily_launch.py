@@ -71,6 +71,17 @@ class Launch(unittest.TestCase):
         self.gate.runner=failed;a=self.gate.once(NOW);b=self.gate.once(NOW)
         self.assertEqual(a['display_run'],old['output']);self.assertEqual(a['error'],'market_authentication_http_403');self.assertTrue(self.gate.public(a)['display_stale']);self.assertEqual(len(self.calls),1)
         self.assertEqual(DailyLaunch(self.root).display_run(),old['output'])
+    def test_ip_denial_survives_receipt_without_automatic_retry(self):
+        old=self.result('old')
+        def failed(plan,progress):
+            self.calls.append(plan);result=self.result('failed','failed',screen=False)
+            result['error']='MarketReadError: market_authentication_http_403_ip_not_allowed'
+            return result
+        self.gate.runner=failed;a=self.gate.once(NOW);b=self.gate.once(NOW)
+        self.assertEqual(a['display_run'],old['output'])
+        self.assertEqual(a['error'],'market_authentication_http_403_ip_not_allowed')
+        self.assertEqual(b['error'],a['error']);self.assertTrue(b['reused'])
+        self.assertTrue(self.gate.public(a)['display_stale']);self.assertEqual(len(self.calls),1)
     def test_interrupted_receipt_never_reruns_automatically(self):
         self.gate.save({'day':'2026-09-30','state':'running','display_run':None})
         a=self.gate.once(NOW);self.assertEqual(a['state'],'interrupted');self.assertEqual(self.calls,[])

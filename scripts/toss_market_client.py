@@ -1,10 +1,12 @@
 """Bounded, rate-aware market GET client. Never accepts account/order endpoints."""
+import http.client
 import json
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 
 from toss_api import BASE, get_token
 
@@ -13,15 +15,44 @@ class MarketReadError(ValueError):
     pass
 
 
+def _http_error_code(exc, prefix):
+    """Recognize one provider denial; never expose arbitrary HTTP content."""
+    code = f'{prefix}_{exc.code}'
+    if exc.code != 403:
+        return code
+    try:
+        # Both wire and decompressed bodies are bounded (including gzip bombs).
+        raw = exc.read(4097)
+        if len(raw) > 4096:
+            return code
+        encoding = (exc.headers or {}).get('Content-Encoding', '').lower()
+        if encoding == 'gzip':
+            decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
+            raw = decoder.decompress(raw, 4097)
+            if len(raw) > 4096 or not decoder.eof or decoder.unused_data:
+                return code
+        elif encoding not in ('', 'identity'):
+            return code
+        body = json.loads(raw)
+        if (isinstance(body, dict) and body.get('error') == 'access_denied'
+                and body.get('error_description') == 'IP address not allowed'):
+            return code + '_ip_not_allowed'
+    except (OSError, ValueError, zlib.error, http.client.HTTPException):
+        pass
+    return code
+
+
 class TossMarketClient:
     def __init__(self, observer=None):
         self._observer = observer
         try:
             self._token = get_token()
         except urllib.error.HTTPError as exc:
-            status = exc.code
-            exc.close()
-            raise MarketReadError(f'market_authentication_http_{status}') from None
+            try:
+                code = _http_error_code(exc, 'market_authentication_http')
+            finally:
+                exc.close()
+            raise MarketReadError(code) from None
         except (Exception, SystemExit):
             raise MarketReadError('market_authentication_unavailable') from None
         self._lock = threading.Lock()
@@ -78,12 +109,15 @@ class TossMarketClient:
                 status = exc.code
                 self._observe(path, params, status, exc.headers, started)
                 retry = exc.headers.get('Retry-After') or exc.headers.get('X-RateLimit-Reset') or '1'
-                exc.close()
+                try:
+                    code = _http_error_code(exc, 'market_http')
+                finally:
+                    exc.close()
                 if status in (401, 403):
                     with self._lock:
                         self._auth_failed = True
                 if status not in (429, 500, 502, 503, 504) or attempt == 2:
-                    raise MarketReadError(f'market_http_{status}') from None
+                    raise MarketReadError(code) from None
                 try:
                     delay = float(retry)
                     if not 0 <= delay <= 60:

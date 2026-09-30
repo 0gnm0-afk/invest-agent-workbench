@@ -135,7 +135,11 @@ class DailyLaunch:
                         if review.get('session_dates') != plan['targets']:
                             record.update(state='failed',error='target_sessions_not_reached')
                     if run['state'] == 'failed' and not record['error']:
-                        record['error'] = ('market_authentication_http_403' if 'market_authentication_http_403' in run.get('error','') else 'market_pipeline_failed')
+                        allowed_errors = ('market_authentication_http_403_ip_not_allowed',
+                                          'market_http_403_ip_not_allowed',
+                                          'market_authentication_http_403')
+                        record['error'] = next((code for code in allowed_errors
+                                                if code in run.get('error','')), 'market_pipeline_failed')
                     if run['state'] in ('succeeded','partial') and not display:
                         record.update(state='failed',error='screening_result_missing')
                 except Exception:

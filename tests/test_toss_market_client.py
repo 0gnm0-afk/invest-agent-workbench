@@ -1,4 +1,6 @@
 import io
+import gzip
+import json
 import sys
 import unittest
 import urllib.error
@@ -68,6 +70,55 @@ class MarketClientTests(unittest.TestCase):
         self.assertEqual(events[0]['status'], 200)
         self.assertEqual(events[0]['headers'], {'X-RateLimit-Limit': '2'})
         self.assertNotIn('synthetic-token', str(events))
+
+    def test_token_ip_denial_plain_and_gzip_preserves_only_safe_code(self):
+        body = json.dumps({'error': 'access_denied', 'error_description': 'IP address not allowed',
+                           'access_token': 'private-token', 'client_secret': 'private-secret'}).encode()
+        for raw, headers in ((body, {}), (gzip.compress(body), {'Content-Encoding': 'gzip'})):
+            with self.subTest(headers=headers):
+                stream = io.BytesIO(raw)
+                error = urllib.error.HTTPError('https://openapi.tossinvest.com/oauth2/token', 403,
+                                               'denied', headers, stream)
+                with patch('toss_market_client.get_token', side_effect=error) as auth, \
+                        patch('toss_market_client.urllib.request.urlopen') as opening:
+                    with self.assertRaisesRegex(MarketReadError, '^market_authentication_http_403_ip_not_allowed$'):
+                        TossMarketClient()
+                    auth.assert_called_once()
+                    opening.assert_not_called()
+                self.assertTrue(stream.closed)
+
+    def test_unrecognized_or_oversized_error_stays_generic(self):
+        cases = [(b'private-body', {}),
+                 (b'{"error":"access_denied","error_description":"private-secret"}', {}),
+                 (b'{"error":"invalid_client","error_description":"IP address not allowed"}', {}),
+                 (b'["IP address not allowed"]', {}),
+                 (b'x' * 4097, {}),
+                 (gzip.compress(b'x' * 100000), {'Content-Encoding': 'gzip'}),
+                 (b'bad-gzip', {'Content-Encoding': 'gzip'}),
+                 (gzip.compress(b'{}')[:-3], {'Content-Encoding': 'gzip'}),
+                 (b'private-body', {'Content-Encoding': 'br'})]
+        for raw, headers in cases:
+            with self.subTest(size=len(raw), headers=headers):
+                stream = io.BytesIO(raw)
+                error = urllib.error.HTTPError('url', 403, 'denied', headers, stream)
+                with patch('toss_market_client.get_token', side_effect=error):
+                    with self.assertRaisesRegex(MarketReadError, '^market_authentication_http_403$'):
+                        TossMarketClient()
+                self.assertTrue(stream.closed)
+
+    def test_market_ip_denial_stops_requests_without_exposing_body(self):
+        events = []
+        self.client._observer = events.append
+        body = b'{"error":"access_denied","error_description":"IP address not allowed","token":"private-token"}'
+        error = urllib.error.HTTPError('url', 403, 'denied', {}, io.BytesIO(body))
+        with patch('toss_market_client.urllib.request.urlopen', side_effect=error) as opening:
+            with self.assertRaisesRegex(MarketReadError, '^market_http_403_ip_not_allowed$'):
+                self.client('/api/v1/candles', {})
+            with self.assertRaisesRegex(MarketReadError, '^market_authentication_unavailable$'):
+                self.client('/api/v1/candles', {})
+            opening.assert_called_once()
+        self.assertNotIn('private-token', str(events))
+        self.assertIsNone(events[0]['payload'])
 
 
 if __name__ == '__main__': unittest.main()
