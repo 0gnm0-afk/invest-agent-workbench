@@ -28,6 +28,18 @@ class KoreanHistoryTests(unittest.TestCase):
             self.assertEqual(result['counts'],{'received':2});self.assertIn('XKRX',result['calendar'])
             u['rows'].pop();save_checked(root/'universe.json',u)
             with self.assertRaises((KeyError,AssertionError)):verify(root,True)
+    def test_existing_engine_extra_closure_is_not_missing_data(self):
+        def fake(path,params):
+            return {'result':{'candles':[dict(timestamp=day+'T00:00:00+09:00',currency='KRW',openPrice=10,highPrice=12,lowPrice=9,closePrice=11,volume=100) for day in ['2026-06-04','2026-06-02']],'nextBefore':None}}
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td);item={'symbol':'005930.KS','provider_symbol':'005930'}
+            Collector(root,fake,market='KR').collect_one(item,'2026-06-04')
+            save_checked(root/'collection.json',{'markets':['KR'],'end':'2026-06-04','scope':'synthetic'})
+            save_checked(root/'universe.json',{'rows':[item]})
+            result=verify(root,True)
+            self.assertEqual(result['with_internal_gaps'],0)
+            self.assertIn('2026-06-03',result['extra_closures'])
+
     def test_wrong_currency_and_cross_market_resume_rejected(self):
         with self.assertRaises(ValueError):parse_page({'result':{'candles':[{'timestamp':'2026-09-30T00:00:00+09:00','currency':'USD'}]}},'2026-09-30','KRW')
         with tempfile.TemporaryDirectory() as td:

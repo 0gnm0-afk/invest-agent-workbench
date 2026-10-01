@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 import exchange_calendars as xcals
+from invest_agent.trading.market_provider import KR_CLOSURES
 from us_toss_history import read_checked, packed, parse_page, write
 
 
@@ -35,6 +36,8 @@ def verify(root, require_finished=False):
     calendar_start=min(first,(datetime.fromisoformat(config['end'])-timedelta(days=1)).date().isoformat())
     calendar=xcals.get_calendar(calendar_name,start=calendar_start,end=config['end'])
     sessions={s.date().isoformat() for s in calendar.sessions}
+    extra_closures=sorted(KR_CLOSURES) if market=='KR' else []
+    sessions.difference_update(extra_closures)
     counts=Counter();rows=[];earliest=Counter();total=0;raw_count=0
     manifest={}
     if universe.get('exchanges'):
@@ -102,7 +105,7 @@ def verify(root, require_finished=False):
         manifest[str(series_path.relative_to(root))]=hashlib.sha256(series_path.read_bytes()).hexdigest()
     not_attempted=sorted(set(targets)-set(packets))
     if require_finished:assert not not_attempted, 'unattempted_symbols'
-    summary=dict(verified_at=datetime.now(timezone.utc).isoformat(),scope=config['scope'],requested=len(targets),verified=len(packets),counts=dict(counts),not_attempted=not_attempted,total_bars=total,source_pages=raw_count,earliest=min(earliest,default=None),latest=config['end'],start_distribution=dict(sorted(earliest.items())),with_invalid_ohlc=sum(bool(r['invalid_ohlc']) for r in rows),with_internal_gaps=sum(bool(r['missing_sessions']) for r in rows),with_non_sessions=sum(bool(r['non_sessions']) for r in rows),without_latest_session=sum(r['latest_session_missing'] for r in rows),before_2016=sum(bool(r['first']) and r['first']<'2016-01-01' for r in rows),calendar='exchange_calendars '+calendar_name+' '+xcals.__version__,integrity='PASS',all_attempted=not not_attempted)
+    summary=dict(verified_at=datetime.now(timezone.utc).isoformat(),scope=config['scope'],requested=len(targets),verified=len(packets),counts=dict(counts),not_attempted=not_attempted,total_bars=total,source_pages=raw_count,earliest=min(earliest,default=None),latest=config['end'],start_distribution=dict(sorted(earliest.items())),with_invalid_ohlc=sum(bool(r['invalid_ohlc']) for r in rows),with_internal_gaps=sum(bool(r['missing_sessions']) for r in rows),with_non_sessions=sum(bool(r['non_sessions']) for r in rows),without_latest_session=sum(r['latest_session_missing'] for r in rows),before_2016=sum(bool(r['first']) and r['first']<'2016-01-01' for r in rows),calendar='exchange_calendars '+calendar_name+' '+xcals.__version__,extra_closures=extra_closures,integrity='PASS',all_attempted=not not_attempted)
     write(root/'coverage.json',rows)
     write(root/'verification.json',summary)
     for name in ('collection.json','universe.json','coverage.json','verification.json'):
