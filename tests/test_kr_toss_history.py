@@ -28,6 +28,12 @@ class KoreanHistoryTests(unittest.TestCase):
             self.assertEqual(result['counts'],{'received':2});self.assertIn('XKRX',result['calendar'])
             u['rows'].pop();save_checked(root/'universe.json',u)
             with self.assertRaises((KeyError,AssertionError)):verify(root,True)
+    def test_korean_historical_dst_uses_local_trading_date(self):
+        timestamps=['1988-10-08T23:00:00+09:00','1988-05-08T23:00:00+09:00','1987-05-10T23:00:00+09:00','1987-05-09T00:00:00+09:00']
+        candles=[dict(timestamp=t,currency='KRW',openPrice=10,highPrice=12,lowPrice=9,closePrice=11,volume=100) for t in timestamps]
+        bars,_=parse_page({'result':{'candles':candles}},'2026-09-30','KRW')
+        self.assertEqual([b['date'] for b in bars],['1988-10-09','1988-05-09','1987-05-11','1987-05-09'])
+
     def test_existing_engine_extra_closure_is_not_missing_data(self):
         def fake(path,params):
             return {'result':{'candles':[dict(timestamp=day+'T00:00:00+09:00',currency='KRW',openPrice=10,highPrice=12,lowPrice=9,closePrice=11,volume=100) for day in ['2026-06-04','2026-06-02']],'nextBefore':None}}

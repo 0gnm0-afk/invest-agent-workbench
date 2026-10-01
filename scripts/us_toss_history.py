@@ -48,7 +48,9 @@ def parse_page(payload, end, currency="USD"):
         stamp = datetime.fromisoformat(c['timestamp'])
         if stamp.tzinfo is None or c.get('currency') != currency:
             raise ValueError('invalid_timestamp_or_currency')
-        day = stamp.date().isoformat()
+        # Toss 1d timestamps represent local midnight. Fixed +09:00 wire offsets
+        # can encode 23:00 on the preceding date during historic Korean DST.
+        day = (stamp.astimezone(ZoneInfo('Asia/Seoul')) if currency == 'KRW' else stamp).date().isoformat()
         stamps.append(stamp)
         if day > end:
             raise ValueError('incomplete_session_received')
