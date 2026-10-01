@@ -11,7 +11,7 @@ window.WorkbenchWorkspace = (() => {
   async function mount({host,plot,stock,market,symbol,currency,legend,isCurrent}) {
     const frame=stock.timeframe||'1d', frameName=({'1d':'일봉','1w':'주봉','1mo':'월봉'})[frame];
     const key=encodeURIComponent(market+':'+symbol),url='/api/chart-state/'+key+'?timeframe='+frame;
-    const bars=stock.bars||[];
+    const bars=stock.bars||[], byDate=new Map(bars.map(b=>[b.date,b]));
     if(!bars.length){host.innerHTML='<div class="empty">검증된 가격 이력이 없어 이동평균·작도를 사용할 수 없습니다.</div>';return;}
     let packet;
     try {const r=await fetch(url);if(!r.ok)throw Error();packet=await r.json();}
@@ -27,7 +27,7 @@ window.WorkbenchWorkspace = (() => {
     let previewDrawings=null;
     let saving=null,timer=null,dead=false,averageVersion=0,chart,price,drawings,averageRefs=[],averageValues={},hoverTime=null,conflict=false;
     host.innerHTML=`<div class="chart-tools" role="toolbar" aria-label="차트 작도 도구">
-      <button data-tool="select" class="selected">선택·이동</button><button data-tool="trend">추세선</button><button data-tool="channel">평행 채널</button><button data-tool="horizontal">수평선</button><button data-tool="box">박스</button><button data-tool="measure">구간 측정</button>
+      <button data-tool="select" class="selected" title="선택·이동" aria-label="선택·이동"><span aria-hidden="true">↖</span><span>선택·이동</span></button><button data-tool="trend" title="추세선" aria-label="추세선"><span aria-hidden="true">╱</span><span>추세선</span></button><button data-tool="channel" title="평행 채널" aria-label="평행 채널"><span aria-hidden="true">∥</span><span>평행 채널</span></button><button data-tool="horizontal" title="수평선" aria-label="수평선"><span aria-hidden="true">―</span><span>수평선</span></button><button data-tool="box" title="박스" aria-label="박스"><span aria-hidden="true">▱</span><span>박스</span></button><button data-tool="measure" title="구간 측정" aria-label="구간 측정"><span aria-hidden="true">↔</span><span>구간 측정</span></button>
       <span class="tool-divider"></span><button data-action="undo" title="Ctrl+Z">실행 취소</button><button data-action="redo" title="Ctrl+Shift+Z">다시 실행</button><button data-action="delete">선택 삭제</button><button data-action="save" class="primary">저장</button>
       <span class="save-state" role="status" aria-live="polite"></span></div>
       <p class="drawing-hint"></p><div class="chart-controls"><details class="averages-control"><summary>이동평균선 · ${frameName} SMA</summary><div class="average-list"></div><form class="average-add"><label>추가 기간 <input name="period" type="number" min="1" max="500" value="30" required aria-label="추가 SMA 기간"></label><button>추가</button><small>1~500봉 · 최대 6개 · 종가 기준</small></form><p class="average-status" role="status"></p></details><details class="drawing-control"><summary>작도 목록·정밀 편집 <span class="drawing-count"></span></summary><div class="drawing-list"></div><div class="drawing-editor"></div></details></div>`;
@@ -127,15 +127,24 @@ window.WorkbenchWorkspace = (() => {
       else if(e.key==='Delete'){e.preventDefault();remove();}
     }
     function beforeUnload(e){if(dirty()){e.preventDefault();e.returnValue='';}}
-    chart=WorkbenchCharts.create(plot,[{type:'candles',currency,label:currency,options:{title:''},data:bars.map(b=>({time:b.date,open:b.open,high:b.high,low:b.low,close:b.close}))},{type:'volume',label:'거래량',pane:1,data:bars.map(b=>({time:b.date,...(b.volume==null?{}:{value:b.volume}),color:b.close>=b.open?'#b2d6c6':'#e8bdb8'})),options:{title:'',priceFormat:{type:'volume'}}}],{height:plot.clientHeight,legend,lastBars:126,onReady:(c,refs)=>{price=refs[0].ref;}});
+    chart=WorkbenchCharts.create(plot,[{type:'candles',currency,label:currency,options:{title:''},data:bars.map(b=>({time:b.date,open:b.open,high:b.high,low:b.low,close:b.close}))},{type:'volume',label:'거래량',pane:1,data:bars.map(b=>({time:b.date,...(b.volume==null?{}:{value:b.volume}),color:b.close>=b.open?'#298463':'#994653'})),options:{title:'',priceFormat:{type:'volume'}}}],{height:plot.clientHeight,headroom:.22,lastBars:126,onReady:(c,refs)=>{price=refs[0].ref;}});
+    function renderPriceLegend(day) {
+      if(!legend)return;
+      const b=byDate.get(day)||bars.at(-1);
+      legend.replaceChildren();
+      const date=document.createElement('strong');date.textContent=b.date+' · '+frameName;legend.append(date);
+      for(const [label,key] of [['O','open'],['H','high'],['L','low'],['C','close']]){const part=document.createElement('span');part.textContent=label+' '+WorkbenchFormat.money(b[key],currency);part.className=b.close>=b.open?'quote-up':'quote-down';legend.append(part);}
+      const volume=document.createElement('span');volume.textContent='Vol '+(b.volume==null?'결측':b.volume.toLocaleString('ko-KR'));legend.append(volume);
+    }
+    renderPriceLegend(bars.at(-1).date);
     plot.append(smaLegend);renderSmaLegend();
     chart.subscribeCrosshairMove(p=>{
       hoverTime=p.time?(typeof p.time==='string'?p.time:`${p.time.year}-${String(p.time.month).padStart(2,'0')}-${String(p.time.day).padStart(2,'0')}`):null;
-      renderSmaLegend();
+      renderSmaLegend();renderPriceLegend(hoverTime);
     });
     drawings=DrawingTools.attach({element:plot,chart,series:price,bars,currency,timeframe:frame,drawingLimit:packet.drawing_limit||300,getDrawings:()=>previewDrawings||state.drawings,
       onHint:text=>{q('.drawing-hint').textContent=text;},
-      onSelect:id=>{selected=id;qa('[data-tool]').forEach(b=>b.classList.toggle('selected',b.dataset.tool==='select'));refresh();},
+      onSelect:id=>{if(id){host.hidden=false;document.querySelector('#stock-tools-toggle')?.setAttribute('aria-expanded','true');}selected=id;qa('[data-tool]').forEach(b=>b.classList.toggle('selected',b.dataset.tool==='select'));refresh();},
       onChange:(next,options={})=>{
         if(options.preview){previewDrawings=next;return;}
         previewDrawings=null;
@@ -146,7 +155,7 @@ window.WorkbenchWorkspace = (() => {
     refresh();renderAverages();loadAverages();status(packet.updated_at?'저장본 복원됨':'새 작업 · 변경 시 자동 저장');
     const missing=state.drawings.filter(d=>d.points.some(p=>DrawingTools.index(p.time,bars,frame)==null)).length;
     if(missing)q('.drawing-hint').textContent=`현재 가격 기간 밖의 작도 ${missing}개는 보존하며 차트에 표시하지 않습니다. 목록에서 수정할 수 있습니다.`;
-    active={save,destroy(){dead=true;clearTimeout(timer);averageVersion++;drawings.destroy();smaLegend.remove();document.removeEventListener('keydown',keyboard);window.removeEventListener('beforeunload',beforeUnload);},range(value){let from=0;if(value!=='all'){const end=new Date(bars.at(-1).date+'T00:00:00Z');end.setUTCMonth(end.getUTCMonth()-Number(value));const start=end.toISOString().slice(0,10);from=bars.findIndex(b=>b.date>=start);if(from<0)from=bars.length-1;}chart.timeScale().setVisibleLogicalRange({from,to:bars.length-1});}};
+    active={save,destroy(){dead=true;clearTimeout(timer);averageVersion++;drawings.destroy();smaLegend.remove();WorkbenchCharts.remove(chart);document.removeEventListener('keydown',keyboard);window.removeEventListener('beforeunload',beforeUnload);},range(value){let from=0;if(value!=='all'){const end=new Date(bars.at(-1).date+'T00:00:00Z');end.setUTCMonth(end.getUTCMonth()-Number(value));const start=end.toISOString().slice(0,10);from=bars.findIndex(b=>b.date>=start);if(from<0)from=bars.length-1;}chart.timeScale().setVisibleLogicalRange({from,to:bars.length-1});}};
     return active;
   }
   return {mount,closeActive};

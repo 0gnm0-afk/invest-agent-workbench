@@ -14,6 +14,10 @@ window.WorkbenchStockChart = (() => {
       retry.hidden=h.can_retry===false||!['failed','pending'].includes(h.state);
       const last=value.bars.at(-1), price=document.querySelector('#history-price');
       if(price)price.textContent=`차트 종가 ${last?WorkbenchFormat.money(last.close,currency)+' '+currency:'표시 가능한 가격 없음'} · 실제 가격일 ${last?(last.last_session||last.date):'없음'}${local?' · 수집 목표일 '+h.requested_end+' · 저장 원본 '+(h.source_first||'미확인')+' ~ '+(h.source_last||'미확인'):''}${h.screening_newer_than_history?' · 주의: 스크리닝 자료가 이 장기 이력보다 최신입니다.':''}`;
+      const quote=document.querySelector('#stock-quote-price'), quoteDate=document.querySelector('#stock-quote-date');
+      if(quote)quote.textContent=last?WorkbenchFormat.money(last.close,currency):'결측';
+      if(quoteDate)quoteDate.textContent='저장 종가 '+(last?(last.last_session||last.date):'없음');
+      document.querySelector('.history-info')?.classList.toggle('history-warning',h.state==='failed'||h.state==='partial'||h.screening_price_difference||h.screening_newer_than_history);
       const details=document.querySelector('#history-quality');
       if(details){
         const q=h.quality;details.hidden=!q;
@@ -31,7 +35,7 @@ window.WorkbenchStockChart = (() => {
       try {
         if(!await WorkbenchWorkspace.closeActive())return;
         if(!isCurrent())return;
-        WorkbenchCharts.clear();plot.replaceChildren();host.replaceChildren();
+        plot.replaceChildren();host.replaceChildren();
         const priorFrame=frame;frame=nextFrame;
         if(priorFrame!==frame)range=frame==='1d'?'6':'all';
         let pending=false;

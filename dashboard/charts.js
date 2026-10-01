@@ -6,15 +6,15 @@ window.WorkbenchCharts = (() => {
   function create(el, series, options = {}) {
     if (!window.LightweightCharts) { el.textContent = '차트 라이브러리를 불러오지 못했습니다.'; return; }
     if (!series.some(s => s.data.some(p => p.value != null || p.close != null))) { el.innerHTML = '<div class="empty">이 기간에 표시할 검증된 시계열이 없습니다.</div>'; return; }
-    const L = LightweightCharts;
+    const L = LightweightCharts, dark=!!el.closest?.('.stock-detail');
     const chart = L.createChart(el, {autoSize: true, height: options.height || 300,
-      layout: {background: {color: '#ffffff'}, textColor: '#697675', attributionLogo: true, fontFamily: 'Segoe UI, Malgun Gothic, sans-serif'},
-      grid: {vertLines: {visible: false}, horzLines: {color: '#edf1ef'}},
-      rightPriceScale: {borderVisible: false}, timeScale: {borderVisible: false, timeVisible: false},
+      layout: {background: {color: dark?'#202630':'#ffffff'}, textColor: dark?'#a8b3c3':'#697675', attributionLogo: true, fontFamily: 'Segoe UI, Malgun Gothic, sans-serif'},
+      grid: {vertLines: {visible: false}, horzLines: {color: dark?'#313946':'#edf1ef',style:dark?2:0}},
+      rightPriceScale: {borderVisible: false,...(dark?{scaleMargins:{top:options.headroom||.1,bottom:.08}}:{})}, timeScale: {borderVisible: false, timeVisible: false},
       localization: {locale: 'ko-KR'}, crosshair: {mode: L.CrosshairMode.Normal}});
     const refs = series.map(s => {
       const ref = chart.addSeries(s.type === 'candles' ? L.CandlestickSeries : s.type === 'volume' ? L.HistogramSeries : L.LineSeries,
-        {...(s.type === 'candles' ? {upColor: '#238b78', downColor: '#cc6963', borderVisible: false, wickUpColor: '#238b78', wickDownColor: '#cc6963'} : {color: s.color || '#218775', lineWidth: 2}),
+        {...(s.type === 'candles' ? {upColor: dark?'#31c58b':'#238b78', downColor: dark?'#ed6572':'#cc6963', borderVisible: false, wickUpColor: dark?'#31c58b':'#238b78', wickDownColor: dark?'#ed6572':'#cc6963'} : {color: s.color || '#218775', lineWidth: 2}),
          priceLineVisible: false, lastValueVisible: s.type !== 'volume', title: s.label, ...s.options, ...(s.currency ? {priceFormat: {type: 'custom', minMove: s.currency === 'KRW' ? 1 : .01, formatter: value => WorkbenchFormat.money(value, s.currency)}} : {})}, s.pane || 0);
       ref.setData(s.data); return {ref, label: s.label, currency: s.currency};
     });
