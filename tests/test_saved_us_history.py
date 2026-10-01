@@ -30,17 +30,23 @@ class SavedHistoryTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def fixture(self, rows=None, invalid=None, non_sessions=None, gaps=None, stale=False):
+    def fixture(self, rows=None, invalid=None, non_sessions=None, gaps=None, stale=False, market='US', empty=False):
+        self.folder = self.root / (market.lower() + '-history/sample')
+        self.folder.mkdir(parents=True, exist_ok=True)
+        currency = 'KRW' if market == 'KR' else 'USD'
+        if market == 'KR':
+            self.stock.update(market=market, currency=currency)
         rows = rows or [bar('1990-01-02'), bar('2016-01-04'), bar('2026-09-30')]
-        listing = dict(symbol='AAA', market='US', name='Example')
-        data = dict(symbol='AAA', market='US', currency='USD', listing=listing, state='received',
+        if empty: rows = []
+        listing = dict(symbol='AAA', market=market, name='Example')
+        data = dict(symbol='AAA', market=market, currency=currency, listing=listing, state='empty' if empty else 'received',
                     requested_end='2026-09-30', provider_end_reached=True, bars=rows, provider='Toss',
                     collected_at='2026-10-01', price_basis='adjusted')
-        record = dict(symbol='AAA', state='received', provider_end_reached=True, first=rows[0]['date'],
-                      last=rows[-1]['date'], bars=len(rows), invalid_ohlc=invalid or [],
+        record = dict(symbol='AAA', state=data['state'], provider_end_reached=True, first=rows[0]['date'] if rows else None,
+                      last=rows[-1]['date'] if rows else None, bars=len(rows), invalid_ohlc=invalid or [],
                       non_sessions=non_sessions or [], missing_sessions=gaps or [], latest_session_missing=stale)
         self.series = 'series/'+hashlib.sha256(b'AAA').hexdigest()+'.json'
-        files = {'collection.json':dict(end='2026-09-30'), 'universe.json':dict(rows=[listing]),
+        files = {'collection.json':dict(end='2026-09-30', markets=[market]), 'universe.json':dict(rows=[listing]),
                  'coverage.json':[record], 'verification.json':dict(integrity='PASS', all_attempted=True, verified=1),
                  self.series:data}
         hashes = {}
@@ -103,6 +109,48 @@ class SavedHistoryTests(unittest.TestCase):
         self.assertTrue(value['history']['screening_newer_than_history'])
         self.assertEqual(value['history']['state'],'partial')
         self.assertEqual(value['history']['last'],'2026-09-30')
+
+    def test_kr_calendar_flags_retained_ohlc_excluded_and_sma(self):
+        rows=[bar('1975-01-04',10),bar('1994-01-03',20),dict(bar('2001-01-16'),open=99),bar('2026-09-30',30)]
+        self.fixture(rows,invalid=['2001-01-16'],non_sessions=['1994-01-03'],gaps=['1998-06-04'],market='KR')
+        original=(self.folder/self.series).read_bytes()
+        store=HistoryStore(self.path,self.no_network)
+        value=store.ensure(self.stock,retry=True)
+        self.assertEqual(value['currency'],'KRW')
+        self.assertEqual(value['history']['kind'],'local_verified_kr')
+        self.assertEqual(value['history']['state'],'partial')
+        self.assertEqual(value['history']['quality']['excluded_dates'],['2001-01-16'])
+        self.assertEqual(value['history']['quality']['calendar_policy'],'retain_with_warning')
+        self.assertEqual(value['history']['first'],'1975-01-04')
+        for frame in ('1d','1w','1mo'):
+            result=store.view(self.stock,frame)
+            self.assertEqual(len(result['bars']),3)
+            self.assertEqual(moving_averages(result,[2])['2'][-1]['value'],26)
+        self.assertEqual(original,(self.folder/self.series).read_bytes())
+        self.assertFalse(self.path.exists())
+
+    def test_kr_audited_empty_has_no_fallback_price_or_refetch(self):
+        self.fixture(market='KR',empty=True)
+        value=HistoryStore(self.path,self.no_network).ensure(self.stock,retry=True)
+        self.assertEqual(value['history']['state'],'unavailable')
+        self.assertEqual(value['history']['reason'],'saved_history_empty_before_cutoff')
+        self.assertEqual(value['bars'],[])
+        self.assertIsNone(value['history']['last'])
+        self.assertEqual(moving_averages(value,[20]),{'20':[]})
+
+    def test_kr_and_us_routing_and_market_identity_failure(self):
+        self.fixture();self.fixture(market='KR')
+        store=HistoryStore(self.path,self.no_network)
+        self.assertEqual(set(store.saved.stocks),{'US:AAA','KR:AAA'})
+        self.assertEqual(store.view(dict(self.stock,market='US'))['currency'],'USD')
+        self.assertEqual(store.view(self.stock)['currency'],'KRW')
+        # A valid US manifest cannot be activated as a Korean collection.
+        (self.folder.parent/'active.json').write_bytes((self.root/'us-history/active.json').read_bytes())
+        import shutil
+        shutil.copytree(self.root/'us-history/sample',self.folder,dirs_exist_ok=True)
+        value=HistoryStore(self.path,self.no_network).ensure(self.stock)
+        self.assertEqual(value['history']['state'],'failed')
+        self.assertEqual(value['history']['reason'],'saved_kr_history_verification_failed')
 
     def test_http_new_symbol_available_without_screening_mutation(self):
         self.fixture();stocks={}

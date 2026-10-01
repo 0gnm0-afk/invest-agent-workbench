@@ -1,4 +1,4 @@
-"""Read a pinned, fully audited US history collection without network calls."""
+"""Read a pinned, fully audited market history collection without network calls."""
 import hashlib
 import json
 import math
@@ -9,8 +9,10 @@ def packed(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False).encode('utf-8')
 
 
-class SavedUSHistory:
-    def __init__(self, pointer):
+class SavedHistory:
+    def __init__(self, pointer, market):
+        self.market = market
+        self.currency = {"US": "USD", "KR": "KRW"}[market]
         self.pointer = Path(pointer)
         self.enabled = self.pointer.exists()
         self.stocks = {}
@@ -33,13 +35,15 @@ class SavedUSHistory:
             rows = self.read('coverage.json')
             self.coverage = {x['symbol']: x for x in rows}
             self.listings = {x['symbol']: x for x in universe}
-            if (verification['integrity'] != 'PASS' or not verification['all_attempted']
+            if (any(x.get('market') != market for x in universe)
+                    or self.config.get('markets', [market]) != [market]
+                    or verification['integrity'] != 'PASS' or not verification['all_attempted']
                     or len(self.listings) != len(universe) or len(self.coverage) != len(rows)
                     or set(self.listings) != set(self.coverage)
                     or verification['verified'] != len(universe)):
                 raise ValueError('incomplete_audit')
-            self.stocks = {'US:' + s: dict(market='US', symbol=s, name=x.get('name') or s,
-                           currency='USD', bars=[], provider='Toss OpenAPI candles')
+            self.stocks = {market + ':' + s: dict(market=market, symbol=s, name=x.get('name') or s,
+                           currency=self.currency, bars=[], provider='Toss OpenAPI candles')
                            for s, x in self.listings.items()}
         except (OSError, ValueError, KeyError, TypeError):
             self.error = True
@@ -56,9 +60,9 @@ class SavedUSHistory:
         return value
 
     def packet(self, stock):
-        if stock.get('market') != 'US' or not self.enabled:
+        if stock.get('market') != self.market or not self.enabled:
             return None
-        info = dict(kind='local_verified_us', can_retry=False)
+        info = dict(kind='local_verified_' + self.market.lower(), can_retry=False)
         try:
             if self.error:
                 raise ValueError('collection_unavailable')
@@ -66,16 +70,23 @@ class SavedUSHistory:
             info.update(requested_start='provider_earliest_available', requested_end=self.config['end'],
                         source_id=self.root.name)
             if symbol not in self.coverage:
-                return {'history': dict(info, state='unavailable', reason='saved_us_symbol_unavailable')}
+                return {'history': dict(info, state='unavailable', reason='saved_' + self.market.lower() + '_symbol_unavailable')}
             record = self.coverage[symbol]
             d = self.read('series/' + hashlib.sha256(symbol.encode()).hexdigest() + '.json', wrapped=True)
-            if (d['symbol'] != symbol or d['market'] != 'US' or d['currency'] != 'USD'
-                    or d['listing'] != self.listings[symbol] or d['state'] != 'received'
+            if (d['symbol'] != symbol or d['market'] != self.market or d['currency'] != self.currency
+                    or d['listing'] != self.listings[symbol] or d['state'] not in ('received', 'empty')
                     or not d['provider_end_reached'] or d['requested_end'] != self.config['end']
                     or record['bars'] != len(d['bars']) or record['state'] != d['state']
                     or not record['provider_end_reached']):
                 raise ValueError('series_identity_mismatch')
             bars = d['bars']
+            source = {k: d.get(k) for k in ('market','symbol','currency','provider','price_basis','collected_at')}
+            if d['state'] == 'empty':
+                if bars or record['first'] is not None or record['last'] is not None:
+                    raise ValueError('invalid_empty_series')
+                return {'series': dict(source, bars=[]), 'history': dict(info,
+                        state='unavailable', reason='saved_history_empty_before_cutoff',
+                        stored_count=0, source_first=None, source_last=None)}
             dates = [b['date'] for b in bars]
             if (not dates or dates != sorted(set(dates)) or dates[0] != record['first']
                     or dates[-1] != record['last'] or dates[-1] > self.config['end']):
@@ -87,7 +98,8 @@ class SavedUSHistory:
                        0 < b['low'] <= min(b['open'], b['close']) <= max(b['open'], b['close']) <= b['high']]
             if invalid != record['invalid_ohlc']:
                 raise ValueError('quality_mismatch')
-            excluded = set(invalid) | set(record['non_sessions'])
+            # Historic XKRX calendar disagreements are not proof that a price is invalid.
+            excluded = set(invalid) | (set(record['non_sessions']) if self.market == 'US' else set())
             displayed = [b for b in bars if b['date'] not in excluded]
             prior = {b['date']: b for b in stock.get('bars', [])}
             different = any(b['date'] in prior and any(not math.isclose(b[k], prior[b['date']][k], rel_tol=1e-8, abs_tol=1e-8)
@@ -96,7 +108,8 @@ class SavedUSHistory:
             newer_screen = bool(screening_end and screening_end > self.config['end'])
             quality = {k: record[k] for k in ('invalid_ohlc', 'non_sessions', 'missing_sessions', 'latest_session_missing')}
             quality['excluded_dates'] = sorted(excluded)
-            flagged = bool(excluded or record['missing_sessions'] or record['latest_session_missing'] or newer_screen)
+            quality['calendar_policy'] = 'retain_with_warning' if self.market == 'KR' else 'exclude_non_sessions'
+            flagged = bool(excluded or record['non_sessions'] or record['missing_sessions'] or record['latest_session_missing'] or newer_screen)
             info.update(state='partial' if flagged else 'complete', reason='saved_history_quality_flags' if flagged else 'saved_history_verified',
                         stored_count=len(bars), source_first=dates[0], source_last=dates[-1], quality=quality,
                         screening_as_of=screening_end, screening_price_difference=different,
@@ -104,4 +117,20 @@ class SavedUSHistory:
             source = {k: d.get(k) for k in ('market','symbol','currency','provider','price_basis','collected_at')}
             return {'series': dict(source, bars=displayed), 'history': info}
         except (OSError, ValueError, KeyError, TypeError):
-            return {'history': dict(info, state='failed', reason='saved_us_history_verification_failed')}
+            return {'history': dict(info, state='failed', reason='saved_' + self.market.lower() + '_history_verification_failed')}
+
+
+class SavedUSHistory(SavedHistory):
+    def __init__(self, pointer):
+        super().__init__(pointer, 'US')
+
+
+class SavedMarketHistories:
+    def __init__(self, root):
+        self.markets = {m: SavedHistory(Path(root) / (m.lower() + '-history/active.json'), m)
+                        for m in ('US', 'KR')}
+        self.stocks = {k: v for history in self.markets.values() for k, v in history.stocks.items()}
+
+    def packet(self, stock):
+        history = self.markets.get(stock.get('market'))
+        return history.packet(stock) if history else None

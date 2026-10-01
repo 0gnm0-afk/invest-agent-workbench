@@ -9,7 +9,7 @@ import sqlite3
 import threading
 from zoneinfo import ZoneInfo
 
-from saved_us_history import SavedUSHistory
+from saved_us_history import SavedMarketHistories
 from toss_candles import daily_series
 from toss_market_client import TossMarketClient, MarketReadError
 
@@ -58,7 +58,7 @@ class HistoryStore:
         self.lock = threading.Lock()
         self.client_factory = client_factory
         self.client = None
-        self.saved = SavedUSHistory(self.path.parent / 'us-history/active.json')
+        self.saved = SavedMarketHistories(self.path.parent)
 
     def connect(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
