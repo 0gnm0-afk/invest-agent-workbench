@@ -29,6 +29,37 @@ class HistoryTests(unittest.TestCase):
             p=next((Path(td)/'series').glob('*.json'));v=json.loads(p.read_bytes());v['data']['bars'][0]['close']=22;p.write_text(json.dumps(v))
             with self.assertRaisesRegex(ValueError,'saved_hash_mismatch'):read_checked(p)
 
+    def test_resumed_workers_share_one_client_and_rate_limiter(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import time
+        def factory(**kwargs):
+            time.sleep(.01)
+            return lambda path,params: {'result':params}
+        with tempfile.TemporaryDirectory() as td,patch('us_toss_history.TossMarketClient',side_effect=factory) as create:
+            c=Collector(td)
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                list(pool.map(lambda i:c.get('/api/v1/candles',{'symbol':str(i)}),range(8)))
+            create.assert_called_once()
+
+    def test_runner_does_not_retain_completed_full_histories(self):
+        import tracemalloc
+        from us_toss_history import run
+        class FakeCollector(Collector):
+            def universe(self):return {'rows':[{'symbol':str(i)} for i in range(40)]}
+            def collect_one(self,item,end,retry=False):
+                return {'state':'received','bars':[bytearray(1024*1024)]}
+        with tempfile.TemporaryDirectory() as td:
+            save_checked(Path(td)/'collection.json',{'end':'2026-09-30'})
+            tracemalloc.start()
+            try:
+                with patch('us_toss_history.Collector',FakeCollector),patch('builtins.print'):
+                    run(td,workers=4)
+                _,peak=tracemalloc.get_traced_memory()
+            finally:tracemalloc.stop()
+            self.assertLess(peak,16*1024*1024)
+            progress=json.loads((Path(td)/'progress.json').read_bytes())
+            self.assertEqual((progress['processed'],progress['bars']),(40,40))
+
     def test_future_duplicate_and_currency_rejected(self):
         bad=[{'result':{'candles':[candle('2026-10-01')]}},{'result':{'candles':[candle('2016-01-04'),candle('2016-01-04')]}},{'result':{'candles':[{**candle('2016-01-04'),'currency':'KRW'}]}}]
         for page in bad:

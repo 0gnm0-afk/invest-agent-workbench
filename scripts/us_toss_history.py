@@ -77,6 +77,7 @@ class Collector:
         self.root = Path(root)
         self.log_lock = threading.Lock()
         self.client = client
+        self.client_lock = threading.Lock()
         self.http_counts = Counter()
 
     def observe(self, event):
@@ -94,8 +95,9 @@ class Collector:
             if packet['request'] != [path,params] or hashlib.sha256(packed(packet['payload'])).hexdigest() != packet['sha256']:
                 raise ValueError('response_cache_hash_mismatch')
             return packet['payload'], key
-        if self.client is None:
-            self.client = TossMarketClient(observer=self.observe, min_interval=.1)
+        with self.client_lock:
+            if self.client is None:
+                self.client = TossMarketClient(observer=self.observe, min_interval=.1)
         payload = self.client(path,params)
         packet = dict(request=[path,params],payload=payload,sha256=hashlib.sha256(packed(payload)).hexdigest(),fetched_at=datetime.now(timezone.utc).isoformat())
         saved.parent.mkdir(parents=True,exist_ok=True)
@@ -170,6 +172,10 @@ class Collector:
         save_checked(saved,result)
         return result
 
+    def collect_summary(self, item, end, retry=False):
+        result = self.collect_one(item, end, retry)
+        return {'state': result['state'], 'bar_count': len(result['bars'])}
+
 
 def run(root,workers=6,retry=False):
     root=Path(root);root.mkdir(parents=True,exist_ok=True)
@@ -191,9 +197,9 @@ def run(root,workers=6,retry=False):
             write(root/'progress.json',p);print(json.dumps(p),flush=True)
         progress('running')
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures=[pool.submit(collector.collect_one,item,config['end'],retry) for item in items]
+            futures=[pool.submit(collector.collect_summary,item,config['end'],retry) for item in items]
             for future in as_completed(futures):
-                result=future.result();counts[result['state']]+=1;total_bars+=len(result['bars'])
+                result=future.result();counts[result['state']]+=1;total_bars+=result['bar_count']
                 if sum(counts.values())%25==0:progress('running')
         progress('collection_finished')
 
