@@ -39,6 +39,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
 
         def do_GET(self):
             data, stocks = views['view'] if views is not None else initial_view
+            stocks = {**histories.saved.stocks, **stocks}
             expected = '127.0.0.1:' + str(self.server.server_port)
             if self.headers.get('Host') != expected or self.headers.get('Origin', 'http://' + expected) != 'http://' + expected:
                 return self.send(b'{"error":"local_origin_required"}', status=403)
@@ -101,6 +102,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
 
         def do_POST(self):
             data, stocks = views['view'] if views is not None else initial_view
+            stocks = {**histories.saved.stocks, **stocks}
             path = urllib.parse.urlsplit(self.path).path
             query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query, keep_blank_values=True)
             try:
@@ -159,9 +161,17 @@ def main():
     daily = DailyLaunch(ROOT) if args.daily_refresh else None
     started = datetime.now(timezone.utc)
     day = started.astimezone(ZoneInfo('Asia/Seoul')).date().isoformat()
-    base_run = daily.display_run() if daily else None
+    base_run = (daily or DailyLaunch(ROOT)).display_run()
+    saved_notice = None
+    if not daily and base_run:
+        try:
+            latest = json.loads((ROOT / 'runtime/latest.json').read_text(encoding='utf-8'))
+            saved_notice = dict(saved_only=True, latest_state=latest.get('state'),
+                                display_stale=Path(latest['output']).resolve() != Path(base_run).resolve())
+        except (OSError, ValueError, KeyError, TypeError):
+            saved_notice = dict(saved_only=True, latest_state='unavailable', display_stale=True)
     live = {'record':{'day':day,'state':'running','stage':'starting','targets':{}},'ready':False}
-    output, data, stocks = build(refresh=not args.saved_accounts and not daily, market_run=base_run)
+    output, data, stocks = build(refresh=not args.saved_accounts and not daily, market_run=base_run, daily_update=saved_notice)
     views = {'view':(data, stocks)}
     def daily_status():
         if not daily:

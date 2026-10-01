@@ -9,6 +9,7 @@ import sqlite3
 import threading
 from zoneinfo import ZoneInfo
 
+from saved_us_history import SavedUSHistory
 from toss_candles import daily_series
 from toss_market_client import TossMarketClient, MarketReadError
 
@@ -57,6 +58,7 @@ class HistoryStore:
         self.lock = threading.Lock()
         self.client_factory = client_factory
         self.client = None
+        self.saved = SavedUSHistory(self.path.parent / 'us-history/active.json')
 
     def connect(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -79,7 +81,9 @@ class HistoryStore:
     def view(self, stock, frame='1d'):
         timeframe(frame)
         try:
-            value = self.cached(stock)
+            value = self.saved.packet(stock)
+            if value is None:
+                value = self.cached(stock)
         except (ValueError, sqlite3.Error, OSError):
             value = {'history': {'state':'failed','reason':'history_cache_unavailable'}}
         value = value or {'history': {'state':'not_requested','reason':'history_not_requested'}}
@@ -87,10 +91,13 @@ class HistoryStore:
         bars = source.get('bars') or []
         info = dict(requested_start=START, requested_end=(stock.get('bars') or [{}])[-1].get('date'),
                     first=bars[0]['date'] if bars else None, last=bars[-1]['date'] if bars else None,
-                    daily_count=len(bars), collected_at=source.get('collected_at'), **value['history'])
+                    daily_count=len(bars), collected_at=source.get('collected_at'))
+        info.update(value['history'])
         return {**source, 'name':stock.get('name'), 'bars':aggregate(bars, frame), 'history':info, 'timeframe':frame}
 
     def ensure(self, stock, retry=False):
+        if self.saved.packet(stock) is not None:
+            return self.view(stock)
         # Cross-process file lock prevents two dashboard launchers fetching the same cache.
         from invest_agent.trading.store import instance_lock, BusyError
         try:
