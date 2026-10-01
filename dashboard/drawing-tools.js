@@ -8,34 +8,53 @@ window.DrawingTools = (() => {
     const offset = c.y - (a.y + slope*(c.x-a.x));
     return [a,b,{x:b.x,y:b.y+offset},{x:a.x,y:a.y+offset}];
   }
-  function measure(points, bars, currency) {
-    const [a,b] = points, delta = b.price-a.price;
-    const ia=bars.findIndex(x=>x.date===a.time), ib=bars.findIndex(x=>x.date===b.time);
-    const days=Math.round((Date.parse(b.time)-Date.parse(a.time))/86400000);
-    return `${delta>=0?'+':''}${WorkbenchFormat.money(delta,currency)} ${currency} · ${delta>=0?'+':''}${(delta/a.price*100).toFixed(2)}% · ${Math.abs(ib-ia)}봉 간격 · ${Math.abs(days)}일`;
+  function boundary(bars, i, frame) {
+    if(i+1<bars.length)return Date.parse(bars[i+1].date);
+    const d=new Date(bars[i].date+'T00:00:00Z');
+    if(frame==='1mo')d.setUTCMonth(d.getUTCMonth()+1);else d.setUTCDate(d.getUTCDate()+(frame==='1w'?7:1));
+    return d.getTime();
   }
-  function attach({element, chart, series, bars, currency, getDrawings, onChange, onSelect, onHint}) {
+  function index(time,bars,frame='1d') {
+    if(!bars.length||time<bars[0].date||time>(bars.at(-1).last_session||bars.at(-1).date))return null;
+    let lo=0,hi=bars.length;
+    while(lo<hi){const m=(lo+hi)>>1;if(bars[m].date<=time)lo=m+1;else hi=m;}
+    const i=lo-1,start=Date.parse(bars[i].date),fraction=(Date.parse(time)-start)/(boundary(bars,i,frame)-start);
+    // Preserve distinct dates even when both anchors fall inside one week/month.
+    return frame==='1d'?i+fraction:i-.4+.8*fraction;
+  }
+  function coordinate(scale, logical) {
+    const base=Math.floor(logical),left=scale.logicalToCoordinate(base),right=scale.logicalToCoordinate(base+1);
+    return left==null||right==null?null:left+(logical-base)*(right-left);
+  }
+  function timeAt(logical,bars,frame='1d') {
+    const i=Math.max(0,Math.min(bars.length-1,Math.round(logical)));
+    if(frame==='1d')return bars[i].date;
+    const start=Date.parse(bars[i].date),fraction=Math.max(0,Math.min(1,(logical-i+.4)/.8));
+    const ms=Math.round((start+fraction*(boundary(bars,i,frame)-start))/86400000)*86400000;
+    const time=new Date(ms).toISOString().slice(0,10);
+    return time<(bars[i].first_session||bars[i].date)?(bars[i].first_session||bars[i].date):time>(bars[i].last_session||bars[i].date)?(bars[i].last_session||bars[i].date):time;
+  }
+  function measure(points, bars, currency, frame='1d') {
+    const [a,b] = points, delta = b.price-a.price;
+    const ia=index(a.time,bars,frame), ib=index(b.time,bars,frame);
+    const days=Math.round((Date.parse(b.time)-Date.parse(a.time))/86400000);
+    return `${delta>=0?'+':''}${WorkbenchFormat.money(delta,currency)} ${currency} · ${delta>=0?'+':''}${(delta/a.price*100).toFixed(2)}% · ${ia==null||ib==null?'미확인':Math.abs(Math.round(ib)-Math.round(ia))}봉 간격 · ${Math.abs(days)}일`;
+  }
+  function attach({element, chart, series, bars, currency, timeframe='1d', drawingLimit=300, getDrawings, onChange, onSelect, onHint}) {
     const NS='http://www.w3.org/2000/svg';
     const svg=document.createElementNS(NS,'svg');
     svg.classList.add('drawing-layer');svg.setAttribute('aria-label','가격 차트 작도 영역');
     element.append(svg);
     let mode='select', selected=null, draft=[], hover=null, drag=null, frame=0, removed=false, signature='';
-    const dates=new Map(bars.map((b,i)=>[b.date,i]));
     function node(tag,attrs,parent=svg) {
       const n=document.createElementNS(NS,tag);for(const [k,v] of Object.entries(attrs))n.setAttribute(k,v);parent.append(n);return n;
     }
-    function index(time) {
-      if(dates.has(time)) return dates.get(time);
-      // Preserve off-history drawings in storage; never snap them to unrelated candles.
-      return null;
-    }
-    function xy(p) {const i=index(p.time);return i==null?null:{x:chart.timeScale().logicalToCoordinate(i),y:series.priceToCoordinate(p.price)};}
+    function xy(p) {const i=index(p.time,bars,timeframe);return i==null?null:{x:coordinate(chart.timeScale(),i),y:series.priceToCoordinate(p.price)};}
     function point(event) {
       const r=svg.getBoundingClientRect(),x=event.clientX-r.left,y=event.clientY-r.top;
       const logical=chart.timeScale().coordinateToLogical(x), price=series.coordinateToPrice(y);
       if(logical==null||price==null||price<=0||x<0||y<0||x>r.width||y>r.height)return null;
-      const i=Math.max(0,Math.min(bars.length-1,Math.round(logical)));
-      return {time:bars[i].date,price};
+      return {time:timeAt(logical,bars,timeframe),price};
     }
     function render() {
       if(removed)return;
@@ -67,7 +86,7 @@ window.DrawingTools = (() => {
             node('rect',{x:Math.min(a.x,b.x),y:Math.min(a.y,b.y),width:Math.max(1,Math.abs(b.x-a.x)),height:Math.max(1,Math.abs(b.y-a.y)),fill:stroke,'fill-opacity':.10,stroke,'stroke-width':d.width,'pointer-events':mode==='select'?'all':'none'},g);
             if(d.kind==='measure') {
               line(a,b,'4 3');
-              const parts=measure(d.points,bars,currency).split(' · '), lines=[parts.slice(0,2).join(' · '),parts.slice(2).join(' · ')];
+              const parts=measure(d.points,bars,currency,timeframe).split(' · '), lines=[parts.slice(0,2).join(' · '),parts.slice(2).join(' · ')];
               const labelWidth=Math.min(w-10,Math.max(...lines.map(t=>t.length))*7);
               const x=Math.max(5,Math.min(Math.min(a.x,b.x),w-labelWidth-5)),y=Math.max(17,Math.min(a.y,b.y)-23);
               const text=node('text',{x,y,fill:stroke,'font-size':12,'paint-order':'stroke',stroke:'#fff','stroke-width':3,'pointer-events':'none'},g);
@@ -102,7 +121,7 @@ window.DrawingTools = (() => {
         if((mode==='trend'||mode==='channel')&&draft.length===1&&draft[0].time===p.time){onHint('두 번째 점은 다른 날짜를 선택하세요.');return;}
         draft.push(p);
         if(draft.length===count[mode]) {
-          if(getDrawings().length>=100){draft=[];onHint('종목당 최대 100개입니다. 필요 없는 도형을 삭제하세요.');return;}
+          if(getDrawings().length>=drawingLimit){draft=[];onHint(`종목당 최대 ${drawingLimit}개입니다. 필요 없는 도형을 삭제하세요.`);return;}
           const drawing={id:crypto.randomUUID(),kind:mode,points:clone(draft),color:'#218775',width:2,extend:false};
           onChange([...getDrawings(),drawing]);setMode('select');select(drawing.id);
         }else onHint(`${labels[mode]}: ${count[mode]-draft.length}개 지점을 더 클릭하세요.`);
@@ -121,11 +140,12 @@ window.DrawingTools = (() => {
       const d=clone(drag.original);
       if(drag.handle!=null)d.points[drag.handle]=p;
       else {
-        let delta=dates.get(p.time)-dates.get(drag.start.time);
-        const ids=d.points.map(v=>dates.get(v.time));
-        delta=Math.max(-Math.min(...ids),Math.min(bars.length-1-Math.max(...ids),delta));
+        let delta=Math.round(index(p.time,bars,timeframe)-index(drag.start.time,bars,timeframe));
+        const ids=d.points.map(v=>index(v.time,bars,timeframe));
+        if(ids.some(i=>i==null))return;
+        delta=Math.max(-Math.floor(Math.min(...ids)+.4),Math.min(bars.length-1-Math.floor(Math.max(...ids)+.4),delta));
         const priceDelta=p.price-drag.start.price;
-        d.points=d.points.map((v,i)=>({time:bars[ids[i]+delta].date,price:v.price+priceDelta}));
+        d.points=d.points.map((v,i)=>({time:delta===0?v.time:timeAt(ids[i]+delta,bars,timeframe),price:v.price+priceDelta}));
       }
       if(d.points.some(v=>v.price<=0)||((d.kind==='trend'||d.kind==='channel')&&d.points[0].time===d.points[1].time))return;
       drag.moved=true;
@@ -146,5 +166,5 @@ window.DrawingTools = (() => {
     setMode('select');frame=requestAnimationFrame(render);
     return {setMode,select,cancel,destroy(){removed=true;cancelAnimationFrame(frame);svg.remove();}};
   }
-  return {attach,measure,channel,labels,count};
+  return {attach,measure,channel,labels,count,index,timeAt,coordinate};
 })();

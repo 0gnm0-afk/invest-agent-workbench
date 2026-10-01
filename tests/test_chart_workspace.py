@@ -61,6 +61,68 @@ class Workspaces(unittest.TestCase):
         values=moving_averages({'bars':bars},[2,500]);self.assertNotIn('value',values['2'][2]);self.assertEqual(values['2'][3]['value'],3.5);self.assertTrue(all('value' not in p for p in values['500']))
 
 
+class SharedWorkspaces(unittest.TestCase):
+    setUp = Workspaces.setUp
+    tearDown = Workspaces.tearDown
+    def test_legacy_merge_collision_averages_and_original_preserved(self):
+        original={}
+        for frame in ('1d','1w','1mo'):
+            key='KR:A'+('' if frame=='1d' else '|'+frame)
+            value=defaults();value['drawings']=[drawing(ident='same')]
+            if frame=='1mo':value['drawings'][0]['points'][0]['price']=1234
+            value['averages'][0]['period']={'1d':10,'1w':11,'1mo':12}[frame]
+            self.store.save(key,0,value);original[key]=self.store.read(key)
+        daily=self.store.shared('KR:A')
+        self.assertEqual(len(daily['state']['drawings']),2)
+        for frame,n in [('1d',10),('1w',11),('1mo',12)]:
+            got=WorkspaceStore(self.path).shared('KR:A',frame)
+            self.assertEqual(got['state']['drawings'],daily['state']['drawings'])
+            self.assertEqual(got['state']['averages'][0]['period'],n)
+        for key,value in original.items():self.assertEqual(self.store.read(key),value)
+
+    def test_shared_edit_delete_conflict_and_reopen(self):
+        a=self.store.shared('KR:A');b=self.store.shared('KR:A','1w')
+        state=a['state'];state['drawings']=[drawing(k,k) for k in ('trend','channel','horizontal','box','measure')]
+        state['averages'][0]['period']=10
+        self.store.shared('KR:A',revision=a['revision'],state=state)
+        with self.assertRaises(Conflict):self.store.shared('KR:A','1w',revision=b['revision'],state=b['state'])
+        month=self.store.shared('KR:A','1mo')
+        self.assertEqual(month['state']['drawings'],state['drawings'])
+        self.assertEqual(month['state']['averages'][0]['period'],20)
+        month['state']['drawings'].pop()
+        self.store.shared('KR:A','1mo',revision=month['revision'],state=month['state'])
+        self.assertEqual(len(WorkspaceStore(self.path).shared('KR:A')['state']['drawings']),4)
+        self.assertEqual(self.store.shared('US:A')['state']['drawings'],[])
+
+    def test_all_three_legacy_limits_preserved(self):
+        for frame in ('1d','1w','1mo'):
+            state=defaults();state['drawings']=[drawing(ident=frame+str(i)) for i in range(100)]
+            self.store.save('KR:A'+('' if frame=='1d' else '|'+frame),0,state)
+        got=self.store.shared('KR:A');self.assertEqual(len(got['state']['drawings']),300)
+        self.store.shared('KR:A',revision=got['revision'],state=got['state'])
+        got['state']['drawings'].append(drawing(ident='extra'))
+        with self.assertRaises(ValueError):self.store.shared('KR:A',revision=2,state=got['state'])
+
+    def test_corrupt_shared_payload_fails_without_overwrite(self):
+        import sqlite3
+        from contextlib import closing
+        self.store.shared('KR:A')
+        with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("UPDATE shared_chart_workspaces SET payload='{}' WHERE identity='KR:A'")
+        with self.assertRaises(ValueError):self.store.shared('KR:A')
+        with closing(sqlite3.connect(self.path)) as db:
+            self.assertEqual(db.execute('SELECT payload FROM shared_chart_workspaces').fetchone()[0],'{}')
+
+    def test_invalid_migration_does_not_create_shared_row(self):
+        import sqlite3
+        from contextlib import closing
+        with closing(sqlite3.connect(self.path)) as db, db:
+            self.store.connect().close()
+            db.execute('INSERT INTO chart_workspaces VALUES (?,?,?,?)',('KR:A|1w',1,'{}','2026-10-01'))
+        with self.assertRaises(ValueError):self.store.shared('KR:A')
+        self.assertEqual(self.store.read('KR:A')['revision'],0)
+
+
 class WorkspaceHTTP(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

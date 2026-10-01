@@ -101,9 +101,9 @@ class PeriodAPI(unittest.TestCase):
                 self.assertEqual(request('GET','/api/chart/US:AAA?timeframe=1h')[0],400)
                 self.assertEqual(request('GET','/api/chart/US:unknown')[0],404)
                 self.assertEqual(request('POST','/api/chart-state/US:AAA?timeframe=1w',{'revision':0,'state':defaults()})[0],200)
-                self.assertEqual(request('GET','/api/chart-state/US:AAA')[1]['revision'],0)
+                self.assertEqual(request('GET','/api/chart-state/US:AAA')[1]['revision'],1)
                 self.assertEqual(request('GET','/api/chart-state/US:AAA?timeframe=1w')[1]['revision'],1)
-                self.assertEqual(request('GET','/api/chart-state/US:AAA?timeframe=1mo')[1]['revision'],0)
+                self.assertEqual(request('GET','/api/chart-state/US:AAA?timeframe=1mo')[1]['revision'],1)
             finally:server.shutdown();server.server_close();thread.join()
 
 if __name__=='__main__':unittest.main()

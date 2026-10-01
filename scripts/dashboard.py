@@ -60,7 +60,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                 if key not in stocks:
                     return self.send(b'{"error":"unknown_stock"}', status=404)
                 try:
-                    result = store.read(key if frame == '1d' else key + '|' + frame)
+                    result = store.shared(key, frame)
                     return self.send(json.dumps({**result, 'token': token}, ensure_ascii=False).encode('utf-8'))
                 except (sqlite3.Error, OSError, ValueError):
                     return self.send(b'{"error":"workspace_read_failed"}', status=503)
@@ -133,7 +133,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                     return self.send(json.dumps(result, ensure_ascii=False, allow_nan=False).encode('utf-8'))
                 if not isinstance(body, dict) or set(body) != {'revision', 'state'}:
                     raise ValueError('invalid_body')
-                result = store.save(key if frame == '1d' else key + '|' + frame, body['revision'], body['state'])
+                result = store.shared(key, frame, revision=body['revision'], state=body['state'])
                 self.send(json.dumps(result).encode())
             except Conflict:
                 self.send(b'{"error":"workspace_changed_elsewhere"}', status=409)

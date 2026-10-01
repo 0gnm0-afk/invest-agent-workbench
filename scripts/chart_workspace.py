@@ -1,5 +1,6 @@
 """Local user chart workspaces; independent of immutable market/broker data."""
 from contextlib import closing
+import hashlib
 import json
 import math
 import re
@@ -21,11 +22,11 @@ def defaults():
         for n, c in zip([20, 50, 150, 200], COLORS)]}
 
 
-def validate(state):
+def validate(state, drawing_limit=100):
     if not isinstance(state, dict) or set(state) != {'schema', 'drawings', 'averages'} or type(state['schema']) is not int or state['schema'] != 1:
         raise ValueError('invalid_schema')
     drawings, averages = state['drawings'], state['averages']
-    if not isinstance(drawings, list) or len(drawings) > 100 or not isinstance(averages, list) or len(averages) > 6:
+    if not isinstance(drawings, list) or len(drawings) > drawing_limit or not isinstance(averages, list) or len(averages) > 6:
         raise ValueError('item_limit')
     ids, periods = set(), set()
     for average in averages:
@@ -100,6 +101,62 @@ class WorkspaceStore:
             db.execute('INSERT INTO chart_workspaces VALUES (?,?,?,?) ON CONFLICT(identity) DO UPDATE SET revision=excluded.revision,state=excluded.state,updated_at=excluded.updated_at',
                        (identity, revision + 1, body, now))
         return {'revision': revision + 1, 'updated_at': now}
+
+
+    def shared(self, identity, frame='1d', *, revision=None, state=None):
+        """Atomically migrate legacy rows once; drawings and revision are symbol-wide."""
+        if frame not in ('1d', '1w', '1mo'):
+            raise ValueError('invalid_timeframe')
+        if state is not None:
+            if type(revision) is not int or revision < 0:
+                raise ValueError('invalid_revision')
+            validate(state, drawing_limit=300)
+        with closing(self.connect()) as db, db:
+            db.execute('BEGIN IMMEDIATE')
+            db.execute('CREATE TABLE IF NOT EXISTS shared_chart_workspaces (identity TEXT PRIMARY KEY, revision INTEGER NOT NULL, payload TEXT NOT NULL, updated_at TEXT)')
+            row = db.execute('SELECT revision,payload,updated_at FROM shared_chart_workspaces WHERE identity=?', (identity,)).fetchone()
+            if row:
+                current, payload, updated = row[0], json.loads(row[1]), row[2]
+            else:
+                payload = {'drawings': [], 'averages': {}}
+                seen = {}; current = 0; updated = None
+                for period in ('1d', '1w', '1mo'):
+                    key = identity if period == '1d' else identity + '|' + period
+                    old = db.execute('SELECT revision,state,updated_at FROM chart_workspaces WHERE identity=?', (key,)).fetchone()
+                    legacy = validate(json.loads(old[1])) if old else defaults()
+                    payload['averages'][period] = legacy['averages']
+                    if old:
+                        current = max(current, old[0]); updated = max(updated or '', old[2])
+                    for drawing in legacy['drawings']:
+                        ident = drawing['id']
+                        if ident in seen:
+                            if seen[ident] == drawing:
+                                continue
+                            # Different legacy drawings with the same ID must both survive.
+                            salt = 0
+                            while ident in seen:
+                                ident = hashlib.sha256((identity + period + drawing['id'] + str(salt)).encode()).hexdigest()
+                                salt += 1
+                            drawing = dict(drawing, id=ident)
+                        seen[ident] = drawing; payload['drawings'].append(drawing)
+                # Legacy rows remain intact for recovery; future reads use this snapshot.
+            if (not isinstance(payload, dict) or set(payload) != {'drawings', 'averages'}
+                    or not isinstance(payload['averages'], dict)
+                    or set(payload['averages']) != {'1d', '1w', '1mo'}):
+                raise ValueError('invalid_shared_workspace')
+            for period in ('1d', '1w', '1mo'):
+                validate({'schema': 1, 'drawings': payload['drawings'], 'averages': payload['averages'][period]}, drawing_limit=300)
+            if state is not None:
+                if current != revision:
+                    raise Conflict('workspace_changed_elsewhere')
+                payload['drawings'] = state['drawings']
+                payload['averages'][frame] = state['averages']
+                current += 1; updated = datetime.now(timezone.utc).isoformat()
+            if row is None or state is not None:
+                db.execute('INSERT INTO shared_chart_workspaces VALUES (?,?,?,?) ON CONFLICT(identity) DO UPDATE SET revision=excluded.revision,payload=excluded.payload,updated_at=excluded.updated_at',
+                           (identity, current, json.dumps(payload, ensure_ascii=False, allow_nan=False), updated))
+        return {'revision': current, 'updated_at': updated, 'drawing_limit': 300,
+                'state': {'schema': 1, 'drawings': payload['drawings'], 'averages': payload['averages'][frame]}}
 
 
 def moving_averages(stock, periods):

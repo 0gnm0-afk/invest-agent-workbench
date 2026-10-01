@@ -19,13 +19,23 @@ window.WorkbenchWorkspace = (() => {
     if(!isCurrent())return;
     let state=packet.state,revision=packet.revision,lastSaved=JSON.stringify(state),history=[],future=[],selected=null;
     let previewDrawings=null;
-    let saving=null,timer=null,dead=false,averageVersion=0,chart,price,drawings,averageRefs=[],averageLabels=new Map(),conflict=false;
+    let saving=null,timer=null,dead=false,averageVersion=0,chart,price,drawings,averageRefs=[],averageValues={},hoverTime=null,conflict=false;
     host.innerHTML=`<div class="chart-tools" role="toolbar" aria-label="차트 작도 도구">
       <button data-tool="select" class="selected">선택·이동</button><button data-tool="trend">추세선</button><button data-tool="channel">평행 채널</button><button data-tool="horizontal">수평선</button><button data-tool="box">박스</button><button data-tool="measure">구간 측정</button>
       <span class="tool-divider"></span><button data-action="undo" title="Ctrl+Z">실행 취소</button><button data-action="redo" title="Ctrl+Shift+Z">다시 실행</button><button data-action="delete">선택 삭제</button><button data-action="save" class="primary">저장</button>
       <span class="save-state" role="status" aria-live="polite"></span></div>
       <p class="drawing-hint"></p><div class="chart-controls"><details class="averages-control"><summary>이동평균선 · ${frameName} SMA</summary><div class="average-list"></div><form class="average-add"><label>추가 기간 <input name="period" type="number" min="1" max="500" value="30" required aria-label="추가 SMA 기간"></label><button>추가</button><small>1~500봉 · 최대 6개 · 종가 기준</small></form><p class="average-status" role="status"></p></details><details class="drawing-control"><summary>작도 목록·정밀 편집 <span class="drawing-count"></span></summary><div class="drawing-list"></div><div class="drawing-editor"></div></details></div>`;
     const q=s=>host.querySelector(s),qa=s=>host.querySelectorAll(s);
+    const smaLegend=document.createElement('div');smaLegend.className='sma-legend';smaLegend.setAttribute('aria-label','이동평균선 값');
+    function renderSmaLegend() {
+      const day=hoverTime||bars.at(-1).date;
+      smaLegend.replaceChildren();
+      const caption=document.createElement('small');caption.textContent=(hoverTime?'선택 봉 ':'최근 봉 ')+day;smaLegend.append(caption);
+      for(const a of state.averages.filter(a=>a.visible)) {
+        const value=averageValues[a.period]?.get(day),span=document.createElement('span');
+        span.style.color=a.color;span.textContent='SMA'+a.period+': '+(value==null?'미준비':WorkbenchFormat.money(value,currency));smaLegend.append(span);
+      }
+    }
     function status(text,bad=false){q('.save-state').textContent=text;q('.save-state').classList.toggle('error-text',bad);}
     function dirty(){return JSON.stringify(state)!==lastSaved;}
     function schedule(){clearTimeout(timer);status('저장 대기');timer=setTimeout(()=>save(),600);}
@@ -42,12 +52,12 @@ window.WorkbenchWorkspace = (() => {
     function renderEditor() {
       const d=state.drawings.find(x=>x.id===selected),editor=q('.drawing-editor');
       if(!d){editor.innerHTML='<small>차트의 도형이나 목록을 선택하면 날짜·가격·색상을 수정할 수 있습니다.</small>';return;}
-      editor.innerHTML=`<form class="point-form"><strong>${DrawingTools.labels[d.kind]}</strong><div class="point-grid">${d.points.map((p,i)=>`<label>점 ${i+1} 날짜<input type="date" name="time${i}" value="${safe(p.time)}" required></label><label>점 ${i+1} 가격 (${currency})<input type="text" inputmode="decimal" name="price${i}" value="${WorkbenchFormat.money(p.price,currency)}" required></label>`).join('')}</div><div class="editor-style"><label>선 색상<input type="color" name="color" value="${d.color}"></label><label>굵기<select name="width">${[1,2,3,4].map(n=>`<option ${d.width===n?'selected':''}>${n}</option>`).join('')}</select></label>${['trend','channel'].includes(d.kind)?`<label><input type="checkbox" name="extend" ${d.extend?'checked':''}>오른쪽 연장</label>`:''}<button>수정 적용</button></div><p class="point-error" role="alert"></p></form>${d.kind==='measure'?`<p class="measurement-result">${safe(DrawingTools.measure(d.points,bars,currency))}</p>`:''}`;
+      editor.innerHTML=`<form class="point-form"><strong>${DrawingTools.labels[d.kind]}</strong><div class="point-grid">${d.points.map((p,i)=>`<label>점 ${i+1} 날짜<input type="date" name="time${i}" value="${safe(p.time)}" required></label><label>점 ${i+1} 가격 (${currency})<input type="text" inputmode="decimal" name="price${i}" value="${WorkbenchFormat.money(p.price,currency)}" required></label>`).join('')}</div><div class="editor-style"><label>선 색상<input type="color" name="color" value="${d.color}"></label><label>굵기<select name="width">${[1,2,3,4].map(n=>`<option ${d.width===n?'selected':''}>${n}</option>`).join('')}</select></label>${['trend','channel'].includes(d.kind)?`<label><input type="checkbox" name="extend" ${d.extend?'checked':''}>오른쪽 연장</label>`:''}<button>수정 적용</button></div><p class="point-error" role="alert"></p></form>${d.kind==='measure'?`<p class="measurement-result">${safe(DrawingTools.measure(d.points,bars,currency,frame))}</p>`:''}`;
       editor.querySelector('form').onsubmit=e=>{
         e.preventDefault();const f=new FormData(e.target),next=clone(d);
         next.points=d.points.map((p,i)=>({time:f.get('time'+i),price:f.get('price'+i)===WorkbenchFormat.money(p.price,currency)?p.price:Number(String(f.get('price'+i)).replaceAll(',',''))}));
-        if(next.points.some(p=>!bars.some(b=>b.date===p.time)||!Number.isFinite(p.price)||p.price<=0||p.price>1e15)) {q('.point-error').textContent='저장된 거래일과 0보다 큰 유효 가격을 입력하세요.';return;}
-        if(['trend','channel'].includes(d.kind)&&next.points[0].time===next.points[1].time){q('.point-error').textContent='첫 두 점은 서로 다른 거래일이어야 합니다.';return;}
+        if(next.points.some(p=>DrawingTools.index(p.time,bars,frame)==null||!Number.isFinite(p.price)||p.price<=0||p.price>1e15)) {q('.point-error').textContent='차트 기간 안의 날짜와 0보다 큰 유효 가격을 입력하세요.';return;}
+        if(['trend','channel'].includes(d.kind)&&next.points[0].time===next.points[1].time){q('.point-error').textContent='첫 두 점은 서로 다른 날짜여야 합니다.';return;}
         next.color=f.get('color');next.width=Number(f.get('width'));next.extend=f.has('extend');
         commit({...state,drawings:state.drawings.map(x=>x.id===d.id?next:x)});
       };
@@ -66,15 +76,16 @@ window.WorkbenchWorkspace = (() => {
     };
     async function loadAverages() {
       const version=++averageVersion;
-      averageRefs.forEach(ref=>chart.removeSeries(ref));averageRefs=[];averageLabels.clear();
+      averageRefs.forEach(ref=>chart.removeSeries(ref));averageRefs=[];averageValues={};renderSmaLegend();
       const requested=state.averages.filter(a=>a.visible);q('.average-status').textContent='이동평균 계산 자료를 읽는 중…';
       try {
         const r=await fetch('/api/averages/'+key+'?periods='+requested.map(a=>a.period).join(',')+'&timeframe='+frame);if(!r.ok)throw Error();const values=await r.json();
         if(dead||version!==averageVersion)return;
         for(const a of requested) {
-          const ref=chart.addSeries(LightweightCharts.LineSeries,{color:a.color,lineWidth:a.width,title:'SMA '+a.period,priceLineVisible:false,lastValueVisible:false,priceFormat:{type:'custom',minMove:currency==='KRW'?1:.01,formatter:v=>WorkbenchFormat.money(v,currency)}});
-          ref.setData(values[a.period]);averageRefs.push(ref);averageLabels.set(ref,a.period);
+          const ref=chart.addSeries(LightweightCharts.LineSeries,{color:a.color,lineWidth:a.width,title:'',priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false,priceFormat:{type:'custom',minMove:currency==='KRW'?1:.01,formatter:v=>WorkbenchFormat.money(v,currency)}});
+          ref.setData(values[a.period]);averageRefs.push(ref);averageValues[a.period]=new Map(values[a.period].map(p=>[p.time,p.value]));
         }
+        renderSmaLegend();
         const unavailable=requested.filter(a=>!(values[a.period]||[]).some(p=>p.value!=null)).map(a=>a.period);
         q('.average-status').textContent=unavailable.length?`이력 부족·결측: SMA ${unavailable.join(', ')} · 없는 값을 채우지 않습니다.`:`Python 계산 · ${frameName} 종가 SMA · 마지막 주/월은 기준일까지의 부분 봉일 수 있습니다.`;
       } catch {if(!dead&&version===averageVersion)q('.average-status').textContent='이동평균 자료 조회 실패. 설정을 다시 적용하거나 화면을 다시 여세요.';}
@@ -110,13 +121,13 @@ window.WorkbenchWorkspace = (() => {
       else if(e.key==='Delete'){e.preventDefault();remove();}
     }
     function beforeUnload(e){if(dirty()){e.preventDefault();e.returnValue='';}}
-    chart=WorkbenchCharts.create(plot,[{type:'candles',currency,label:currency,data:bars.map(b=>({time:b.date,open:b.open,high:b.high,low:b.low,close:b.close}))},{type:'volume',label:'거래량',pane:1,data:bars.map(b=>({time:b.date,...(b.volume==null?{}:{value:b.volume}),color:b.close>=b.open?'#b2d6c6':'#e8bdb8'})),options:{priceFormat:{type:'volume'}}}],{height:plot.clientHeight,legend,lastBars:126,onReady:(c,refs)=>{price=refs[0].ref;}});
+    chart=WorkbenchCharts.create(plot,[{type:'candles',currency,label:currency,options:{title:''},data:bars.map(b=>({time:b.date,open:b.open,high:b.high,low:b.low,close:b.close}))},{type:'volume',label:'거래량',pane:1,data:bars.map(b=>({time:b.date,...(b.volume==null?{}:{value:b.volume}),color:b.close>=b.open?'#b2d6c6':'#e8bdb8'})),options:{title:'',priceFormat:{type:'volume'}}}],{height:plot.clientHeight,legend,lastBars:126,onReady:(c,refs)=>{price=refs[0].ref;}});
+    plot.append(smaLegend);renderSmaLegend();
     chart.subscribeCrosshairMove(p=>{
-      if(!p.time||!legend)return;
-      const values=averageRefs.map(ref=>{const v=p.seriesData.get(ref)?.value;return 'SMA '+averageLabels.get(ref)+': '+(v==null?'결측':WorkbenchFormat.money(v,currency));});
-      if(values.length)legend.textContent+='  /  '+values.join('  /  ');
+      hoverTime=p.time?(typeof p.time==='string'?p.time:`${p.time.year}-${String(p.time.month).padStart(2,'0')}-${String(p.time.day).padStart(2,'0')}`):null;
+      renderSmaLegend();
     });
-    drawings=DrawingTools.attach({element:plot,chart,series:price,bars,currency,getDrawings:()=>previewDrawings||state.drawings,
+    drawings=DrawingTools.attach({element:plot,chart,series:price,bars,currency,timeframe:frame,drawingLimit:packet.drawing_limit||300,getDrawings:()=>previewDrawings||state.drawings,
       onHint:text=>{q('.drawing-hint').textContent=text;},
       onSelect:id=>{selected=id;qa('[data-tool]').forEach(b=>b.classList.toggle('selected',b.dataset.tool==='select'));refresh();},
       onChange:(next,options={})=>{
@@ -127,9 +138,9 @@ window.WorkbenchWorkspace = (() => {
       }});
     document.addEventListener('keydown',keyboard);window.addEventListener('beforeunload',beforeUnload);
     refresh();renderAverages();loadAverages();status(packet.updated_at?'저장본 복원됨':'새 작업 · 변경 시 자동 저장');
-    const missing=state.drawings.filter(d=>d.points.some(p=>!bars.some(b=>b.date===p.time))).length;
-    if(missing)q('.drawing-hint').textContent=`현재 가격 이력에 없는 날짜의 작도 ${missing}개는 보존하며 차트에 표시하지 않습니다. 목록에서 수정할 수 있습니다.`;
-    active={save,destroy(){dead=true;clearTimeout(timer);averageVersion++;drawings.destroy();document.removeEventListener('keydown',keyboard);window.removeEventListener('beforeunload',beforeUnload);},range(value){let from=0;if(value!=='all'){const end=new Date(bars.at(-1).date+'T00:00:00Z');end.setUTCMonth(end.getUTCMonth()-Number(value));const start=end.toISOString().slice(0,10);from=bars.findIndex(b=>b.date>=start);if(from<0)from=bars.length-1;}chart.timeScale().setVisibleLogicalRange({from,to:bars.length-1});}};
+    const missing=state.drawings.filter(d=>d.points.some(p=>DrawingTools.index(p.time,bars,frame)==null)).length;
+    if(missing)q('.drawing-hint').textContent=`현재 가격 기간 밖의 작도 ${missing}개는 보존하며 차트에 표시하지 않습니다. 목록에서 수정할 수 있습니다.`;
+    active={save,destroy(){dead=true;clearTimeout(timer);averageVersion++;drawings.destroy();smaLegend.remove();document.removeEventListener('keydown',keyboard);window.removeEventListener('beforeunload',beforeUnload);},range(value){let from=0;if(value!=='all'){const end=new Date(bars.at(-1).date+'T00:00:00Z');end.setUTCMonth(end.getUTCMonth()-Number(value));const start=end.toISOString().slice(0,10);from=bars.findIndex(b=>b.date>=start);if(from<0)from=bars.length-1;}chart.timeScale().setVisibleLogicalRange({from,to:bars.length-1});}};
     return active;
   }
   return {mount,closeActive};
