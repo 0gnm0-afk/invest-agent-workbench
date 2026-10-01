@@ -1,7 +1,7 @@
 /* Date/price anchors; SVG projection follows the Lightweight Charts public scales. */
 window.DrawingTools = (() => {
-  const count = {trend:2, channel:3, horizontal:1, box:2, measure:2};
-  const labels = {trend:'추세선',channel:'평행 채널',horizontal:'수평선',box:'박스',measure:'구간 측정'};
+  const count = {trend:2, channel:3, horizontal:1, box:2, measure:2, riskreward:3};
+  const labels = {trend:'추세선',channel:'평행 채널',horizontal:'수평선',box:'박스',measure:'구간 측정',riskreward:'손익비'};
   const clone = x => JSON.parse(JSON.stringify(x));
   function channel(points) {
     const [a,b,c] = points, slope = (b.y-a.y)/(b.x-a.x);
@@ -39,6 +39,16 @@ window.DrawingTools = (() => {
     const ia=index(a.time,bars,frame), ib=index(b.time,bars,frame);
     const days=Math.round((Date.parse(b.time)-Date.parse(a.time))/86400000);
     return `${delta>=0?'+':''}${WorkbenchFormat.money(delta,currency)} ${currency} · ${delta>=0?'+':''}${(delta/a.price*100).toFixed(2)}% · ${ia==null||ib==null?'미확인':Math.abs(Math.round(ib)-Math.round(ia))}봉 간격 · ${Math.abs(days)}일`;
+  }
+  function riskReward(points,currency) {
+    if(points.length!==3)return null;
+    const [entry,stop,target]=points.map(p=>p.price);
+    if(!points.every(p=>Number.isFinite(p.price)&&p.price>0&&p.price<=1e15)||!(stop<entry&&entry<target||target<entry&&entry<stop)||new Set(points.map(p=>p.time)).size<2)return null;
+    const risk=Math.abs(entry-stop),reward=Math.abs(target-entry),ratio=reward/risk;
+    return {entry,stop,target,risk,reward,ratio,direction:stop<entry?'매수':'매도',
+      label:'손익비 1 : '+ratio.toFixed(2),
+      loss:'손실 '+WorkbenchFormat.money(risk,currency)+' '+currency+' ('+(risk/entry*100).toFixed(2)+'%)',
+      profit:'수익 '+WorkbenchFormat.money(reward,currency)+' '+currency+' ('+(reward/entry*100).toFixed(2)+'%)'};
   }
   function attach({element, chart, series, bars, currency, timeframe='1d', drawingLimit=300, getDrawings, onChange, onSelect, onHint}) {
     const NS='http://www.w3.org/2000/svg';
@@ -82,6 +92,17 @@ window.DrawingTools = (() => {
             line({x:0,y:a.y},{x:w,y:a.y});
             const text=node('text',{x:8,y:a.y-7,fill:stroke,'font-size':12,'pointer-events':'none'},g);
             text.textContent=WorkbenchFormat.money(d.points[0].price,currency)+' '+currency;
+          } else if(d.kind==='riskreward') {
+            const result=riskReward(d.points,currency);if(!result)continue;
+            const left=Math.min(...p.map(v=>v.x)),right=Math.max(...p.map(v=>v.x)),entry=p[0],stop=p[1],target=p[2];
+            for(const [edge,color] of [[stop,'#ee6677'],[target,'#36c595']]){
+              node('rect',{x:left,y:Math.min(entry.y,edge.y),width:Math.max(1,right-left),height:Math.abs(edge.y-entry.y),fill:color,'fill-opacity':.18,stroke:color,'stroke-width':d.width,'pointer-events':mode==='select'?'all':'none'},g);
+            }
+            line({x:left,y:entry.y},{x:right,y:entry.y},'5 3');
+            const texts=[result.direction+' · '+result.label,result.profit,result.loss];
+            const tx=Math.max(6,Math.min(left+6,w-235)),ty=Math.max(16,Math.min(Math.min(stop.y,target.y)-42,h-48));
+            const text=node('text',{x:tx,y:ty,fill:'#e9f2ff','font-size':11,'paint-order':'stroke',stroke:'#202630','stroke-width':3,'pointer-events':'none'},g);
+            texts.forEach((t,i)=>node('tspan',{x:tx,dy:i?15:0},text).textContent=t);
           } else if(d.kind==='box'||d.kind==='measure') {
             node('rect',{x:Math.min(a.x,b.x),y:Math.min(a.y,b.y),width:Math.max(1,Math.abs(b.x-a.x)),height:Math.max(1,Math.abs(b.y-a.y)),fill:stroke,'fill-opacity':.10,stroke,'stroke-width':d.width,'pointer-events':mode==='select'?'all':'none'},g);
             if(d.kind==='measure') {
@@ -111,7 +132,7 @@ window.DrawingTools = (() => {
     function select(id) {mode='select';draft=[];hover=null;selected=id;onSelect(id);signature='';}
     function setMode(next) {
       mode=next;draft=[];hover=null;drag=null;signature='';
-      onHint(count[mode]?`${labels[mode]}: ${count[mode]}개 지점을 차례로 클릭하세요. Esc로 취소.`:'선택한 도형의 원형 점은 끝점 수정, 선·영역은 전체 이동입니다. 빈 영역은 차트 이동·확대에 사용합니다.');
+      onHint(mode==='riskreward'?'손익비: 진입가 → 손절가 → 목표가 순서로 클릭하세요. 가로 폭은 세 점의 날짜 범위입니다.':count[mode]?`${labels[mode]}: ${count[mode]}개 지점을 차례로 클릭하세요. Esc로 취소.`:'선택한 도형의 원형 점은 끝점 수정, 선·영역은 전체 이동입니다. 빈 영역은 차트 이동·확대에 사용합니다.');
     }
     function down(e) {
       if(e.button!==0)return;
@@ -119,12 +140,14 @@ window.DrawingTools = (() => {
       if(count[mode]) {
         e.preventDefault();e.stopPropagation();
         if((mode==='trend'||mode==='channel')&&draft.length===1&&draft[0].time===p.time){onHint('두 번째 점은 다른 날짜를 선택하세요.');return;}
+        if(mode==='riskreward'&&draft.length===1&&draft[0].price===p.price){onHint('손절가는 진입가와 달라야 합니다.');return;}
+        if(mode==='riskreward'&&draft.length===2&&!riskReward([...draft,p],currency)){onHint('목표가는 진입가를 기준으로 손절가의 반대편에 두고, 날짜 범위를 넓혀 주세요.');return;}
         draft.push(p);
         if(draft.length===count[mode]) {
           if(getDrawings().length>=drawingLimit){draft=[];onHint(`종목당 최대 ${drawingLimit}개입니다. 필요 없는 도형을 삭제하세요.`);return;}
           const drawing={id:crypto.randomUUID(),kind:mode,points:clone(draft),color:'#218775',width:2,extend:false};
           onChange([...getDrawings(),drawing]);setMode('select');select(drawing.id);
-        }else onHint(`${labels[mode]}: ${count[mode]-draft.length}개 지점을 더 클릭하세요.`);
+        }else if(mode==='riskreward')onHint(draft.length===1?'손익비: 손절가를 클릭하세요.':'손익비: 진입가 반대편의 목표가를 클릭하세요.');else onHint(`${labels[mode]}: ${count[mode]-draft.length}개 지점을 더 클릭하세요.`);
       } else {
         const group=e.target.closest('[data-id]'),id=group?.getAttribute('data-id');
         if(!id)return;
@@ -148,6 +171,7 @@ window.DrawingTools = (() => {
         d.points=d.points.map((v,i)=>({time:delta===0?v.time:timeAt(ids[i]+delta,bars,timeframe),price:v.price+priceDelta}));
       }
       if(d.points.some(v=>v.price<=0)||((d.kind==='trend'||d.kind==='channel')&&d.points[0].time===d.points[1].time))return;
+      if(d.kind==='riskreward'&&!riskReward(d.points,currency))return;
       drag.moved=true;
       onChange(drag.all.map(v=>v.id===d.id?d:v),{preview:true});
     }
@@ -166,5 +190,5 @@ window.DrawingTools = (() => {
     setMode('select');frame=requestAnimationFrame(render);
     return {setMode,select,cancel,destroy(){removed=true;cancelAnimationFrame(frame);svg.remove();}};
   }
-  return {attach,measure,channel,labels,count,index,timeAt,coordinate};
+  return {attach,measure,riskReward,channel,labels,count,index,timeAt,coordinate};
 })();

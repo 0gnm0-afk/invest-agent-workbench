@@ -9,7 +9,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 COLORS = ['#dd9500', '#2271b2', '#8254a8', '#687780']
-KINDS = {'trend': 2, 'channel': 3, 'horizontal': 1, 'box': 2, 'measure': 2}
+KINDS = {'trend': 2, 'channel': 3, 'horizontal': 1, 'box': 2, 'measure': 2, 'riskreward': 3}
 
 
 class Conflict(Exception):
@@ -60,6 +60,12 @@ def validate(state, drawing_limit=100):
                 raise ValueError('invalid_price')
         if kind in ('trend', 'channel') and points[0]['time'] == points[1]['time']:
             raise ValueError('distinct_dates_required')
+        if kind == 'riskreward':
+            entry, stop, target = (p['price'] for p in points)
+            if not (stop < entry < target or target < entry < stop):
+                raise ValueError('riskreward_levels_must_straddle_entry')
+            if len({p['time'] for p in points}) < 2:
+                raise ValueError('riskreward_date_span_required')
         style(drawing)
     return state
 
@@ -155,7 +161,7 @@ class WorkspaceStore:
             if row is None or state is not None:
                 db.execute('INSERT INTO shared_chart_workspaces VALUES (?,?,?,?) ON CONFLICT(identity) DO UPDATE SET revision=excluded.revision,payload=excluded.payload,updated_at=excluded.updated_at',
                            (identity, current, json.dumps(payload, ensure_ascii=False, allow_nan=False), updated))
-        return {'revision': current, 'updated_at': updated, 'drawing_limit': 300,
+        return {'revision': current, 'updated_at': updated, 'drawing_limit': 300, 'drawing_kinds': list(KINDS),
                 'state': {'schema': 1, 'drawings': payload['drawings'], 'averages': payload['averages'][frame]}}
 
 

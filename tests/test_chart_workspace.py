@@ -27,6 +27,29 @@ class Workspaces(unittest.TestCase):
         original=copy.deepcopy(state);self.store.save('KR:AAA',0,state)
         loaded=WorkspaceStore(self.path).read('KR:AAA')
         self.assertEqual(loaded['state'],original);self.assertEqual(loaded['revision'],1);self.assertEqual(state,original)
+    def test_riskreward_saved_shared_reopened_and_conflict(self):
+        state=defaults();state['drawings']=[drawing(ident='existing'),dict(drawing('channel','rr'),kind='riskreward',points=[{'time':'2026-09-21','price':100},{'time':'2026-09-22','price':90},{'time':'2026-09-23','price':120}])]
+        self.store.shared('US:R',revision=0,state=state)
+        for frame in ('1d','1w','1mo'):
+            packet=WorkspaceStore(self.path).shared('US:R',frame)
+            self.assertEqual(packet['state']['drawings'],state['drawings']);self.assertIn('riskreward',packet['drawing_kinds'])
+        with self.assertRaises(Conflict):self.store.shared('US:R',revision=0,state=state)
+        state['drawings'].pop();self.store.shared('US:R',revision=1,state=state)
+        self.assertEqual(self.store.shared('US:R')['state']['drawings'],[drawing(ident='existing')])
+    def test_riskreward_invalid_geometry_rejected(self):
+        for prices in [(100,100,120),(100,90,80),(100,110,120),(100,90,100)]:
+            d=dict(drawing('channel'),kind='riskreward')
+            for p,v in zip(d['points'],prices):p['price']=v
+            with self.assertRaises(ValueError):validate({**defaults(),'drawings':[d]})
+        d=dict(drawing('channel'),kind='riskreward')
+        for p,v in zip(d['points'],[100,90,120]):p.update(time='2026-09-21',price=v)
+        with self.assertRaises(ValueError):validate({**defaults(),'drawings':[d]})
+    def test_riskreward_short_full_precision(self):
+        d=dict(drawing('channel'),kind='riskreward')
+        for p,v in zip(d['points'],[100.1234,110.2345,80.0123]):p['price']=v
+        state={**defaults(),'drawings':[d]};self.store.save('US:R',0,state)
+        self.assertEqual(self.store.read('US:R')['state'],state)
+
     def test_symbol_isolation(self):
         state=defaults();state['drawings']=[drawing()];self.store.save('KR:AAA',0,state)
         self.assertEqual(self.store.read('US:AAA')['revision'],0)

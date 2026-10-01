@@ -97,7 +97,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                 if value is None:
                     value = {'state': 'unavailable', 'reason': 'saved_price_series_missing', 'bars': []}
                 return self.send(json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8'))
-            names = {'/': 'index.html', '/app.js': 'app.js', '/financials.js': 'financials.js', '/financials.css': 'financials.css', '/style.css': 'style.css',
+            names = {'/': 'index.html', '/app.js': 'app.js', '/tooltips.js': 'tooltips.js', '/financials.js': 'financials.js', '/financials.css': 'financials.css', '/style.css': 'style.css',
                      '/stock-chart.js': 'stock-chart.js', '/drawing-tools.js': 'drawing-tools.js', '/chart-workspace.js': 'chart-workspace.js', '/chart-tools.css': 'chart-tools.css', '/format.js': 'format.js', '/charts.js': 'charts.js', '/workbench.png': 'workbench.png',
                      '/vendor/lightweight-charts.js': 'vendor/lightweight-charts.js',
                      '/vendor/NOTICE': 'vendor/NOTICE', '/vendor/LICENSE': 'vendor/LICENSE'}
