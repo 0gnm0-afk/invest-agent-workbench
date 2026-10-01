@@ -1,7 +1,7 @@
 """Offline audit of every saved stock and its exact source candle pages."""
 import argparse
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import gzip
 import hashlib
 import json
@@ -14,6 +14,11 @@ from us_toss_history import read_checked, packed, parse_page, write
 def verify(root, require_finished=False):
     root=Path(root)
     config=read_checked(root/'collection.json')
+    market=config.get('markets',['US'])[0]
+    assert market in ('KR','US'), 'unsupported_market'
+    currency='KRW' if market=='KR' else 'USD'
+    offset='+09:00' if market=='KR' else '-04:00'
+    calendar_name='XKRX' if market=='KR' else 'XNYS'
     universe=read_checked(root/'universe.json')
     targets={r['symbol']:r for r in universe['rows']}
     packets={}
@@ -27,12 +32,34 @@ def verify(root, require_finished=False):
         packets[d['symbol']]=f
         if d.get('first'):first_dates.append(d['first'])
     first=min(first_dates,default=config['end'])
-    calendar=xcals.get_calendar('XNYS',start=first,end=config['end'])
+    calendar_start=min(first,(datetime.fromisoformat(config['end'])-timedelta(days=1)).date().isoformat())
+    calendar=xcals.get_calendar(calendar_name,start=calendar_start,end=config['end'])
     sessions={s.date().isoformat() for s in calendar.sessions}
     counts=Counter();rows=[];earliest=Counter();total=0;raw_count=0
     manifest={}
+    if universe.get('exchanges'):
+        expected={}
+        expected_exchanges=['KOSPI','KOSDAQ'] if market=='KR' else ['NASDAQ','NYSE']
+        assert sorted(universe['exchanges'])==sorted(expected_exchanges), 'listing_exchanges_mismatch'
+        for exchange,meta in universe['exchanges'].items():
+            key=meta['response'];p=root/'responses'/(key+'.json.gz')
+            raw=p.read_bytes();packet=json.loads(gzip.decompress(raw))
+            request=['/api/v1/stocks/all',dict(market=exchange,status='ACTIVE',securityType='STOCK',commonShare='true')]
+            assert packet['request']==request and hashlib.sha256(packed(request)).hexdigest()==key, 'listing_request_mismatch'
+            assert hashlib.sha256(packed(packet['payload'])).hexdigest()==packet['sha256'], 'listing_payload_mismatch'
+            listings=packet['payload']['result']
+            assert len(listings)==meta['count'], 'listing_count_mismatch'
+            for item in listings:
+                symbol=item['symbol'];row={**item,'market':market,'listing_exchange':exchange}
+                if market=='KR':
+                    row.update(symbol=symbol+('.KS' if exchange=='KOSPI' else '.KQ'),provider_symbol=symbol)
+                assert row['symbol'] not in expected, 'duplicate_listing'
+                expected[row['symbol']]=row
+            manifest[str(p.relative_to(root))]=hashlib.sha256(raw).hexdigest()
+        assert targets==expected and len(universe['rows'])==len(expected), 'listing_union_mismatch'
     for symbol,saved_path in sorted(packets.items()):
         d=read_checked(saved_path)
+        assert d['market']==market and d['currency']==currency, 'market_currency_mismatch'
         merged={};last_cursor=None
         for n,key in enumerate(d['responses']):
             p=root/'responses'/(key+'.json.gz')
@@ -40,11 +67,11 @@ def verify(root, require_finished=False):
             path,params=packet['request']
             assert hashlib.sha256(packed(packet['request'])).hexdigest()==key, 'request_hash_mismatch'
             assert hashlib.sha256(packed(packet['payload'])).hexdigest()==packet['sha256'], 'payload_hash_mismatch'
-            assert path=='/api/v1/candles' and params['symbol']==symbol and params['interval']=='1d' and params['adjusted']=='true', 'unexpected_request'
-            assert params['before']==(config['end']+'T23:59:59-04:00' if n==0 else last_cursor), 'broken_page_chain'
+            assert path=='/api/v1/candles' and params['symbol']==d['listing'].get('provider_symbol',symbol) and params['interval']=='1d' and params['adjusted']=='true', 'unexpected_request'
+            assert params['before']==(config['end']+'T23:59:59'+offset if n==0 else last_cursor), 'broken_page_chain'
             manifest[str(p.relative_to(root))]=hashlib.sha256(raw).hexdigest();raw_count+=1
             try:
-                page,last_cursor=parse_page(packet['payload'],config['end'])
+                page,last_cursor=parse_page(packet['payload'],config['end'],currency)
                 bad_cursor = bool(last_cursor) and datetime.fromisoformat(last_cursor)>=datetime.fromisoformat(params['before'])
                 for b in page:
                     assert b['date'] not in merged or merged[b['date']]==b, 'conflicting_overlap'
@@ -60,6 +87,10 @@ def verify(root, require_finished=False):
             assert d.get('provider_end_reached') and d['responses'] and last_cursor is None, 'history_not_exhausted'
         dates=[b['date'] for b in d['bars']]
         assert dates==sorted(set(dates)), 'invalid_saved_dates'
+        assert d['first']==(dates[0] if dates else None) and d['last']==(dates[-1] if dates else None), 'saved_date_bounds_mismatch'
+        assert d['state'] in ('received','empty','failed'), 'invalid_collection_state'
+        assert d['state']!='received' or dates, 'received_without_bars'
+        assert d['state']!='empty' or not dates, 'empty_with_bars'
         invalid=[b['date'] for b in d['bars'] if not 0<b['low']<=min(b['open'],b['close'])<=max(b['open'],b['close'])<=b['high']]
         missing=sorted(x for x in sessions if dates and dates[0]<=x<=dates[-1] and x not in merged)
         non_sessions=sorted(set(dates)-sessions)
@@ -71,7 +102,7 @@ def verify(root, require_finished=False):
         manifest[str(series_path.relative_to(root))]=hashlib.sha256(series_path.read_bytes()).hexdigest()
     not_attempted=sorted(set(targets)-set(packets))
     if require_finished:assert not not_attempted, 'unattempted_symbols'
-    summary=dict(verified_at=datetime.now(timezone.utc).isoformat(),scope=config['scope'],requested=len(targets),verified=len(packets),counts=dict(counts),not_attempted=not_attempted,total_bars=total,source_pages=raw_count,earliest=min(earliest,default=None),latest=config['end'],start_distribution=dict(sorted(earliest.items())),with_invalid_ohlc=sum(bool(r['invalid_ohlc']) for r in rows),with_internal_gaps=sum(bool(r['missing_sessions']) for r in rows),with_non_sessions=sum(bool(r['non_sessions']) for r in rows),without_latest_session=sum(r['latest_session_missing'] for r in rows),before_2016=sum(bool(r['first']) and r['first']<'2016-01-01' for r in rows),calendar='exchange_calendars XNYS '+xcals.__version__,integrity='PASS',all_attempted=not not_attempted)
+    summary=dict(verified_at=datetime.now(timezone.utc).isoformat(),scope=config['scope'],requested=len(targets),verified=len(packets),counts=dict(counts),not_attempted=not_attempted,total_bars=total,source_pages=raw_count,earliest=min(earliest,default=None),latest=config['end'],start_distribution=dict(sorted(earliest.items())),with_invalid_ohlc=sum(bool(r['invalid_ohlc']) for r in rows),with_internal_gaps=sum(bool(r['missing_sessions']) for r in rows),with_non_sessions=sum(bool(r['non_sessions']) for r in rows),without_latest_session=sum(r['latest_session_missing'] for r in rows),before_2016=sum(bool(r['first']) and r['first']<'2016-01-01' for r in rows),calendar='exchange_calendars '+calendar_name+' '+xcals.__version__,integrity='PASS',all_attempted=not not_attempted)
     write(root/'coverage.json',rows)
     write(root/'verification.json',summary)
     for name in ('collection.json','universe.json','coverage.json','verification.json'):

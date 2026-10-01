@@ -1,4 +1,4 @@
-"""Resumable US common-stock history collection, isolated from dashboard runs."""
+"""Resumable common-stock history collection, isolated from dashboard runs."""
 import argparse
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -39,14 +39,14 @@ def read_checked(path):
     return packet['data']
 
 
-def parse_page(payload, end):
+def parse_page(payload, end, currency="USD"):
     body = payload.get('result')
     if not isinstance(body, dict) or not isinstance(body.get('candles'), list):
         raise ValueError('invalid_candle_envelope')
     bars, stamps = [], []
     for c in body['candles']:
         stamp = datetime.fromisoformat(c['timestamp'])
-        if stamp.tzinfo is None or c.get('currency') != 'USD':
+        if stamp.tzinfo is None or c.get('currency') != currency:
             raise ValueError('invalid_timestamp_or_currency')
         day = stamp.date().isoformat()
         stamps.append(stamp)
@@ -73,7 +73,12 @@ def parse_page(payload, end):
 
 
 class Collector:
-    def __init__(self, root, client=None):
+    def __init__(self, root, client=None, market="US"):
+        if market not in ("US", "KR"): raise ValueError("unsupported_market")
+        self.market = market
+        self.currency = "KRW" if market == "KR" else "USD"
+        self.exchanges = ("KOSPI", "KOSDAQ") if market == "KR" else ("NASDAQ", "NYSE")
+        self.offset = "+09:00" if market == "KR" else "-04:00"
         self.root = Path(root)
         self.log_lock = threading.Lock()
         self.client = client
@@ -111,8 +116,9 @@ class Collector:
         if saved.exists():
             return read_checked(saved)
         by_symbol = {}
+        provider_symbols = set()
         exchanges = {}
-        for exchange in ('NASDAQ','NYSE'):
+        for exchange in self.exchanges:
             params = dict(market=exchange,status='ACTIVE',securityType='STOCK',commonShare='true')
             payload,key = self.get('/api/v1/stocks/all',params)
             rows = payload.get('result')
@@ -127,9 +133,15 @@ class Collector:
                 if r.get('securityType') not in (None,'STOCK') or r.get('isCommonShare') is False:
                     raise ValueError('listing_filter_mismatch')
                 seen.add(symbol)
-                if symbol in by_symbol:
+                if symbol in provider_symbols:
                     raise ValueError('cross_exchange_symbol_collision')
-                by_symbol[symbol] = {**r,'market':'US','listing_exchange':exchange}
+                provider_symbols.add(symbol)
+                if self.market == 'KR':
+                    if not re.fullmatch(r'[0-9A-Z]{6}', symbol): raise ValueError('invalid_kr_symbol')
+                    normalized = symbol + ('.KS' if exchange == 'KOSPI' else '.KQ')
+                    by_symbol[normalized] = {**r, 'symbol': normalized, 'provider_symbol': symbol, 'market': self.market, 'listing_exchange': exchange}
+                else:
+                    by_symbol[symbol] = {**r,'market':self.market,'listing_exchange':exchange}
         value = dict(rows=[by_symbol[s] for s in sorted(by_symbol)],exchanges=exchanges,observed_at=datetime.now(timezone.utc).isoformat())
         save_checked(saved,value)
         return value
@@ -139,19 +151,19 @@ class Collector:
         saved = self.root/'series'/(hashlib.sha256(symbol.encode()).hexdigest()+'.json')
         if saved.exists():
             old = read_checked(saved)
-            if old['symbol'] != symbol or old['requested_end'] != end:
+            if old['symbol'] != symbol or old['requested_end'] != end or old['market'] != self.market or old['listing'] != item:
                 raise ValueError('saved_identity_mismatch')
             if not retry or old['state'] != 'failed':
                 return old
-        result = dict(symbol=symbol,market='US',currency='USD',listing=item,requested_end=end,provider='Toss OpenAPI candles',price_basis='toss_adjusted_ohlc_no_order_authority',source_url='https://openapi.tossinvest.com/api/v1/candles',collected_at=datetime.now(timezone.utc).isoformat())
-        before = end+'T23:59:59-04:00'
+        result = dict(symbol=symbol,market=self.market,currency=self.currency,listing=item,requested_end=end,provider='Toss OpenAPI candles',price_basis='toss_adjusted_ohlc_no_order_authority',source_url='https://openapi.tossinvest.com/api/v1/candles',collected_at=datetime.now(timezone.utc).isoformat())
+        before = end+'T23:59:59'+self.offset
         bars, sources, cursors = {}, [], set()
         try:
             for _ in range(300):
-                params = dict(symbol=symbol,interval='1d',count=200,adjusted='true',before=before)
+                params = dict(symbol=item.get('provider_symbol', symbol),interval='1d',count=200,adjusted='true',before=before)
                 payload,key = self.get('/api/v1/candles',params)
                 sources.append(key)
-                rows,cursor = parse_page(payload,end)
+                rows,cursor = parse_page(payload,end,self.currency)
                 for b in rows:
                     if b['date'] in bars and bars[b['date']] != b:
                         raise ValueError('conflicting_overlap')
@@ -177,18 +189,19 @@ class Collector:
         return {'state': result['state'], 'bar_count': len(result['bars'])}
 
 
-def run(root,workers=6,retry=False):
+def run(root,workers=6,retry=False,market="US"):
     root=Path(root);root.mkdir(parents=True,exist_ok=True)
     with instance_lock(root/'lock'):
-        collector=Collector(root)
+        collector=Collector(root,market=market)
         config_path=root/'collection.json'
         if config_path.exists():
             config=read_checked(config_path)
+            if config.get("markets", ["US"]) != [market]: raise ValueError("collection_market_mismatch")
         else:
             now=datetime.now(timezone.utc)
             cap=(now.astimezone(ZoneInfo('Asia/Seoul')).date()-timedelta(days=1)).isoformat()
-            end=max(s for s in completed_sessions('US',now) if s<=cap)
-            config=dict(schema=1,started_at=now.isoformat(),end=end,start='provider_earliest_available',markets=['US'],exchanges=['NASDAQ','NYSE'],scope='ACTIVE STOCK commonShare=true; current provider listing, not historical delisted universe',adjusted=True)
+            end=max(s for s in completed_sessions(market,now) if s<=cap)
+            config=dict(schema=1,started_at=now.isoformat(),end=end,start='provider_earliest_available',markets=[market],exchanges=list(collector.exchanges),scope='ACTIVE STOCK commonShare=true; current provider listing, not historical delisted universe',adjusted=True)
             save_checked(config_path,config)
         universe=collector.universe();items=universe['rows']
         counts=Counter();total_bars=0
@@ -205,6 +218,6 @@ def run(root,workers=6,retry=False):
 
 
 if __name__=='__main__':
-    parser=argparse.ArgumentParser();parser.add_argument('--output',required=True);parser.add_argument('--workers',type=int,default=6);parser.add_argument('--retry-errors',action='store_true');args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--output',required=True);parser.add_argument('--market',choices=['US','KR'],default='US');parser.add_argument('--workers',type=int,default=6);parser.add_argument('--retry-errors',action='store_true');args=parser.parse_args()
     if not 1<=args.workers<=8:parser.error('workers must be 1..8')
-    run(args.output,args.workers,args.retry_errors)
+    run(args.output,args.workers,args.retry_errors,args.market)
