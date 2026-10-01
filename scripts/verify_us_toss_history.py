@@ -17,19 +17,22 @@ def verify(root, require_finished=False):
     universe=read_checked(root/'universe.json')
     targets={r['symbol']:r for r in universe['rows']}
     packets={}
+    first_dates=[]
     for f in (root/'series').glob('*.json'):
         d=read_checked(f)
         assert d['symbol'] not in packets, 'duplicate_saved_symbol'
         assert f.stem==hashlib.sha256(d['symbol'].encode()).hexdigest(), 'filename_identity_mismatch'
         assert d['listing']==targets[d['symbol']], 'listing_identity_mismatch'
         assert d['requested_end']==config['end'], 'cutoff_mismatch'
-        packets[d['symbol']]=d
-    first=min((d['first'] for d in packets.values() if d.get('first')),default=config['end'])
+        packets[d['symbol']]=f
+        if d.get('first'):first_dates.append(d['first'])
+    first=min(first_dates,default=config['end'])
     calendar=xcals.get_calendar('XNYS',start=first,end=config['end'])
     sessions={s.date().isoformat() for s in calendar.sessions}
     counts=Counter();rows=[];earliest=Counter();total=0;raw_count=0
     manifest={}
-    for symbol,d in sorted(packets.items()):
+    for symbol,saved_path in sorted(packets.items()):
+        d=read_checked(saved_path)
         merged={};last_cursor=None
         for n,key in enumerate(d['responses']):
             p=root/'responses'/(key+'.json.gz')
