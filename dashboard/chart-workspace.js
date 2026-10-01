@@ -17,6 +17,12 @@ window.WorkbenchWorkspace = (() => {
     try {const r=await fetch(url);if(!r.ok)throw Error();packet=await r.json();}
     catch {host.innerHTML='<div class="notice error">작도 저장소를 읽지 못했습니다. 원본을 보호하기 위해 편집을 열지 않았습니다. 대시보드를 다시 실행한 뒤 재시도하세요.</div>';return;}
     if(!isCurrent())return;
+    if(packet.drawing_limit!==300){
+      host.innerHTML='<div class="notice error" role="alert">이 창의 대시보드 서버가 이전 버전이라 작도를 공유할 수 없습니다. 저장한 작도는 보존돼 있습니다. 바탕화면 투자 대시보드를 새로 실행해 열린 창을 사용하세요.</div>';
+      const historyStatus=document.querySelector('#history-status');
+      if(historyStatus)historyStatus.textContent='이전 서버 · 일/주/월 작도 공유 미적용 · 대시보드를 새로 실행하세요.';
+      return;
+    }
     let state=packet.state,revision=packet.revision,lastSaved=JSON.stringify(state),history=[],future=[],selected=null;
     let previewDrawings=null;
     let saving=null,timer=null,dead=false,averageVersion=0,chart,price,drawings,averageRefs=[],averageValues={},hoverTime=null,conflict=false;
