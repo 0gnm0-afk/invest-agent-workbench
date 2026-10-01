@@ -1,6 +1,7 @@
 /* Common stored-series renderer: price, sector and future evidence/account histories. */
 window.WorkbenchCharts = (() => {
   const mounted = [];
+  function remove(chart) { const i=mounted.indexOf(chart); if(i>=0){mounted.splice(i,1);chart.remove();} }
   function clear() { mounted.splice(0).forEach(c => c.remove()); }
   function create(el, series, options = {}) {
     if (!window.LightweightCharts) { el.textContent = '차트 라이브러리를 불러오지 못했습니다.'; return; }
@@ -31,5 +32,5 @@ window.WorkbenchCharts = (() => {
     mounted.push(chart); return chart;
   }
   function lineData(rows, key, scale = 1) { return rows.map(r => ({time: r.date, ...(r[key] == null ? {} : {value: r[key] * scale})})); }
-  return {create, clear, lineData};
+  return {create, clear, remove, lineData};
 })();

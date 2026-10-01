@@ -1,0 +1,141 @@
+"""Immutable selected-stock snapshots, explicit refresh, cached reads and cross-process locking."""
+import hashlib
+import json
+import os
+import re
+import threading
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from financial_sources import Collector, SourceError, settings
+from financial_model import VERSION, dart_normalize, sec_normalize, summarize
+
+ROOT = Path(__file__).resolve().parents[1]
+
+def packed(v):
+    return json.dumps(v,ensure_ascii=False,sort_keys=True,allow_nan=False).encode('utf-8')
+
+def save(path,v,atomic=False):
+    path=Path(path);path.parent.mkdir(parents=True,exist_ok=True)
+    if atomic:
+        tmp=path.with_name(path.name+'.'+uuid.uuid4().hex+'.tmp');tmp.write_bytes(packed(v));os.replace(tmp,path)
+    else:
+        with path.open('xb') as f:f.write(packed(v))
+
+def now(): return datetime.now(timezone.utc).isoformat()
+
+def lock_file(path):
+    path.parent.mkdir(parents=True,exist_ok=True)
+    f=path.open('a+b');f.seek(0);f.write(b'0');f.flush();f.seek(0)
+    try:
+        if os.name=='nt':
+            import msvcrt
+            msvcrt.locking(f.fileno(),msvcrt.LK_NBLCK,1)
+        else:
+            import fcntl
+            fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        return f
+    except OSError:
+        f.close();return None
+
+def unlock(f):
+    f.seek(0)
+    if os.name=='nt':
+        import msvcrt
+        msvcrt.locking(f.fileno(),msvcrt.LK_UNLCK,1)
+    else:
+        import fcntl
+        fcntl.flock(f,fcntl.LOCK_UN)
+    f.close()
+
+class FinancialStore:
+    def __init__(self, root=None):
+        self.root=Path(root or ROOT/'runtime/financials')
+        self.mutex=threading.Lock()
+
+    def folder(self,key):
+        if not re.fullmatch(r'(KR:[0-9]{6}(?:\.KS|\.KQ)?|US:[A-Z0-9][A-Z0-9.\-]{0,14})',key):
+            raise ValueError('invalid_financial_symbol')
+        return self.root/key.replace(':','-')
+
+    def read(self,key):
+        folder=self.folder(key);status={};result=None
+        try:
+            status=json.loads((folder/'attempt.json').read_bytes())
+        except FileNotFoundError: pass
+        except (ValueError,OSError):status=dict(state='failed',error='status_unreadable')
+        try:
+            pointer=json.loads((folder/'latest.json').read_bytes());sid=pointer['snapshot']
+            if not re.fullmatch('[a-f0-9]{32}',sid):raise ValueError('invalid_snapshot')
+            base=folder/'snapshots'/sid
+            manifest=json.loads((base/'manifest.json').read_bytes())
+            if hashlib.sha256((base/'manifest.json').read_bytes()).hexdigest()!=pointer['manifest_sha256']:raise ValueError('manifest_hash_mismatch')
+            raw=(base/'result.json').read_bytes()
+            if hashlib.sha256(raw).hexdigest()!=manifest['files']['result.json']:raise ValueError('result_hash_mismatch')
+            result=json.loads(raw)
+        except FileNotFoundError: pass
+        except (OSError,ValueError,KeyError):status=dict(state='failed',error='cached_snapshot_integrity_failed')
+        if status.get('state')=='running':
+            lease=lock_file(folder/'request.lock')
+            if lease:
+                unlock(lease);status={**status,'state':'interrupted','error':'previous_collection_interrupted'}
+        conf=settings()
+        return dict(key=key,state=status.get('state','saved' if result else 'not_requested'),attempt=status,result=result,
+                    config=dict(dart_ready=bool(conf.get('DART_API_KEY')),sec_ready=bool(conf.get('SEC_USER_AGENT'))),
+                    reused=result is not None)
+
+    def start(self,key,stock,refresh=False):
+        folder=self.folder(key)
+        with self.mutex:
+            cached=self.read(key)
+            if cached['result'] and not refresh:return cached
+            lease=lock_file(folder/'request.lock')
+            if lease is None:return {**cached,'state':'running'}
+            save(folder/'attempt.json',dict(state='running',started_at=now(),stage='공식 자료 요청 준비'),atomic=True)
+            thread=threading.Thread(target=self._work,args=(key,stock,lease),daemon=True)
+            thread.start()
+        return self.read(key)
+
+    def _work(self,key,stock,lease,seed=None):
+        folder=self.folder(key);sid=uuid.uuid4().hex;base=folder/'snapshots'/sid;base.mkdir(parents=True)
+        started=now()
+        def progress(stage):save(folder/'attempt.json',dict(state='running',started_at=started,stage=stage),atomic=True)
+        try:
+            collector=Collector(base/'raw',progress)
+            if seed:
+                import shutil
+                seed=Path(seed);shutil.copytree(seed/'raw',base/'raw',dirs_exist_ok=True)
+                source=json.loads((seed/'source.json').read_bytes());sources=json.loads((seed/'sources.json').read_bytes())
+            else:
+                source=collector.korea(stock['symbol'].split('.')[0]) if stock['market']=='KR' else collector.usa(stock['symbol'])
+                if stock['market']=='KR' and not stock.get('preferred_price'):
+                    from financial_supplements import samsung_preferred_price
+                    try:samsung_preferred_price(collector,stock)
+                    except Exception:stock['preferred_price_error']='preferred_price_unavailable'
+                sources=collector.sources
+            sources = list({s['id']:s for s in sources}.values())
+            source['symbol']=stock['symbol']
+            progress('공시 기간 정규화 · Python 재무 계산')
+            normal=dart_normalize(source) if source['provider']=='DART' else sec_normalize(source)
+            result=summarize(normal,stock)
+            result.update(key=key,snapshot_id=sid,collected_at=now(),sources=sources)
+            save(base/'source.json',source);save(base/'normalized.json',normal);save(base/'saved-price.json',stock)
+            save(base/'result.json',result)
+            files={str(p.relative_to(base)).replace('\\','/'):hashlib.sha256(p.read_bytes()).hexdigest() for p in base.rglob('*') if p.is_file()}
+            code_files=['financial_sources.py','financial_model.py','financial_store.py','financial_supplements.py','financial_summary.py']
+            save(base/'manifest.json',dict(schema=1,key=key,version=VERSION,files=files,
+                                          code={name:hashlib.sha256((ROOT/'scripts'/name).read_bytes()).hexdigest() for name in code_files}))
+            save(folder/'latest.json',dict(snapshot=sid,manifest_sha256=hashlib.sha256((base/'manifest.json').read_bytes()).hexdigest()),atomic=True)
+            save(folder/'attempt.json',dict(state='complete',started_at=started,finished_at=now(),snapshot=sid,stage='저장 완료'),atomic=True)
+        except Exception as exc:
+            # Do not expose raw exceptions: urllib errors may contain API keys.
+            error=str(exc) if isinstance(exc,SourceError) else type(exc).__name__
+            save(base/'failure.json',dict(state='failed',error=error,at=now()))
+            save(folder/'attempt.json',dict(state='failed',started_at=started,finished_at=now(),error=error,stage='갱신 실패 · 이전 성공 보존'),atomic=True)
+        finally:unlock(lease)
+
+    def import_collected(self,key,stock,seed):
+        folder=self.folder(key);lease=lock_file(folder/'request.lock')
+        if lease is None:raise ValueError('busy')
+        self._work(key,stock,lease,seed=seed)
+        return self.read(key)

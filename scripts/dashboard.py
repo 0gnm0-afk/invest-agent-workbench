@@ -15,6 +15,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from dashboard_data import ROOT, build
 from chart_history import HistoryStore, timeframe
+from financial_store import FinancialStore
+from financial_summary import selected_stock
 from chart_workspace import WorkspaceStore, Conflict, moving_averages
 
 
@@ -22,6 +24,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
     initial_view = (data, stocks)
     store = WorkspaceStore(workspace_path or ROOT / "runtime/chart-workspaces.sqlite3")
     histories = HistoryStore((Path(workspace_path).parent if workspace_path else ROOT / 'runtime') / 'chart-history.sqlite3')
+    financials = FinancialStore((Path(workspace_path).parent if workspace_path else ROOT / 'runtime') / 'financials')
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass
@@ -55,6 +58,14 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                 return self.send(json.dumps(daily_status() if daily_status else {'enabled':False}, ensure_ascii=False).encode('utf-8'))
             if path == '/api/home':
                 return self.send(json.dumps(data, ensure_ascii=False, allow_nan=False).encode('utf-8'))
+            if path.startswith('/api/financials/'):
+                key = urllib.parse.unquote(path[len('/api/financials/'):])
+                if key not in stocks:
+                    return self.send(b'{"error":"unknown_stock"}', status=404)
+                try:
+                    return self.send(json.dumps(financials.read(key), ensure_ascii=False, allow_nan=False).encode('utf-8'))
+                except (ValueError, OSError):
+                    return self.send(b'{"error":"financial_read_failed"}', status=503)
             if path.startswith('/api/chart-state/'):
                 key = urllib.parse.unquote(path[len('/api/chart-state/'):])
                 if key not in stocks:
@@ -86,7 +97,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                 if value is None:
                     value = {'state': 'unavailable', 'reason': 'saved_price_series_missing', 'bars': []}
                 return self.send(json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8'))
-            names = {'/': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css',
+            names = {'/': 'index.html', '/app.js': 'app.js', '/financials.js': 'financials.js', '/financials.css': 'financials.css', '/style.css': 'style.css',
                      '/stock-chart.js': 'stock-chart.js', '/drawing-tools.js': 'drawing-tools.js', '/chart-workspace.js': 'chart-workspace.js', '/chart-tools.css': 'chart-tools.css', '/format.js': 'format.js', '/charts.js': 'charts.js', '/workbench.png': 'workbench.png',
                      '/vendor/lightweight-charts.js': 'vendor/lightweight-charts.js',
                      '/vendor/NOTICE': 'vendor/NOTICE', '/vendor/LICENSE': 'vendor/LICENSE'}
@@ -109,7 +120,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                 frame = timeframe(query.get('timeframe', ['1d'])[0])
             except ValueError:
                 return self.send(b'{"error":"invalid_timeframe"}', status=400)
-            if not path.startswith(('/api/chart-state/', '/api/chart-history/')):
+            if not path.startswith(('/api/chart-state/', '/api/chart-history/', '/api/financials/')):
                 return self.send(b'{"error":"read_only"}', status=405)
             expected = '127.0.0.1:' + str(self.server.server_port)
             if (self.headers.get('Host') != expected or self.headers.get('Origin') != 'http://' + expected
@@ -126,6 +137,14 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                     return self.send(b'{"error":"invalid_body_size"}', status=413)
                 self.connection.settimeout(5)
                 body = json.loads(self.rfile.read(length))
+                if path.startswith('/api/financials/'):
+                    if not isinstance(body, dict) or set(body) != {'refresh'} or type(body['refresh']) is not bool:
+                        raise ValueError('invalid_financial_request')
+                    stock = {**stocks[key], **histories.view(stocks[key], '1d')}
+                    if key == 'KR:005930.KS':
+                        _, stock = selected_stock('KR', '005930.KS', histories)
+                    result = financials.start(key, stock, refresh=body['refresh'])
+                    return self.send(json.dumps(result, ensure_ascii=False, allow_nan=False).encode('utf-8'), status=202 if result['state'] == 'running' else 200)
                 if path.startswith('/api/chart-history/'):
                     if not isinstance(body, dict) or set(body) != {'retry'} or type(body['retry']) is not bool:
                         raise ValueError('invalid_history_request')
