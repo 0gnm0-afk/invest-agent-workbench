@@ -47,8 +47,8 @@ class MarketClient:
             response = json.loads(cached.read_text(encoding='utf-8'))
             if response.get('path') != path or response.get('inputs') != inputs:
                 raise NHMarketError('cached_market_request_mismatch')
-            if response.get('http_status') == 400:
-                raise NHMarketError('market_http_400')
+            if response.get('http_status') in (400,404):
+                raise NHMarketError('market_http_'+str(response['http_status']))
             return response, cached
         if self.evidence_root:
             raise NHMarketError('requested_evidence_not_saved')
@@ -76,10 +76,10 @@ class MarketClient:
                 return result, cached
             except urllib.error.HTTPError as exc:
                 event['status'] = exc.code
-                if exc.code == 400:
+                if exc.code in (400,404):
                     # Persist request/status evidence, never credentials or arbitrary error bodies.
                     cached.parent.mkdir(parents=True,exist_ok=True)
-                    cached.write_text(json.dumps({'path':path,'inputs':inputs,'http_status':400,
+                    cached.write_text(json.dumps({'path':path,'inputs':inputs,'http_status':exc.code,
                         'fetched_at':event['at']},sort_keys=True),encoding='utf-8')
                 if exc.code == 401 and attempt == 1:
                     current_token = token(rejected_token=current_token)

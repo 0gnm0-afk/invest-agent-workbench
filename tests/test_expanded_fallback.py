@@ -12,7 +12,7 @@ class ExpandedFallbackTests(unittest.TestCase):
         return {'schema':1,'scope':'market_symbol_until_user_restores','path':'test','sha256':'a'*64,'records':[],
           'dual_provider':{'enabled':True,'rule_id':'dual','approved_on':'2026-10-02','approval':'user'}}
 
-    def run_recovery(self, reason, healthy=True, toss='stale_or_invalid_last_session'):
+    def run_recovery(self, reason, toss='stale_or_invalid_last_session', identity=True):
         row={'market':'US','symbol':'TEST','isin_code':'US_TEST','listing_exchange_family':'NASDAQ'}
         snap={'universe':[row,dict(row,symbol='GOOD')],'series':[dict(row,symbol='GOOD')],
               'errors':[{'market':'US','symbol':'TEST','error_code':toss}],
@@ -21,7 +21,7 @@ class ExpandedFallbackTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);src=root/'source';src.mkdir();(src/'snapshot.json').write_text(json.dumps(snap))
             cfg={'nh_us_master':'us','nh_us_master_sha256':'u','nh_kr_master':'kr','nh_kr_master_sha256':'k'}
-            with patch('market_scope.load',return_value=self.policy()),patch.object(n,'load_checked',return_value=[]),patch.object(n,'_reference_rows',return_value={}),patch.object(n,'MarketClient'),patch.object(n,'audit',return_value={}),patch.object(n,'_nh_bars',side_effect=reason) as call,patch.object(n,'healthy_control',return_value=healthy):
+            with patch('market_scope.load',return_value=self.policy()),patch.object(n,'load_checked',return_value=[{'sNationCode':'USA','sStockCode':'NQQ','sSymbol':'TEST','sStandardCode':'US_TEST' if identity else 'WRONG'}]),patch.object(n,'_reference_rows',return_value={}),patch.object(n,'MarketClient'),patch.object(n,'audit',return_value={}),patch.object(n,'_nh_bars',side_effect=reason) as call:
                 out,summary,_=n.recover(src,root/'out',cfg)
                 self.assertEqual(call.call_count,1)
                 return summary,json.loads((out/'snapshot.json').read_text(encoding='utf8'))
@@ -38,7 +38,7 @@ class ExpandedFallbackTests(unittest.TestCase):
         got=n.fallback_targets({'errors':[],'series':rows,'sessions':{'US':['2026-09-28','2026-09-29','2026-10-01']}})
         self.assertEqual([r['symbol'] for r in got],['GAP','CAP'])
 
-    def test_per_security_no_data_excluded_only_with_healthy_control(self):
+    def test_per_security_no_data_excluded_without_querying_normal_security(self):
         for exc in (NHMarketError('market_http_400'),ValueError('nh_period_empty'),ValueError('nh_period_completed_session_missing')):
             got,snap=self.run_recovery(exc)
             self.assertEqual(len(got['automatic_exclusions']),1)
@@ -52,10 +52,39 @@ class ExpandedFallbackTests(unittest.TestCase):
             self.assertEqual(got['automatic_exclusions'],[])
             self.assertEqual(len(snap['errors']),1)
 
-    def test_bad_control_and_toss_systemic_failure_never_excluded(self):
-        for healthy,toss in ((False,'stale_or_invalid_last_session'),(True,'market_transport_or_payload_unavailable')):
-            got,_=self.run_recovery(NHMarketError('market_http_400'),healthy,toss)
+    def test_toss_systemic_failure_never_excluded(self):
+        got,_=self.run_recovery(NHMarketError('market_http_400'),toss='market_transport_or_payload_unavailable')
+        self.assertEqual(got['automatic_exclusions'],[])
+        self.assertFalse(hasattr(n,'healthy_control'))
+
+    def test_identity_and_parity_mismatch_are_not_absence(self):
+        for code in ('nh_identity_exchange_isin_mismatch','nh_kr_short_code_market_mismatch','nh_toss_historical_ohlc_mismatch'):
+            got,snap=self.run_recovery(ValueError(code))
             self.assertEqual(got['automatic_exclusions'],[])
+            self.assertEqual(got['unrecovered'],1)
+            self.assertEqual(len(snap['errors']),1)
+
+    def test_received_nh_prices_with_wrong_identity_never_become_absence(self):
+        got,snap=self.run_recovery(lambda *args: ([{'date':'2026-10-01'}],[]), identity=False)
+        row=got['results'][0]
+        self.assertTrue(row['nh_price_observed'])
+        self.assertEqual(row['state'],'observed_not_adopted')
+        self.assertEqual(row['reason'],'nh_identity_exchange_isin_mismatch')
+        self.assertEqual(got['automatic_exclusions'],[])
+        self.assertEqual(got['unrecovered'],1)
+
+    def test_partial_nh_history_does_not_bypass_identity_guard(self):
+        for reason in ('nh_period_history_incomplete','nh_period_completed_session_missing','nh_period_empty','market_http_400'):
+            got,_=self.run_recovery(ValueError(reason),identity=False)
+            self.assertEqual(got['automatic_exclusions'],[])
+            self.assertEqual(got['unrecovered'],1)
+            self.assertEqual(got['results'][0]['reason'],'nh_identity_exchange_isin_mismatch')
+        got,_=self.run_recovery(ValueError('nh_period_history_incomplete'),toss='historical_price_gaps')
+        self.assertEqual(len(got['automatic_exclusions']),1)
+
+    def test_actual_cap_null_targets_even_if_old_quality_says_quoted(self):
+        got=n.fallback_targets({'errors':[],'series':[{'market':'US','symbol':'CAP','market_cap':None,'market_cap_quality':'quoted_price'}]})
+        self.assertEqual(got[0]['error_code'],'unavailable_market_cap')
 
     def test_dual_exclusion_requires_same_nonempty_isin_and_effective_date(self):
         policy=self.policy();policy['records']=[{'market':'US','symbol':'TEST','isin_code':'OLD','dual_provider_rule':'dual','effective_session':'2026-10-01'}]

@@ -16,7 +16,7 @@ from nh_market_client import MarketClient, PERIOD, KR_PERIOD, CURRENT, us_period
 # Provider/data failures are recoverable; calendar/configuration/programming errors are not.
 RECOVERABLE_ERRORS = frozenset((
     'market_transport_or_payload_unavailable', 'stale_or_invalid_last_session',
-    'no_completed_session_bars', 'duplicate_or_unordered_dates',
+    'no_completed_session_bars', 'historical_price_gaps', 'duplicate_or_unordered_dates',
     'Invalid candle envelope', 'Unexpected candle currency', 'Invalid candle value',
     'Conflicting overlapping candle pages', 'Candle cursor does not progress',
     'Candle cursor does not move backwards', 'Candle page budget exhausted before history boundary',
@@ -33,7 +33,7 @@ def fallback_targets(snapshot):
         sessions = snapshot.get('sessions', {}).get(row['market'], [])
         if bars and any(bars[0]['date'] <= d <= bars[-1]['date'] and d not in dates for d in sessions):
             code = 'historical_price_gaps'
-        elif str(row.get('market_cap_quality','')).startswith('unavailable') and row.get('tradable') is not False:
+        elif cap_missing(row):
             code = 'unavailable_market_cap'
         if code:
             targets.setdefault((row['market'],row['symbol']),{'market':row['market'],'symbol':row['symbol'],'error_code':code})
@@ -167,26 +167,20 @@ def _compare(bars, prior, sessions, market='US'):
                 else 'nh_volume_exactly_matches_prior_toss')}
 
 
-def healthy_control(client, market, completed):
-    """Never convert an authentication/outage/bad-request incident to exclusions."""
-    symbol = 'SPY' if market == 'US' else '005930'
-    path = PERIOD if market == 'US' else KR_PERIOD
-    args = us_period_inputs(symbol,completed.replace('-','')) if market == 'US' else kr_period_inputs(symbol,completed.replace('-',''))
-    try:
-        response,_ = client.read(path,args)
-        p=response['payload']
-        return p.get('rsp_cd') == '00000' and any(
-            str(b.get('trade_date' if market=='US' else 'bsop_date')) == completed.replace('-','')
-            and float(b.get('close_prc' if market=='US' else 'stck_prpr') or 0)>0
-            for b in p.get('Output_1',[]))
-    except (Exception,SystemExit):
-        return False
+def cap_missing(row):
+    value = row.get('market_cap')
+    return (str(row.get('market_cap_quality','')).startswith('unavailable')
+            or 'market_cap' in row and (type(value) not in (int,float)
+                or not math.isfinite(value) or value <= 0))
 
 
 def completed_cap(listing, bar, payload, exchange):
     """Dated regular-session NH quote anchors raw price × observed shares."""
     q = payload.get('Output_0') or {}
     shares = listing.get('shares_outstanding')
+    if type(shares) is not int or shares <= 0:
+        observed = q.get('list_num')
+        shares = int(observed) if type(observed) in (int,float) and math.isfinite(observed) and observed > 0 and observed == int(observed) else None
     if (payload.get('rsp_cd') != '00000' or q.get('iem_cd') != listing['symbol']
             or q.get('exch_id') != exchange or q.get('currency_unit') != 'USD'
             or str(q.get('trade_date')) != bar['date'].replace('-','')
@@ -200,7 +194,9 @@ def completed_cap(listing, bar, payload, exchange):
         raise ValueError('nh_dated_market_cap_unavailable')
     return {'market_cap':cap,'market_cap_as_of':bar['date'],'market_cap_currency':'USD',
             'market_cap_quality':'completed_close_estimate','market_cap_error':None,
-            'market_cap_basis':'nh_dated_regular_close_times_toss_observed_shares_estimate',
+            'market_cap_basis':'nh_dated_regular_close_times_observed_shares_estimate',
+            'market_cap_shares':shares,
+            'market_cap_shares_source':'toss' if shares == listing.get('shares_outstanding') else 'nh_current_list_num',
             'market_cap_price':q['normal_trdprc'],'market_cap_price_date':bar['date'],
             'market_cap_price_source':'https://api.nhplug.com:8443'+CURRENT,
             'market_cap_price_basis':'nh_dated_regular_session_close'}
@@ -216,6 +212,10 @@ def recover(source, output, config, *, evidence_root=None, prior_source=None):
     policy = market_scope.load()
     write_json(output/'input-scope-policy.json',policy)
     original = market_scope.apply_snapshot(original, policy)
+    # Older saved inputs could claim quoted_price while carrying a null cap.
+    for row in original.get('universe', []) + original.get('series', []):
+        if cap_missing(row) and not str(row.get('market_cap_quality','')).startswith('unavailable'):
+            row['market_cap_quality'] = 'unavailable_market_cap'
     targets = fallback_targets(original)
     inputs = {}
     us_path, kr_path = Path(config['nh_us_master']), Path(config['nh_kr_master'])
@@ -234,13 +234,16 @@ def recover(source, output, config, *, evidence_root=None, prior_source=None):
     universe = {(r['market'],r['symbol']):r for r in original['universe']}
     client = MarketClient(output,evidence_root)
     results, recovered = [], []
-    controls = {}
+    metadata_recovered = {}
     new_exclusions = []
+    original_series = {(r['market'],r['symbol']):r for r in original.get('series',[])}
     for error in targets:
         symbol = error['symbol']
         listing = universe[(error['market'],symbol)]
         market = error['market']
         report = {'market':market,'symbol':symbol,'toss_error_code':error['error_code']}
+        identity_verified = False
+        identity_conflict = False
         try:
             sessions = original['sessions'][market]
             provider_symbol = symbol if market == 'US' else listing['provider_symbol']
@@ -252,7 +255,31 @@ def recover(source, output, config, *, evidence_root=None, prior_source=None):
                             and r.get('sNationCode') == 'USA' and r.get('sStandardCode') == listing['isin_code']]
                     if len(rows) == 1:
                         provider_symbol = rows[0]['sSymbol']
+            if market == 'US':
+                identity_verified = len(rows)==1 and bool(listing.get('isin_code')) and rows[0].get('sStandardCode') == listing['isin_code']
+            else:
+                rows = domestic.get(('1',provider_symbol),[])
+                identity_verified = listing.get('listing_exchange_family') == 'KOSPI' and len(rows)==1
+            identity_conflict = bool(rows) and not identity_verified
+            report['nh_identity_verified'] = identity_verified
             report['nh_requested'] = True
+            if error['error_code'] == 'unavailable_market_cap':
+                # Preserve valid Toss OHLCV. Only request the missing metadata.
+                if market == 'US':
+                    quote, quote_file = client.read(CURRENT, {'iem_cd':provider_symbol})
+                    inputs[str(quote_file)] = sha(quote_file)
+                    if len(rows)!=1 or rows[0].get('sStandardCode') != listing.get('isin_code'):
+                        raise ValueError('nh_identity_exchange_isin_mismatch')
+                    fields = completed_cap({**listing,'symbol':provider_symbol},original_series[(market,symbol)]['bars'][-1],quote['payload'],exchange)
+                    metadata_recovered[(market,symbol)] = fields
+                    universe[(market,symbol)] = {**listing, **fields}
+                    report.update(state='adopted_metadata', retained_price_provider='Toss', fields=list(fields))
+                else:
+                    # The allowlisted domestic period endpoint supplies no verified shares/cap contract.
+                    _nh_bars(client,provider_symbol,sessions[-1:],market)
+                    raise ValueError('nh_market_cap_field_unavailable')
+                results.append(report)
+                continue
             bars, files = _nh_bars(client,provider_symbol,sessions,market)
             report.update(nh_pages=len(files),nh_bars=len(bars),nh_latest_session=bars[-1]['date'],nh_price_observed=True)
             if market == 'US':
@@ -272,12 +299,6 @@ def recover(source, output, config, *, evidence_root=None, prior_source=None):
                 raise ValueError('prior_toss_identity_mismatch')
             comparison = _compare(bars,prior,sessions,market)
             currency = 'USD' if market == 'US' else 'KRW'
-            if str(listing.get('market_cap_quality','')).startswith('unavailable'):
-                if market != 'US':
-                    raise ValueError('nh_dated_market_cap_unavailable')
-                quote, quote_file = client.read(CURRENT, {'iem_cd':provider_symbol})
-                inputs[str(quote_file)] = sha(quote_file)
-                listing = {**listing, **completed_cap({**listing,'symbol':provider_symbol},bars[-1],quote['payload'],exchange)}
             lower = gate({**listing,'bars':bars,'currency':currency,'instrument_type':'EQUITY'},bars)
             upper_bars = ([{**b,'volume':b['volume']+999} for b in bars]
                           if market == 'US' else bars)
@@ -305,28 +326,32 @@ def recover(source, output, config, *, evidence_root=None, prior_source=None):
                           reason=str(exc) if isinstance(exc,(ValueError,NHMarketError)) else type(exc).__name__+': '+str(exc))
         if report['state'] != 'adopted' and policy.get('dual_provider',{}).get('enabled'):
             reason = report.get('reason','')
-            allowed = {'market_http_400','nh_period_empty','nh_period_completed_session_missing',
-                       'nh_identity_exchange_isin_mismatch','nh_kr_short_code_market_mismatch'}
-            # An actual per-symbol request plus a healthy same-market control is mandatory.
-            if error.get('error_code') in ('stale_or_invalid_last_session','no_completed_session_bars','historical_price_gaps','unavailable_market_cap') and reason in allowed:
-                if market not in controls:
-                    controls[market] = healthy_control(client, market, sessions[-1])
-                report['healthy_market_control'] = controls[market]
-                if controls[market] and listing.get('isin_code'):
-                    rule = policy['dual_provider']
-                    new_exclusions.append({k:listing.get(k) for k in ('market','symbol','name','isin_code','provider_symbol')})
-                    new_exclusions[-1].update(reason='dual_provider_data_unavailable',approved_on=rule['approved_on'],
-                        approval=rule['approval'],dual_provider_rule=rule['rule_id'],effective_session=sessions[-1],
-                        evidence_run=str(output),evidence={'toss_source':str(source),'toss_error':error,
-                            'nh_result':dict(report),'completed_session':sessions[-1]})
-                    report['scope_decision'] = 'excluded_dual_provider_unavailable'
+            missing_prices = {'stale_or_invalid_last_session','no_completed_session_bars','historical_price_gaps','market_http_400','market_http_404'}
+            absent = {'market_http_400','market_http_404','nh_period_empty','nh_period_completed_session_missing','nh_period_history_incomplete'}
+            if reason in absent and (identity_conflict or reason in ('nh_period_history_incomplete','nh_period_completed_session_missing') and not identity_verified):
+                report['reason'] = 'nh_identity_exchange_isin_mismatch' if market == 'US' else 'nh_kr_short_code_market_mismatch'
+                reason = report['reason']
+            # Identity/parity/auth/outage failures are never evidence of data absence.
+            # No healthy Toss security is queried just to cross-check a failed security.
+            if (error.get('error_code') in missing_prices and reason in absent
+                    and report.get('nh_requested') and not report.get('nh_price_observed') and listing.get('isin_code')):
+                rule = policy['dual_provider']
+                item = {k:listing.get(k) for k in ('market','symbol','name','isin_code','provider_symbol')}
+                item.update(reason='dual_provider_data_unavailable',approved_on=rule['approved_on'],
+                    approval=rule['approval'],dual_provider_rule=rule['rule_id'],effective_session=sessions[-1],
+                    evidence_run=str(output),evidence={'toss_source':str(source),'toss_error':error,
+                        'nh_result':dict(report),'completed_session':sessions[-1]})
+                new_exclusions.append(item)
+                report['scope_decision'] = 'excluded_dual_provider_unavailable'
         results.append(report)
         write_json(output/'progress.json',{'targets':len(targets),'completed':len(results),
-                                           'adopted':len(recovered),'results':results})
+                                           'adopted':len(recovered)+len(metadata_recovered),'results':results})
     adopted = {(r['market'],r['symbol']) for r in recovered}
     original['series'] = sorted([r for r in original['series'] if (r['market'],r['symbol']) not in adopted]
                                 +recovered,key=lambda r:(r['market'],r['symbol']))
     original['errors'] = [r for r in original['errors'] if (r['market'],r['symbol']) not in adopted]
+    for row in original['series']:
+        row.update(metadata_recovered.get((row['market'],row['symbol']),{}))
     original['universe'] = [universe[(r['market'],r['symbol'])] for r in original['universe']]
     stats = original['collection_stats']
     stats.update(received=len(original['series']),failed=len(original['errors']),nh_recovered=len(recovered))
@@ -342,7 +367,7 @@ def recover(source, output, config, *, evidence_root=None, prior_source=None):
     original['collection_mode'] = 'toss_main_nh_unusable_symbols_v2'
     for market in {r['market'] for r in recovered}:
         original['providers'][market] = 'Toss adjusted candles; qualified NH PLUG period for adopted rows'
-    original['nh_fallback'] = {'attempted':len(targets),'adopted':len(recovered),
+    original['nh_fallback'] = {'attempted':len(targets),'adopted':len(recovered)+len(metadata_recovered),
                                'observed_not_adopted':sum(r['state']=='observed_not_adopted' for r in results),
                                'original_source':str(source),'excluded':len(new_exclusions)}
     if new_exclusions:
@@ -354,7 +379,7 @@ def recover(source, output, config, *, evidence_root=None, prior_source=None):
     summary = {**audit(original),'schema':1,'original_source':str(source),'original_snapshot_sha256':sha(source/'snapshot.json'),
                'nh_evidence_root':str(evidence_root) if evidence_root else str(output),
                'completed_at':original['collected_until'],'attempted':len(targets),
-               'adopted':len(recovered),'unrecovered':len(targets)-len(recovered)-len(new_exclusions),'results':results,'automatic_exclusions':new_exclusions,'healthy_controls':controls}
+               'adopted':len(recovered)+len(metadata_recovered),'unrecovered':len(targets)-len(recovered)-len(metadata_recovered)-len(new_exclusions),'results':results,'automatic_exclusions':new_exclusions,'metadata_recovered':len(metadata_recovered)}
     for file in Path(evidence_root or output).joinpath('responses').glob('*.json'):
         inputs[str(file.resolve())] = sha(file)
     write_json(output/'fallback-inputs.json',inputs)

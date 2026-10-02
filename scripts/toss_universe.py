@@ -152,7 +152,9 @@ def _live_exchange(get, exchange, observed_at, exclusions=None):
             'quote_timestamp': price.get('timestamp'),
             'quote_time_state': time_state,
             'quote_observed_at': observed_at,
-            'market_cap_quality': 'quoted_price' if time_state == 'provided' else 'unavailable_quote_time',
+            'market_cap_quality': ('unavailable_shares' if shares is None or shares <= 0 else
+                                   'unavailable_price_or_currency' if cap is None or cap <= 0 else
+                                   'quoted_price' if time_state == 'provided' else 'unavailable_quote_time'),
             'market_cap_currency': expected_currency if cap is not None else None,
             'market_cap_as_of': price.get('timestamp'),
             'market_cap_basis': 'toss_last_price_times_shares_outstanding_derived',
