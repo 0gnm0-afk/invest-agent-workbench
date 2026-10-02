@@ -70,12 +70,30 @@ window.DrawingTools = (() => {
       loss:'손실 '+WorkbenchFormat.money(risk,currency)+' '+currency+' ('+(risk/entry*100).toFixed(2)+'%)',
       profit:'수익 '+WorkbenchFormat.money(reward,currency)+' '+currency+' ('+(reward/entry*100).toFixed(2)+'%)'};
   }
-  function attach({element, chart, series, bars, currency, timeframe='1d', drawingLimit=300, getDrawings, onChange, onSelect, onHint}) {
+  // Screen-pixel thresholds keep the same feel at every price/zoom level.
+  function closeSnap(bars,scale,series,logical,y,previous=null) {
+    const visible=scale.getVisibleLogicalRange?.();
+    const first=Math.max(0,Math.ceil(visible?.from??0));
+    const last=Math.min(bars.length-1,Math.round(logical),Math.floor(visible?.to??bars.length-1));
+    function candidate(i) {
+      const b=bars[i];
+      if(i<first||i>last||!b||b.projected||!Number.isFinite(b.close)||b.close<=0)return null;
+      const x=scale.logicalToCoordinate(i),cy=series.priceToCoordinate(b.close);
+      if(x==null||cy==null||x<0||x>scale.width()||!Number.isFinite(cy))return null;
+      return {i,time:b.date,price:b.close,distance:Math.abs(y-cy)};
+    }
+    const held=previous&&candidate(previous.i);
+    if(held&&held.distance<=10)return held;
+    let best=null;
+    for(let i=last;i>=first;i--){const c=candidate(i);if(c&&c.distance<=6&&(!best||c.distance<best.distance))best=c;}
+    return best;
+  }
+  function attach({element, chart, series, bars, currency, timeframe='1d', drawingLimit=300, snapEnabled=true, getDrawings, onChange, onSelect, onHint}) {
     const NS='http://www.w3.org/2000/svg';
     const svg=document.createElementNS(NS,'svg');
     svg.classList.add('drawing-layer');svg.setAttribute('aria-label','가격 차트 작도 영역');
     element.append(svg);
-    let mode='select', selected=null, draft=[], hover=null, drag=null, frame=0, removed=false, signature='';
+    let mode='select', selected=null, draft=[], hover=null, drag=null, frame=0, removed=false, signature='', snapped=null;
     function node(tag,attrs,parent=svg) {
       const n=document.createElementNS(NS,tag);for(const [k,v] of Object.entries(attrs))n.setAttribute(k,v);parent.append(n);return n;
     }
@@ -83,8 +101,9 @@ window.DrawingTools = (() => {
     function point(event) {
       const r=svg.getBoundingClientRect(),x=event.clientX-r.left,y=event.clientY-r.top;
       const logical=chart.timeScale().coordinateToLogical(x), price=series.coordinateToPrice(y);
-      if(logical==null||price==null||price<=0||x<0||y<0||x>r.width||y>r.height)return null;
-      return {time:timeAt(logical,bars,timeframe),price};
+      if(logical==null||price==null||price<=0||x<0||y<0||x>r.width||y>r.height){snapped=null;return null;}
+      snapped=snapEnabled&&!event.altKey&&(count[mode]||drag?.handle!=null)?closeSnap(bars,chart.timeScale(),series,logical,y,snapped):null;
+      return {time:timeAt(logical,bars,timeframe),price:snapped?snapped.price:price};
     }
     function render() {
       if(removed)return;
@@ -94,7 +113,7 @@ window.DrawingTools = (() => {
         const ps=[...draft];if(hover&&ps.length<count[mode])ps.push(hover);
         if(ps.length===count[mode])all.push({d:{kind:mode,points:ps,color:'#218775',width:2,extend:false},p:ps.map(xy)});
       }
-      const sig=JSON.stringify([w,h,all,mode,selected,draft,hover]);
+      const sig=JSON.stringify([w,h,all,mode,selected,draft,hover,snapped]);
       if(signature!==sig) {
         signature=sig;svg.replaceChildren();svg.setAttribute('width',w);svg.setAttribute('height',h);
         svg.style.pointerEvents=count[mode]?'auto':'none';
@@ -146,18 +165,37 @@ window.DrawingTools = (() => {
           if(d.id===selected&&mode==='select')p.forEach((v,i)=>node('circle',{cx:v.x,cy:v.y,r:6,fill:'#fff',stroke,'stroke-width':2,'data-point':i,'pointer-events':'all',cursor:'move'},g));
         }
         for(const p of draft){const v=xy(p);if(v)node('circle',{cx:v.x,cy:v.y,r:4,fill:'#218775','pointer-events':'none'});}
+        if(hover&&(count[mode]||drag?.handle!=null)){
+          const v=xy(hover);
+          if(v&&v.x!=null&&v.y!=null){
+            if(snapped){
+              const sx=chart.timeScale().logicalToCoordinate(snapped.i);
+              const g=node('g',{class:'close-snap-guide','data-source-date':snapped.time,'data-price':snapped.price,'pointer-events':'none'});
+              node('line',{x1:sx,y1:v.y,x2:v.x,y2:v.y,stroke:'#83d8ff','stroke-width':1.5,'stroke-dasharray':'3 4'},g);
+              node('circle',{cx:sx,cy:v.y,r:4,fill:'#202630',stroke:'#83d8ff','stroke-width':2},g);
+              const label='종가 '+WorkbenchFormat.money(snapped.price,currency)+' '+currency+' · '+snapped.time;
+              const width=Math.min(w-8,label.length*7+12),x=Math.max(4,Math.min(v.x-width/2,w-width-4));
+              const top=v.y<35?v.y+12:v.y-30;
+              node('rect',{x,y:top,width,height:22,rx:3,fill:'#172b3a',stroke:'#83d8ff','stroke-width':.5},g);
+              node('text',{x:x+6,y:top+15,fill:'#b9eaff','font-size':11},g).textContent=label;
+            }
+            node('circle',{cx:v.x,cy:v.y,r:5,fill:snapped?'#83d8ff':'#202630',stroke:snapped?'#e4f7ff':'#83d8ff','stroke-width':2,'pointer-events':'none'});
+          }
+        }
+
       }
       frame=requestAnimationFrame(render);
     }
-    function select(id) {mode='select';draft=[];hover=null;selected=id;onSelect(id);signature='';}
+    function select(id) {mode='select';draft=[];hover=null;snapped=null;selected=id;onSelect(id);signature='';}
     function setMode(next) {
-      mode=next;draft=[];hover=null;drag=null;signature='';
+      mode=next;draft=[];hover=null;snapped=null;drag=null;signature='';
       onHint(mode==='riskreward'?'손익비: 진입가 → 손절가 → 목표가 순서로 클릭하세요. 가로 폭은 세 점의 날짜 범위입니다.':count[mode]?`${labels[mode]}: ${count[mode]}개 지점을 차례로 클릭하세요. Esc로 취소.`:'선택한 도형의 원형 점은 끝점 수정, 선·영역은 전체 이동입니다. 빈 영역은 차트 이동·확대에 사용합니다.');
     }
     function down(e) {
       if(e.button!==0)return;
       const p=point(e);if(!p)return;
       if(count[mode]) {
+        hover=p;
         e.preventDefault();e.stopPropagation();
         if((mode==='trend'||mode==='channel')&&draft.length===1&&draft[0].time===p.time){onHint('두 번째 점은 다른 날짜를 선택하세요.');return;}
         if(mode==='riskreward'&&draft.length===1&&draft[0].price===p.price){onHint('손절가는 진입가와 달라야 합니다.');return;}
@@ -178,7 +216,7 @@ window.DrawingTools = (() => {
       }
     }
     function move(e) {
-      const p=point(e);if(!p)return;hover=p;
+      const p=point(e);if(!p){hover=null;return;}hover=p;
       if(!drag)return;
       const d=clone(drag.original);
       if(drag.handle!=null)d.points[drag.handle]=p;
@@ -198,17 +236,18 @@ window.DrawingTools = (() => {
     function up(e) {
       if(!drag)return;
       if(svg.hasPointerCapture(e.pointerId))svg.releasePointerCapture(e.pointerId);
-      const before=drag.all,moved=drag.moved;drag=null;
+      const before=drag.all,moved=drag.moved;drag=null;snapped=null;hover=null;
       if(moved)onChange(getDrawings(),{before});
     }
     function cancel() {
       if(drag){const old=drag.all;drag=null;onChange(old,{preview:true});}
-      draft=[];hover=null;signature='';
+      draft=[];hover=null;snapped=null;signature='';
     }
     svg.addEventListener('pointerdown',down);svg.addEventListener('pointermove',move);svg.addEventListener('pointerup',up);
     svg.addEventListener('pointercancel',cancel);
+    svg.addEventListener('pointerleave',()=>{if(!drag){hover=null;snapped=null;}});
     setMode('select');frame=requestAnimationFrame(render);
-    return {setMode,select,cancel,destroy(){removed=true;cancelAnimationFrame(frame);svg.remove();}};
+    return {setMode,select,cancel,setSnapEnabled(value){snapEnabled=!!value;snapped=null;hover=null;signature='';},destroy(){removed=true;cancelAnimationFrame(frame);svg.remove();}};
   }
-  return {attach,measure,riskReward,channel,labels,count,index,timeAt,coordinate,timeline};
+  return {attach,measure,riskReward,channel,labels,count,index,timeAt,coordinate,timeline,closeSnap};
 })();
