@@ -14,8 +14,28 @@ window.DrawingTools = (() => {
     if(frame==='1mo')d.setUTCMonth(d.getUTCMonth()+1);else d.setUTCDate(d.getUTCDate()+(frame==='1w'?7:1));
     return d.getTime();
   }
+  // Calendar-only slots: no prices, volumes or indicator values are projected.
+  function timeline(bars,frame='1d') {
+    if(!bars.length)return [];
+    const result=bars.map(b=>({...b})), last=bars.at(-1);
+    const end=new Date((last.last_session||last.date)+'T00:00:00Z');end.setUTCFullYear(end.getUTCFullYear()+5);
+    const cursor=new Date(last.date+'T00:00:00Z');
+    const next=()=>{if(frame==='1mo')cursor.setUTCMonth(cursor.getUTCMonth()+1);else cursor.setUTCDate(cursor.getUTCDate()+(frame==='1w'?7:1));};
+    next();
+    while(cursor<=end){
+      if(frame!=='1d'||![0,6].includes(cursor.getUTCDay()))result.push({date:cursor.toISOString().slice(0,10),projected:true});
+      next();
+    }
+    if(frame!=='1d')for(let i=bars.length-1;i<result.length;i++){
+      // A partial current week/month can also contain future drawing anchors.
+      result[i].last_session=new Date(boundary(result,i,frame)-86400000).toISOString().slice(0,10);
+      result[i].first_session ||= result[i].date;
+    }
+    result.futureAfter=last.last_session||last.date;
+    return result;
+  }
   function index(time,bars,frame='1d') {
-    if(!bars.length||time<bars[0].date||time>(bars.at(-1).last_session||bars.at(-1).date))return null;
+    if(!Number.isFinite(Date.parse(time))||!bars.length||time<bars[0].date||time>(bars.at(-1).last_session||bars.at(-1).date))return null;
     let lo=0,hi=bars.length;
     while(lo<hi){const m=(lo+hi)>>1;if(bars[m].date<=time)lo=m+1;else hi=m;}
     const i=lo-1,start=Date.parse(bars[i].date),fraction=(Date.parse(time)-start)/(boundary(bars,i,frame)-start);
@@ -38,7 +58,7 @@ window.DrawingTools = (() => {
     const [a,b] = points, delta = b.price-a.price;
     const ia=index(a.time,bars,frame), ib=index(b.time,bars,frame);
     const days=Math.round((Date.parse(b.time)-Date.parse(a.time))/86400000);
-    return `${delta>=0?'+':''}${WorkbenchFormat.money(delta,currency)} ${currency} · ${delta>=0?'+':''}${(delta/a.price*100).toFixed(2)}% · ${ia==null||ib==null?'미확인':Math.abs(Math.round(ib)-Math.round(ia))}봉 간격 · ${Math.abs(days)}일`;
+    return `${delta>=0?'+':''}${WorkbenchFormat.money(delta,currency)} ${currency} · ${delta>=0?'+':''}${(delta/a.price*100).toFixed(2)}% · ${ia==null||ib==null?'미확인':Math.abs(Math.round(ib)-Math.round(ia))}${bars.futureAfter&&[a.time,b.time].some(t=>t>bars.futureAfter)?'칸 간격 (미래 달력)':'봉 간격'} · ${Math.abs(days)}일`;
   }
   function riskReward(points,currency) {
     if(points.length!==3)return null;
@@ -190,5 +210,5 @@ window.DrawingTools = (() => {
     setMode('select');frame=requestAnimationFrame(render);
     return {setMode,select,cancel,destroy(){removed=true;cancelAnimationFrame(frame);svg.remove();}};
   }
-  return {attach,measure,riskReward,channel,labels,count,index,timeAt,coordinate};
+  return {attach,measure,riskReward,channel,labels,count,index,timeAt,coordinate,timeline};
 })();

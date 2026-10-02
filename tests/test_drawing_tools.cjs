@@ -64,3 +64,24 @@ assert.match(DrawingTools.riskReward(rr([100,90,120]),'USD').profit,/20.00 USD/)
 for(const prices of [[100,100,120],[100,90,80],[100,110,120],[100,90,100]])assert.equal(DrawingTools.riskReward(rr(prices),'USD'),null);
 assert.equal(DrawingTools.riskReward(rr([100,90,120]).map(p=>({...p,time:bars[0].date})),'USD'),null);
 console.log('Risk/reward long/short, ratio, units and invalid geometry: PASS');
+
+// Every tool can be created beyond the last real candle; handle/body drag also cross it.
+const axis=DrawingTools.timeline(bars), futureEl=new Element();let futureShapes=[];
+const futureChart={...chart,timeScale:()=>({width:()=>100,coordinateToLogical:x=>x/2,logicalToCoordinate:i=>i*2})};
+const futureTool=DrawingTools.attach({element:futureEl,chart:futureChart,series:{coordinateToPrice:y=>200-y,priceToCoordinate:p=>200-p},bars:axis,currency:'USD',getDrawings:()=>futureShapes,onChange:next=>{futureShapes=next;},onSelect(){},onHint(){}});
+for(const kind of Object.keys(DrawingTools.count)){
+ futureTool.setMode(kind);
+ (kind==='riskreward'?[[16,100],[40,120],[60,60]]:[[16,100],[40,80],[60,60]]).slice(0,DrawingTools.count[kind]).forEach(([x,y])=>futureEl.child.events.pointerdown(event(x,y)));
+ assert.equal(futureShapes.at(-1).kind,kind);
+ if(kind!=='horizontal')assert.ok(futureShapes.at(-1).points.some(p=>p.time>bars.at(-1).date));
+}
+const fid=futureShapes[0].id, fbody={closest:()=>({getAttribute:()=>fid}),hasAttribute:()=>false};
+futureTool.select(fid);const old=structuredClone(futureShapes[0]);
+futureEl.child.events.pointerdown(event(20,90,fbody));futureEl.child.events.pointermove(event(50,80));futureEl.child.events.pointerup(event(50,80));
+assert.ok(futureShapes[0].points.every(p=>p.time>bars.at(-1).date));
+assert.equal(DrawingTools.index(futureShapes[0].points[1].time,axis)-DrawingTools.index(old.points[1].time,axis),15);
+assert.match(DrawingTools.measure(futureShapes[0].points,axis,'USD'),/미래 달력/);
+const fh={closest:()=>({getAttribute:()=>fid}),hasAttribute:()=>true,getAttribute:()=> '1'};
+futureEl.child.events.pointerdown(event(70,70,fh));futureEl.child.events.pointermove(event(80,60));futureEl.child.events.pointerup(event(80,60));
+assert.equal(futureShapes[0].points[1].time,axis[40].date);
+futureTool.destroy();console.log('Future tool creation, whole-object/handle movement and measurement: PASS');

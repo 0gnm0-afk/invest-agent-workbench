@@ -50,6 +50,16 @@ class Workspaces(unittest.TestCase):
         state={**defaults(),'drawings':[d]};self.store.save('US:R',0,state)
         self.assertEqual(self.store.read('US:R')['state'],state)
 
+    def test_future_dates_shared_and_preserve_existing_drawings(self):
+        state=defaults();state['drawings']=[drawing(ident='existing'),drawing(ident='future')]
+        state['drawings'][1]['points'][1]['time']='2027-02-01'
+        original=copy.deepcopy(state)
+        self.store.shared('US:FUTURE',revision=0,state=state)
+        for frame in ('1d','1w','1mo'):
+            loaded=WorkspaceStore(self.path).shared('US:FUTURE',frame)
+            self.assertEqual(loaded['state']['drawings'],original['drawings'])
+        self.assertEqual(state,original)
+
     def test_symbol_isolation(self):
         state=defaults();state['drawings']=[drawing()];self.store.save('KR:AAA',0,state)
         self.assertEqual(self.store.read('US:AAA')['revision'],0)

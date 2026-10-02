@@ -23,6 +23,7 @@ window.WorkbenchWorkspace = (() => {
       if(historyStatus)historyStatus.textContent='이전 서버 · 일/주/월 작도 공유 미적용 · 대시보드를 새로 실행하세요.';
       return;
     }
+    const drawingBars=DrawingTools.timeline(bars,frame);
     let state=packet.state,revision=packet.revision,lastSaved=JSON.stringify(state),history=[],future=[],selected=null;
     let previewDrawings=null;
     let saving=null,timer=null,dead=false,averageVersion=0,chart,price,drawings,averageRefs=[],averageValues={},hoverTime=null,conflict=false;
@@ -39,6 +40,7 @@ window.WorkbenchWorkspace = (() => {
     function renderSmaLegend() {
       const day=hoverTime||bars.at(-1).date;
       smaLegend.replaceChildren();
+      if(hoverTime&&hoverTime>bars.at(-1).date){smaLegend.textContent='SMA는 마지막 실제 봉까지 표시합니다.';return;}
       const caption=document.createElement('small');caption.textContent=(hoverTime?'선택 봉 ':'최근 봉 ')+day;smaLegend.append(caption);
       for(const a of state.averages.filter(a=>a.visible)) {
         const value=averageValues[a.period]?.get(day),span=document.createElement('span');
@@ -61,11 +63,11 @@ window.WorkbenchWorkspace = (() => {
     function renderEditor() {
       const d=state.drawings.find(x=>x.id===selected),editor=q('.drawing-editor');
       if(!d){editor.innerHTML='<small>차트의 도형이나 목록을 선택하면 날짜·가격·색상을 수정할 수 있습니다.</small>';return;}
-      editor.innerHTML=`<form class="point-form"><strong>${DrawingTools.labels[d.kind]}</strong><div class="point-grid">${d.points.map((p,i)=>`<label>${pointLabel(d,i)} 날짜<input type="date" name="time${i}" value="${safe(p.time)}" required></label><label>${pointLabel(d,i)} 가격 (${currency})<input type="text" inputmode="decimal" name="price${i}" value="${WorkbenchFormat.money(p.price,currency)}" required></label>`).join('')}</div><div class="editor-style"><label>선 색상<input type="color" name="color" value="${d.color}"></label><label>굵기<select name="width">${[1,2,3,4].map(n=>`<option ${d.width===n?'selected':''}>${n}</option>`).join('')}</select></label>${['trend','channel'].includes(d.kind)?`<label><input type="checkbox" name="extend" ${d.extend?'checked':''}>오른쪽 연장</label>`:''}<button>수정 적용</button></div><p class="point-error" role="alert"></p></form>${d.kind==='measure'?`<p class="measurement-result">${safe(DrawingTools.measure(d.points,bars,currency,frame))}</p>`:''}${d.kind==='riskreward'?`<p class="measurement-result">${safe(DrawingTools.riskReward(d.points,currency)?.label)} · 1주 기준 가격 거리, 수수료·슬리피지 제외</p>`:''}`;
+      editor.innerHTML=`<form class="point-form"><strong>${DrawingTools.labels[d.kind]}</strong><div class="point-grid">${d.points.map((p,i)=>`<label>${pointLabel(d,i)} 날짜<input type="date" name="time${i}" value="${safe(p.time)}" required></label><label>${pointLabel(d,i)} 가격 (${currency})<input type="text" inputmode="decimal" name="price${i}" value="${WorkbenchFormat.money(p.price,currency)}" required></label>`).join('')}</div><div class="editor-style"><label>선 색상<input type="color" name="color" value="${d.color}"></label><label>굵기<select name="width">${[1,2,3,4].map(n=>`<option ${d.width===n?'selected':''}>${n}</option>`).join('')}</select></label>${['trend','channel'].includes(d.kind)?`<label><input type="checkbox" name="extend" ${d.extend?'checked':''}>오른쪽 연장</label>`:''}<button>수정 적용</button></div><p class="point-error" role="alert"></p></form>${d.kind==='measure'?`<p class="measurement-result">${safe(DrawingTools.measure(d.points,drawingBars,currency,frame))}</p>`:''}${d.kind==='riskreward'?`<p class="measurement-result">${safe(DrawingTools.riskReward(d.points,currency)?.label)} · 1주 기준 가격 거리, 수수료·슬리피지 제외</p>`:''}`;
       editor.querySelector('form').onsubmit=e=>{
         e.preventDefault();const f=new FormData(e.target),next=clone(d);
         next.points=d.points.map((p,i)=>({time:f.get('time'+i),price:f.get('price'+i)===WorkbenchFormat.money(p.price,currency)?p.price:Number(String(f.get('price'+i)).replaceAll(',',''))}));
-        if(next.points.some(p=>DrawingTools.index(p.time,bars,frame)==null||!Number.isFinite(p.price)||p.price<=0||p.price>1e15)) {q('.point-error').textContent='차트 기간 안의 날짜와 0보다 큰 유효 가격을 입력하세요.';return;}
+        if(next.points.some(p=>DrawingTools.index(p.time,drawingBars,frame)==null||!Number.isFinite(p.price)||p.price<=0||p.price>1e15)) {q('.point-error').textContent=`날짜는 ${drawingBars[0].date}~${drawingBars.at(-1).last_session||drawingBars.at(-1).date}, 가격은 0보다 큰 유효 값을 입력하세요.`;return;}
         if(['trend','channel'].includes(d.kind)&&next.points[0].time===next.points[1].time){q('.point-error').textContent='첫 두 점은 서로 다른 날짜여야 합니다.';return;}
         if(d.kind==='riskreward'&&!DrawingTools.riskReward(next.points,currency)){q('.point-error').textContent='손절·목표는 진입가의 반대편에 두고, 서로 다른 날짜를 포함해야 합니다.';return;}
         next.color=f.get('color');next.width=Number(f.get('width'));next.extend=f.has('extend');
@@ -131,11 +133,13 @@ window.WorkbenchWorkspace = (() => {
       else if(e.key==='Delete'){e.preventDefault();remove();}
     }
     function beforeUnload(e){if(dirty()){e.preventDefault();e.returnValue='';}}
-    chart=WorkbenchCharts.create(plot,[{type:'candles',currency,label:currency,options:{title:''},data:bars.map(b=>({time:b.date,open:b.open,high:b.high,low:b.low,close:b.close}))},{type:'volume',label:'거래량',pane:1,data:bars.map(b=>({time:b.date,...(b.volume==null?{}:{value:b.volume}),color:b.close>=b.open?'#298463':'#994653'})),options:{title:'',priceFormat:{type:'volume'}}}],{height:plot.clientHeight,headroom:.22,lastBars:126,onReady:(c,refs)=>{price=refs[0].ref;}});
+    chart=WorkbenchCharts.create(plot,[{type:'candles',currency,label:currency,options:{title:''},data:bars.map(b=>({time:b.date,open:b.open,high:b.high,low:b.low,close:b.close})).concat(drawingBars.slice(bars.length).map(b=>({time:b.date})))},{type:'volume',label:'거래량',pane:1,data:bars.map(b=>({time:b.date,...(b.volume==null?{}:{value:b.volume}),color:b.close>=b.open?'#298463':'#994653'})),options:{title:'',priceFormat:{type:'volume'}}}],{height:plot.clientHeight,headroom:.22,lastBars:126,onReady:(c,refs)=>{price=refs[0].ref;}});
+    chart.timeScale().setVisibleLogicalRange({from:Math.max(0,bars.length-126),to:bars.length-1+25});
     function renderPriceLegend(day) {
       if(!legend)return;
       const b=byDate.get(day)||bars.at(-1);
       legend.replaceChildren();
+      if(day&&day>bars.at(-1).date){legend.textContent=day+' · 미래 작도 공간 · 가격 자료 없음';return;}
       const date=document.createElement('strong');date.textContent=b.date+' · '+frameName;legend.append(date);
       for(const [label,key] of [['O','open'],['H','high'],['L','low'],['C','close']]){const part=document.createElement('span');part.textContent=label+' '+WorkbenchFormat.money(b[key],currency);part.className=b.close>=b.open?'quote-up':'quote-down';legend.append(part);}
       const volume=document.createElement('span');volume.textContent='Vol '+(b.volume==null?'결측':b.volume.toLocaleString('ko-KR'));legend.append(volume);
@@ -146,8 +150,8 @@ window.WorkbenchWorkspace = (() => {
       hoverTime=p.time?(typeof p.time==='string'?p.time:`${p.time.year}-${String(p.time.month).padStart(2,'0')}-${String(p.time.day).padStart(2,'0')}`):null;
       renderSmaLegend();renderPriceLegend(hoverTime);
     });
-    drawings=DrawingTools.attach({element:plot,chart,series:price,bars,currency,timeframe:frame,drawingLimit:packet.drawing_limit||300,getDrawings:()=>previewDrawings||state.drawings,
-      onHint:text=>{q('.drawing-hint').textContent=text;},
+    drawings=DrawingTools.attach({element:plot,chart,series:price,bars:drawingBars,currency,timeframe:frame,drawingLimit:packet.drawing_limit||300,getDrawings:()=>previewDrawings||state.drawings,
+      onHint:text=>{q('.drawing-hint').textContent=text+' · 마지막 봉 오른쪽도 작도 가능 · 미래 5년 달력 공간(일봉: 평일, 휴장일 미반영)';},
       onSelect:id=>{if(id){host.hidden=false;document.querySelector('#stock-tools-toggle')?.setAttribute('aria-expanded','true');}selected=id;qa('[data-tool]').forEach(b=>b.classList.toggle('selected',b.dataset.tool==='select'));refresh();},
       onChange:(next,options={})=>{
         if(options.preview){previewDrawings=next;return;}
@@ -157,9 +161,9 @@ window.WorkbenchWorkspace = (() => {
       }});
     document.addEventListener('keydown',keyboard);window.addEventListener('beforeunload',beforeUnload);
     refresh();renderAverages();loadAverages();status(packet.updated_at?'저장본 복원됨':'새 작업 · 변경 시 자동 저장');
-    const missing=state.drawings.filter(d=>d.points.some(p=>DrawingTools.index(p.time,bars,frame)==null)).length;
+    const missing=state.drawings.filter(d=>d.points.some(p=>DrawingTools.index(p.time,drawingBars,frame)==null)).length;
     if(missing)q('.drawing-hint').textContent=`현재 가격 기간 밖의 작도 ${missing}개는 보존하며 차트에 표시하지 않습니다. 목록에서 수정할 수 있습니다.`;
-    active={save,destroy(){dead=true;clearTimeout(timer);averageVersion++;drawings.destroy();smaLegend.remove();WorkbenchCharts.remove(chart);document.removeEventListener('keydown',keyboard);window.removeEventListener('beforeunload',beforeUnload);},range(value){let from=0;if(value!=='all'){const end=new Date(bars.at(-1).date+'T00:00:00Z');end.setUTCMonth(end.getUTCMonth()-Number(value));const start=end.toISOString().slice(0,10);from=bars.findIndex(b=>b.date>=start);if(from<0)from=bars.length-1;}chart.timeScale().setVisibleLogicalRange({from,to:bars.length-1});}};
+    active={save,destroy(){dead=true;clearTimeout(timer);averageVersion++;drawings.destroy();smaLegend.remove();WorkbenchCharts.remove(chart);document.removeEventListener('keydown',keyboard);window.removeEventListener('beforeunload',beforeUnload);},range(value){let from=0;if(value!=='all'){const end=new Date(bars.at(-1).date+'T00:00:00Z');end.setUTCMonth(end.getUTCMonth()-Number(value));const start=end.toISOString().slice(0,10);from=bars.findIndex(b=>b.date>=start);if(from<0)from=bars.length-1;}chart.timeScale().setVisibleLogicalRange({from,to:bars.length-1+Math.min(60,Math.max(10,Math.round((bars.length-from)*.2)))});}};
     return active;
   }
   return {mount,closeActive};
