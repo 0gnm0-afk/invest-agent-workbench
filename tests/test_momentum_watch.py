@@ -70,6 +70,26 @@ class IntegrationTests(unittest.TestCase):
         for row in screen['rows']:row['as_of']=screen['session_dates'][row['market']]
         return screen,snap
 
+    def test_period_ties_survive_sorted_json_without_input_mutation(self):
+        for stage in ('S3','S4'):
+            with self.subTest(stage=stage):
+                screen,snap=self.make() if stage=='S3' else fixture()
+                for row in screen['rows']:
+                    bars=next(x['bars'] for x in snap['series'] if x['market']==row['market'] and x['symbol']==row['symbol'])
+                    w=spr(bars)['windows']['126']
+                    if stage=='S3':w.update(stage='S3',retest_low=205,completion_level=219)
+                    row['sperandeo']={'windows':{str(n):copy.deepcopy(w) for n in (63,126,252)}}
+                before=copy.deepcopy(screen)
+                cfg={'strategy':'pdf_momentum','watchlist':{}}
+                live=priority_review.build(screen,snap,cfg)
+                saved=json.loads(json.dumps(screen,sort_keys=True))
+                replay=priority_review.build(saved,snap,cfg)
+                self.assertEqual(live,replay)
+                self.assertEqual(screen,before)
+                values=[e for o in live['observations'] for e in o.get('signals' if stage=='S3' else 'events',[]) if e['route']=='sperandeo']
+                self.assertTrue(values)
+                self.assertEqual([v['metrics']['window'] for v in values[:3]],['63','126','252'])
+
     def test_phases_counts_caps_and_legacy_invariance(self):
         screen,snap=self.make();before=copy.deepcopy(screen)
         legacy=priority_review.build(screen,snap,{'strategy':'pdf_momentum'})

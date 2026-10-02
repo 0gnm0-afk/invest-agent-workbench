@@ -6,6 +6,7 @@ from pathlib import Path
 from invest_agent.trading import momentum_watch as watch, momentum_entry as engine, base_structure as base
 from invest_agent.trading.market import usable_tail
 from display_names import stock_label
+from momentum_review import ordered_structure
 from display_format import money, currency_for, display_analysis
 
 def signal_key(s):return base.rank(s) if s['route']=='base_watch' else watch.key(s)
@@ -34,7 +35,7 @@ def augment(strict,screen,snapshot,options):
         if o.get('features',{}).get('state')!='available':continue
         k=(o['market'],o['symbol']);bars=usable_tail(engine.completed(series[k]['bars'],o['as_of']),snapshot['sessions'][k[0]])
         o['entry_settings']=strict['config']['momentum']
-        result=watch.analyze(bars,{**o,'market':out['market_context'][k[0]]},rows[k].get('sperandeo'),cfg,as_of=o['as_of']);o.update(result)
+        result=watch.analyze(bars,{**o,'market':out['market_context'][k[0]]},ordered_structure(rows[k].get('sperandeo')),cfg,as_of=o['as_of']);o.update(result)
         if base_cfg is not None:
             result=base.analyze(bars,base_cfg,as_of=o['as_of'],market=out['market_context'][k[0]])
             o['base_observation']=result

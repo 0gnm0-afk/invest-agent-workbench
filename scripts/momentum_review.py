@@ -28,6 +28,14 @@ REASONS={'not_selected':'진입 조건 미충족','relative_strength':'12개월 
 def write(path,value):path.write_text(json.dumps(value,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
 
 
+def ordered_structure(structure):
+    """Preserve engine period order across sorted-key JSON storage and replay."""
+    if not structure:
+        return structure
+    return {**structure, 'windows': dict(sorted(structure.get('windows', {}).items(),
+                                              key=lambda item: int(item[0])))}
+
+
 def build(screen,snapshot,overrides):
     if 'watchlist' in overrides:
         import watch_review
@@ -72,7 +80,7 @@ def build(screen,snapshot,overrides):
         bars,f=prepared[key];pool=returns[key[0]];rs=None
         if f['state']=='available' and len(pool)>1:
             value=f['returns']['252'];rs=100*((bisect_left(pool,value)+bisect_right(pool,value)-1)/2)/(len(pool)-1)
-        try:obs=model.analyze(bars,rs,markets[key[0]],row.get('sperandeo'),cfg['momentum'],as_of=screen['session_dates'][key[0]])
+        try:obs=model.analyze(bars,rs,markets[key[0]],ordered_structure(row.get('sperandeo')),cfg['momentum'],as_of=screen['session_dates'][key[0]])
         except (ValueError,KeyError,IndexError) as exc:
             obs={'state':'analysis_error','candidate':False,'main_candidate':False,'sperandeo_candidate':False,'rejections':[str(exc)]}
         obs.update(identity,rs_population=len(pool),provider=by_series[key].get('provider'),
