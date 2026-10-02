@@ -117,8 +117,10 @@ def problem_exclusion(row, reasons, policy, *, as_of, run):
 
 def remember(records, policy):
     rule = policy.get('automatic') or {}
-    items = [r for r in records if r.get('automatic_rule') == rule.get('rule_id')]
-    if not items or not rule.get('enabled'):
+    dual = policy.get('dual_provider') or {}
+    items = [r for r in records if (rule.get('enabled') and r.get('automatic_rule') == rule.get('rule_id'))
+             or (dual.get('enabled') and r.get('dual_provider_rule') == dual.get('rule_id'))]
+    if not items:
         return 0
     with instance_lock(REGISTRY.parent):
         prior, _ = read_registry()

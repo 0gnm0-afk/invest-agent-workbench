@@ -1284,5 +1284,12 @@
       "sha256": "c58cbdcdc2154ff79a6d9e6bbdc8d8597ce4e613053550fd124a14db0b1760d3"
     },
     "requires_confirmed_problem": true
+  },
+  "dual_provider": {
+    "enabled": true,
+    "rule_id": "toss_nh_data_unavailable_v1",
+    "approved_on": "2026-10-02",
+    "approval": "사용자: Toss와 NH로도 조회 실패한 종목은 제외",
+    "systemic_failures_excluded": false
   }
 }

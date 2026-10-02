@@ -135,7 +135,7 @@ class ReviewTest(unittest.TestCase):
                  'quality_issue_series':0,'unexpected_failures':0}
         with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
             root=Path(tmp); source=root/'source';source.mkdir()
-            p.write(source/'snapshot.json',{'collection_stats':{'requested':3,'received':3,'failed':0}})
+            p.write(source/'snapshot.json',{'collection_stats':{'requested':3,'received':3,'failed':0},'universe':[],'series':[],'errors':[],'sessions':{}})
             p.write(source/'manifest.json',{})
             replacements=[(daily,'ROOT',root),(daily,'code_hashes',lambda _:{}),
                           (daily,'seed_check',lambda _:({'roots':[str(source),'a','b']},{})),

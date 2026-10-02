@@ -11,6 +11,7 @@ from nh_market_auth import BASE, NHMarketError, NoRedirect, token
 
 PERIOD = '/gbstock/quote/v1/period'
 KR_PERIOD = '/krstock/quote/v1/period'
+CURRENT = '/gbstock/quote/v1/current'
 
 
 def us_period_inputs(symbol, end):
@@ -38,7 +39,7 @@ class MarketClient:
         self.root.mkdir(parents=True,exist_ok=True)
 
     def read(self, path, inputs):
-        if path not in (PERIOD,KR_PERIOD):
+        if path not in (PERIOD,KR_PERIOD,CURRENT):
             raise NHMarketError('market_only_period_required')
         key = digest(path, inputs)
         cached = (self.evidence_root or self.root)/'responses'/(key+'.json')
@@ -46,6 +47,8 @@ class MarketClient:
             response = json.loads(cached.read_text(encoding='utf-8'))
             if response.get('path') != path or response.get('inputs') != inputs:
                 raise NHMarketError('cached_market_request_mismatch')
+            if response.get('http_status') == 400:
+                raise NHMarketError('market_http_400')
             return response, cached
         if self.evidence_root:
             raise NHMarketError('requested_evidence_not_saved')
@@ -73,6 +76,11 @@ class MarketClient:
                 return result, cached
             except urllib.error.HTTPError as exc:
                 event['status'] = exc.code
+                if exc.code == 400:
+                    # Persist request/status evidence, never credentials or arbitrary error bodies.
+                    cached.parent.mkdir(parents=True,exist_ok=True)
+                    cached.write_text(json.dumps({'path':path,'inputs':inputs,'http_status':400,
+                        'fetched_at':event['at']},sort_keys=True),encoding='utf-8')
                 if exc.code == 401 and attempt == 1:
                     current_token = token(rejected_token=current_token)
                 elif exc.code not in (429,500,502,503,504) or attempt == 3:

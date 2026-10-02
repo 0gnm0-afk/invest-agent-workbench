@@ -46,16 +46,22 @@ def complete_cap(get, row, sessions):
             'market_cap_price_basis': raw['price_basis']}
 
 
+def lifecycle_record(row, completed_session, records=None):
+    """Confirmed termination persists, but never crosses identity or effective date."""
+    for record in LIFECYCLE if records is None else records:
+        if (record.get('state') == 'confirmed_trading_ended'
+                and all(row.get(k) and row.get(k) == record[k] for k in ('market', 'symbol', 'isin_code'))
+                and completed_session and record['effective_session'] <= completed_session):
+            return record
+    return None
+
+
 def error_disposition(error, row, completed_session):
-    # A security identifier and bounded observation date prevent ticker reuse
-    # or a historical run from inheriting this verified corporate action.
-    for record in LIFECYCLE:
-        if (all(row.get(k) == record[k] for k in ('market', 'symbol', 'isin_code'))
-                and record['effective_session'] <= completed_session <= record['verified_on']
-                and error.get('error_code') in ('stale_or_invalid_last_session', 'no_completed_session_bars')):
-            return {**record, 'analysis_allowed': False}
     code = error.get('error_code')
     if code in ('stale_or_invalid_last_session', 'no_completed_session_bars'):
+        record = lifecycle_record(row, completed_session)
+        if record:
+            return {**record, 'analysis_allowed': False}
         return {'state': 'quarantined_' + code, 'analysis_allowed': False,
                 'cause': 'unconfirmed', 'retry_policy': 'next_requested_collection_no_same_run_loop'}
     return {'state': 'collection_failure', 'analysis_allowed': False,

@@ -77,6 +77,14 @@ def collect(config, account, cache_root, get, *, now=None, refresh=False,
 
 def _collect(config, account, root, get, now, refresh, prior_series, prior_source):
     scope_policy = market_scope.load()
+    scope_policy['completed_sessions'] = {}
+    for market in ('KR', 'US'):
+        try:
+            scope_policy['completed_sessions'][market] = capped_sessions(
+                completed_sessions(market, now), config.get('session_cutoff'))[-1]
+        except (ValueError, KeyError, IndexError):
+            scope_policy['completed_sessions'][market] = ''
+
     if config.get('universe_mode') == 'exchange_listings':
         universe, listings = discover(
             get, config['markets'], config.get('limit_per_exchange'),
@@ -145,7 +153,7 @@ def _collect(config, account, root, get, now, refresh, prior_series, prior_sourc
     progress()
 
     def read_series(market, symbol, benchmark=None, provider_symbol=None, *, raw=False, listing=None):
-        if market_scope.match({'market':market,'symbol':symbol}, scope_policy):
+        if market_scope.match(listing or {'market':market,'symbol':symbol}, scope_policy):
             raise ValueError('approved_market_exclusion')
         if market not in sessions:
             raise ValueError('completed_sessions_unavailable')

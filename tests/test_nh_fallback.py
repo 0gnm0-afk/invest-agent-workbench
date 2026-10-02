@@ -58,7 +58,7 @@ class NHFallbackTest(unittest.TestCase):
                          'low':9,'close_prc':10,'movolume':1} for date in
                         ('2026-09-22','2026-09-24')]
                 return {'payload':{'rsp_cd':'00000','Output_1':rows}},Path('evidence')
-        with self.assertRaisesRegex(ValueError,'completed_session_missing'):
+        with self.assertRaisesRegex(ValueError,'history_incomplete'):
             _nh_bars(FakeClient(),'TEST',['2026-09-22','2026-09-23','2026-09-24'])
 
     def test_korean_integrated_market_parser(self):

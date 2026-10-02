@@ -70,8 +70,11 @@ def seed_check(config):
 
 
 def saved_fallback_summary(fallback):
-    return {'attempted':fallback['attempted'], 'adopted':fallback['adopted'],
-            'unrecovered':fallback.get('unrecovered', fallback['attempted']-fallback['adopted'])}
+    result = {'attempted':fallback['attempted'], 'adopted':fallback['adopted'],
+            'unrecovered':fallback.get('unrecovered', fallback['attempted']-fallback['adopted']-fallback.get('excluded',0))}
+    if 'excluded' in fallback:
+        result['excluded'] = fallback['excluded']
+    return result
 
 
 def percent(value):
@@ -109,7 +112,7 @@ def render(run, output, screening=None, observation=None):
         if run.get('nh_fallback'):
             fb = run['nh_fallback']
             lines.insert(lines.index('## 후보와 섹터 맥락')-1,
-                f"NH 표적 보완: 시도 {fb['attempted']} · 채택 {fb['adopted']} · 미복구 {fb['unrecovered']}. "
+                f"NH 표적 보완: 시도 {fb['attempted']} · 채택 {fb['adopted']} · 양쪽 자료 부재 제외 {fb.get('excluded',0)} · 미해결 {fb['unrecovered']}. "
                 '원 Toss 실패는 원본에 보존; NH 거래량 정밀도는 종목별 표시하고 동일 공급자 섹터 집계에서 제외합니다.')
         if (output/'priority-review.json').is_file():
             review = sector.load(output/'priority-review.json')
@@ -306,6 +309,10 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
                 original_source,output/'nh_fallback',config,
                 evidence_root=nh_evidence,prior_source=previous)
             run['nh_fallback'] = {k:fallback[k] for k in ('attempted','adopted','unrecovered')}
+            run['nh_fallback']['excluded'] = len(fallback.get('automatic_exclusions',[]))
+            if not nh_evidence:
+                import automatic_scope, market_scope
+                automatic_scope.remember(fallback.get('automatic_exclusions',[]),market_scope.load())
             inputs.update(fallback_inputs)
             update(stage, 'completed' if fallback['unrecovered'] == 0 else 'completed_with_exceptions')
         else:

@@ -73,6 +73,9 @@ class ProjectionCache(unittest.TestCase):
             so.write(seed,{'roots':[str(root/'old'),str(root/'classification'),str(root/'evidence'),str(root/'nh')],
                            'input_hashes':{str(evidence):so.sha(evidence)}})
             config={'sector_manifest':str(seed),'sector_manifest_sha256':so.sha(seed)}
+            (root/'run').mkdir()
+            so.write(root/'run/run.json',{})
+            so.write(root/'run/manifest.json',{'input_hashes':{},'output_hashes':{'run.json':so.sha(root/'run/run.json')}})
             args=(root,root/'run',config,source,{'applied_at':'2026-09-30T00:00:00+00:00'},{'markets':{}})
             with patch.object(so,'build',return_value=({'observations':[]},[],{str(evidence):so.sha(evidence)})) as build, \
                  patch.object(projection.sector_signals,'build',return_value={'sectors':[]}), \
