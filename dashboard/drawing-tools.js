@@ -88,7 +88,7 @@ window.DrawingTools = (() => {
     for(let i=last;i>=first;i--){const c=candidate(i);if(c&&c.distance<=6&&(!best||c.distance<best.distance))best=c;}
     return best;
   }
-  function attach({element, chart, series, bars, currency, timeframe='1d', drawingLimit=300, snapEnabled=true, getDrawings, onChange, onSelect, onHint}) {
+  function attach({element, chart, series, bars, currency, timeframe='1d', drawingLimit=300, snapEnabled=true, getDrawings, getOverlays=()=>[], onChange, onSelect, onHint}) {
     const NS='http://www.w3.org/2000/svg';
     const svg=document.createElementNS(NS,'svg');
     svg.classList.add('drawing-layer');svg.setAttribute('aria-label','가격 차트 작도 영역');
@@ -108,7 +108,7 @@ window.DrawingTools = (() => {
     function render() {
       if(removed)return;
       const w=chart.timeScale().width(),h=chart.panes()[0].getHeight();
-      const all=getDrawings().map(d=>({d,p:d.points.map(xy)})).sort((a,b)=>Number(a.d.id===selected)-Number(b.d.id===selected));
+      const all=getDrawings().concat(getOverlays()).map(d=>({d,p:d.points.map(xy)})).sort((a,b)=>Number(a.d.id===selected)-Number(b.d.id===selected));
       if(draft.length) {
         const ps=[...draft];if(hover&&ps.length<count[mode])ps.push(hover);
         if(ps.length===count[mode])all.push({d:{kind:mode,points:ps,color:'#218775',width:2,extend:false},p:ps.map(xy)});
@@ -121,11 +121,11 @@ window.DrawingTools = (() => {
         if(count[mode])node('rect',{width:w,height:h,fill:'transparent','pointer-events':'all'});
         for(const {d,p} of all) {
           if(p.some(v=>!v||v.x==null||v.y==null||!Number.isFinite(v.x+v.y)))continue;
-          const g=node('g',{'data-id':d.id||'',opacity:d.id?1:.65,'aria-label':labels[d.kind]});
+          const g=node('g',{'data-id':d.id||'',opacity:d.id?1:.65,'aria-label':(d.ai?'AI 제안 · ':'')+labels[d.kind],class:d.ai?'ai-proposal':'user-drawing'});
           const [a,b]=p, stroke=d.color;
           function line(v1,v2,dash='') {
             node('line',{x1:v1.x,y1:v1.y,x2:v2.x,y2:v2.y,stroke:'transparent','stroke-width':14,'pointer-events':mode==='select'?'stroke':'none'},g);
-            node('line',{x1:v1.x,y1:v1.y,x2:v2.x,y2:v2.y,stroke,'stroke-width':d.width,'stroke-dasharray':dash,'pointer-events':'none'},g);
+            node('line',{x1:v1.x,y1:v1.y,x2:v2.x,y2:v2.y,stroke,'stroke-width':d.width,'stroke-dasharray':d.ai?'7 5':dash,'pointer-events':'none'},g);
           }
           if(d.kind==='horizontal') {
             line({x:0,y:a.y},{x:w,y:a.y});
@@ -162,6 +162,7 @@ window.DrawingTools = (() => {
               line(upperStart,upperEnd);line({x:start.x,y:start.y+offset/2},{x:end.x,y:end.y+offset/2},'5 4');
             }
           }
+          if(d.ai){g.setAttribute('opacity','.7');g.querySelectorAll('*').forEach(n=>n.setAttribute('pointer-events','none'));}
           if(d.id===selected&&mode==='select')p.forEach((v,i)=>node('circle',{cx:v.x,cy:v.y,r:6,fill:'#fff',stroke,'stroke-width':2,'data-point':i,'pointer-events':'all',cursor:'move'},g));
         }
         for(const p of draft){const v=xy(p);if(v)node('circle',{cx:v.x,cy:v.y,r:4,fill:'#218775','pointer-events':'none'});}
@@ -208,7 +209,7 @@ window.DrawingTools = (() => {
         }else if(mode==='riskreward')onHint(draft.length===1?'손익비: 손절가를 클릭하세요.':'손익비: 진입가 반대편의 목표가를 클릭하세요.');else onHint(`${labels[mode]}: ${count[mode]-draft.length}개 지점을 더 클릭하세요.`);
       } else {
         const group=e.target.closest('[data-id]'),id=group?.getAttribute('data-id');
-        if(!id)return;
+        if(!id||group.classList.contains('ai-proposal'))return;
         e.preventDefault();e.stopPropagation();select(id);
         const d=getDrawings().find(v=>v.id===id);
         drag={id,start:p,original:clone(d),all:clone(getDrawings()),handle:e.target.hasAttribute('data-point')?Number(e.target.getAttribute('data-point')):null,moved:false};

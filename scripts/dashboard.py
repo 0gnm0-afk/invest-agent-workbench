@@ -18,6 +18,7 @@ from chart_history import HistoryStore, timeframe
 from financial_store import FinancialStore
 from financial_summary import selected_stock
 from chart_workspace import WorkspaceStore, Conflict, moving_averages
+from analysis_service import AnalysisService
 
 
 def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None, daily_status=None):
@@ -25,6 +26,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
     store = WorkspaceStore(workspace_path or ROOT / "runtime/chart-workspaces.sqlite3")
     histories = HistoryStore((Path(workspace_path).parent if workspace_path else ROOT / 'runtime') / 'chart-history.sqlite3')
     financials = FinancialStore((Path(workspace_path).parent if workspace_path else ROOT / 'runtime') / 'financials')
+    analyses = AnalysisService(store, histories, financials, lambda: views['view'] if views is not None else initial_view, ROOT if workspace_path is None else Path(workspace_path).parent)
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass
@@ -53,7 +55,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
             except ValueError:
                 return self.send(b'{"error":"invalid_timeframe"}', status=400)
             if path == '/health':
-                return self.send(json.dumps({'app': 'invest-workbench', 'token': token}).encode())
+                return self.send(json.dumps({'app': 'invest-workbench', 'token': token, 'analysis_protocol': 1, 'workspace': str(ROOT)}).encode())
             if path == '/api/daily-update':
                 return self.send(json.dumps(daily_status() if daily_status else {'enabled':False}, ensure_ascii=False).encode('utf-8'))
             if path == '/api/home':
@@ -97,7 +99,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                 if value is None:
                     value = {'state': 'unavailable', 'reason': 'saved_price_series_missing', 'bars': []}
                 return self.send(json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8'))
-            names = {'/': 'index.html', '/app.js': 'app.js', '/tooltips.js': 'tooltips.js', '/financials.js': 'financials.js', '/financials.css': 'financials.css', '/style.css': 'style.css',
+            names = {'/analysis.js': 'analysis.js', '/': 'index.html', '/app.js': 'app.js', '/tooltips.js': 'tooltips.js', '/financials.js': 'financials.js', '/financials.css': 'financials.css', '/style.css': 'style.css',
                      '/stock-chart.js': 'stock-chart.js', '/drawing-tools.js': 'drawing-tools.js', '/chart-workspace.js': 'chart-workspace.js', '/chart-tools.css': 'chart-tools.css', '/format.js': 'format.js', '/charts.js': 'charts.js', '/workbench.png': 'workbench.png',
                      '/vendor/lightweight-charts.js': 'vendor/lightweight-charts.js',
                      '/vendor/NOTICE': 'vendor/NOTICE', '/vendor/LICENSE': 'vendor/LICENSE'}
@@ -120,7 +122,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                 frame = timeframe(query.get('timeframe', ['1d'])[0])
             except ValueError:
                 return self.send(b'{"error":"invalid_timeframe"}', status=400)
-            if not path.startswith(('/api/chart-state/', '/api/chart-history/', '/api/financials/')):
+            if not path.startswith(('/api/chart-state/', '/api/chart-history/', '/api/financials/', '/api/analysis-rpc')):
                 return self.send(b'{"error":"read_only"}', status=405)
             expected = '127.0.0.1:' + str(self.server.server_port)
             if (self.headers.get('Host') != expected or self.headers.get('Origin') != 'http://' + expected
@@ -129,7 +131,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
             if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
                 return self.send(b'{"error":"json_required"}', status=415)
             key = urllib.parse.unquote(path.rsplit('/', 1)[-1])
-            if key not in stocks:
+            if path != '/api/analysis-rpc' and key not in stocks:
                 return self.send(b'{"error":"unknown_stock"}', status=404)
             try:
                 length = int(self.headers.get('Content-Length', '0'))
@@ -137,6 +139,18 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                     return self.send(b'{"error":"invalid_body_size"}', status=413)
                 self.connection.settimeout(5)
                 body = json.loads(self.rfile.read(length))
+                if path == '/api/analysis-rpc':
+                    if not isinstance(body, dict) or set(body) != {'op', 'arguments'}:
+                        raise ValueError('invalid_analysis_request')
+                    try:
+                        result = analyses.dispatch(body['op'], body['arguments'], 'http://' + expected)
+                        return self.send(json.dumps(result, ensure_ascii=False, allow_nan=False).encode('utf-8'))
+                    except Conflict as exc:
+                        return self.send(json.dumps({'error':str(exc)}).encode(), status=409)
+                    except (ValueError, KeyError, TypeError) as exc:
+                        # Validation messages only; never forward arbitrary provider/OS exceptions.
+                        message = str(exc) if isinstance(exc, ValueError) and str(exc).replace('_','').isalnum() else 'invalid_analysis_request'
+                        return self.send(json.dumps({'error':message}).encode(), status=400)
                 if path.startswith('/api/financials/'):
                     if not isinstance(body, dict) or set(body) != {'refresh'} or type(body['refresh']) is not bool:
                         raise ValueError('invalid_financial_request')
@@ -232,6 +246,8 @@ def main():
     ready = {'url': 'http://127.0.0.1:' + str(server.server_port), 'output': str(output), 'token': token}
     if args.ready_file:
         args.ready_file.write_text(json.dumps(ready), encoding='utf-8')
+    from financial_store import save as save_endpoint
+    save_endpoint(ROOT / 'runtime/dashboard/analysis-endpoint.json', ready, atomic=True)
     print(json.dumps(ready), flush=True)
     if args.open_browser:
         webbrowser.open(ready['url'])

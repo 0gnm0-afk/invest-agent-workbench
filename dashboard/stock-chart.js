@@ -1,9 +1,9 @@
 window.WorkbenchStockChart = (() => {
-  async function mount({stock,market,symbol,currency,isCurrent}) {
+  async function mount({stock,market,symbol,currency,isCurrent,context}) {
     const key=encodeURIComponent(market+':'+symbol),host=document.querySelector('#chart-workspace'),plot=document.querySelector('#price-chart');
     const status=document.querySelector('#history-status'),retry=document.querySelector('#history-retry');
     const frames=[...document.querySelectorAll('[data-frame]')],ranges=[...document.querySelectorAll('[data-range]')];
-    let workspace,frame='1d',range='6',busy=false;
+    let workspace,frame=context?.timeframe||'1d',range=context?.range||'6',busy=false;
     function controls(disabled){frames.concat(ranges,[retry]).forEach(b=>b.disabled=disabled);}
     async function render(value) {
       if(!isCurrent())return;
@@ -54,12 +54,14 @@ window.WorkbenchStockChart = (() => {
         await render(value);
       }catch {
         if(isCurrent()){status.textContent='장기 차트를 열지 못했습니다. 재시도할 수 있습니다.';retry.hidden=false;}
-      }finally{busy=false;if(isCurrent())controls(false);}
+      }finally{busy=false;if(isCurrent()){controls(false);window.dispatchEvent(new Event('workbench-context'));}}
     }
     frames.forEach(b=>b.onclick=()=>change(b.dataset.frame));
-    ranges.forEach(b=>b.onclick=()=>{range=b.dataset.range;workspace?.range(range);ranges.forEach(x=>x.classList.toggle('selected',x===b));});
+    ranges.forEach(b=>b.onclick=()=>{range=b.dataset.range;workspace?.range(range);ranges.forEach(x=>x.classList.toggle('selected',x===b));window.dispatchEvent(new Event('workbench-context'));});
     retry.onclick=()=>change(frame,'retry');
-    await change('1d',true);
+    await change(frame,true);
+    if(context?.visible_range)workspace?.visibleRange(context.visible_range);
+    return {ready:()=>!busy,context:()=>({...workspace?.context(),timeframe:frame,range,scenario:context?.scenario||'',price_scale:'linear'}),async restore(value){context=value;range=value.range;await change(value.timeframe);range=value.range;workspace?.range(range);if(value.visible_range)workspace?.visibleRange(value.visible_range);}};
   }
   return {mount};
 })();

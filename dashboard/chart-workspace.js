@@ -25,7 +25,7 @@ window.WorkbenchWorkspace = (() => {
     }
     const drawingBars=DrawingTools.timeline(bars,frame);
     let state=packet.state,revision=packet.revision,lastSaved=JSON.stringify(state),history=[],future=[],selected=null;
-    let previewDrawings=null;
+    let previewDrawings=null,proposals=[];
     let saving=null,timer=null,dead=false,averageVersion=0,chart,price,drawings,averageRefs=[],averageValues={},hoverTime=null,conflict=false;
     host.innerHTML=`<div class="chart-tools" role="toolbar" aria-label="차트 작도 도구">
       <button data-tool="select" class="selected" title="선택·이동" aria-label="선택·이동"><span aria-hidden="true">↖</span><span>선택·이동</span></button><button data-tool="trend" title="추세선" aria-label="추세선"><span aria-hidden="true">╱</span><span>추세선</span></button><button data-tool="channel" title="평행 채널" aria-label="평행 채널"><span aria-hidden="true">∥</span><span>평행 채널</span></button><button data-tool="horizontal" title="수평선" aria-label="수평선"><span aria-hidden="true">―</span><span>수평선</span></button><button data-tool="box" title="박스" aria-label="박스"><span aria-hidden="true">▱</span><span>박스</span></button><button data-tool="measure" title="구간 측정" aria-label="구간 측정"><span aria-hidden="true">↔</span><span>구간 측정</span></button>
@@ -151,9 +151,9 @@ window.WorkbenchWorkspace = (() => {
       hoverTime=p.time?(typeof p.time==='string'?p.time:`${p.time.year}-${String(p.time.month).padStart(2,'0')}-${String(p.time.day).padStart(2,'0')}`):null;
       renderSmaLegend();renderPriceLegend(hoverTime);
     });
-    drawings=DrawingTools.attach({element:plot,chart,series:price,bars:drawingBars,currency,timeframe:frame,snapEnabled:closeSnapEnabled,drawingLimit:packet.drawing_limit||300,getDrawings:()=>previewDrawings||state.drawings,
+    drawings=DrawingTools.attach({element:plot,chart,series:price,bars:drawingBars,currency,timeframe:frame,snapEnabled:closeSnapEnabled,drawingLimit:packet.drawing_limit||300,getDrawings:()=>previewDrawings||state.drawings,getOverlays:()=>proposals,
       onHint:text=>{q('.drawing-hint').textContent=text+' · 종가 스냅: 왼쪽 종가에 점선·가격 붙임, Alt로 자유 선택 · 마지막 봉 오른쪽도 작도 가능 · 미래 5년 달력 공간(일봉: 평일, 휴장일 미반영)';},
-      onSelect:id=>{if(id){host.hidden=false;document.querySelector('#stock-tools-toggle')?.setAttribute('aria-expanded','true');}selected=id;qa('[data-tool]').forEach(b=>b.classList.toggle('selected',b.dataset.tool==='select'));refresh();},
+      onSelect:id=>{if(id){host.hidden=false;document.querySelector('#stock-tools-toggle')?.setAttribute('aria-expanded','true');}selected=id;window.dispatchEvent(new Event('workbench-context'));qa('[data-tool]').forEach(b=>b.classList.toggle('selected',b.dataset.tool==='select'));refresh();},
       onChange:(next,options={})=>{
         if(options.preview){previewDrawings=next;return;}
         previewDrawings=null;
@@ -164,8 +164,10 @@ window.WorkbenchWorkspace = (() => {
     refresh();renderAverages();loadAverages();status(packet.updated_at?'저장본 복원됨':'새 작업 · 변경 시 자동 저장');
     const missing=state.drawings.filter(d=>d.points.some(p=>DrawingTools.index(p.time,drawingBars,frame)==null)).length;
     if(missing)q('.drawing-hint').textContent=`현재 가격 기간 밖의 작도 ${missing}개는 보존하며 차트에 표시하지 않습니다. 목록에서 수정할 수 있습니다.`;
-    active={save,destroy(){dead=true;clearTimeout(timer);averageVersion++;drawings.destroy();smaLegend.remove();WorkbenchCharts.remove(chart);document.removeEventListener('keydown',keyboard);window.removeEventListener('beforeunload',beforeUnload);},range(value){let from=0;if(value!=='all'){const end=new Date(bars.at(-1).date+'T00:00:00Z');end.setUTCMonth(end.getUTCMonth()-Number(value));const start=end.toISOString().slice(0,10);from=bars.findIndex(b=>b.date>=start);if(from<0)from=bars.length-1;}chart.timeScale().setVisibleLogicalRange({from,to:bars.length-1+Math.min(60,Math.max(10,Math.round((bars.length-from)*.2)))});}};
+    let contextTimer;
+    chart.timeScale().subscribeVisibleLogicalRangeChange(()=>{clearTimeout(contextTimer);contextTimer=setTimeout(()=>{if(!dead)window.dispatchEvent(new Event('workbench-context'));},500);});
+    active={save,setProposals(value){proposals=value;},context(){return {timeframe:frame,price_scale:'linear',selected_drawing:selected,visible_range:chart.timeScale().getVisibleLogicalRange()};},visibleRange(value){chart.timeScale().setVisibleLogicalRange(value);},async reload(){if(dirty())throw Error('미저장 작도가 있어 다시 읽지 않았습니다.');const r=await fetch(url);if(!r.ok)throw Error('작도 다시 읽기 실패');const v=await r.json();state=v.state;revision=v.revision;lastSaved=JSON.stringify(state);history=[];future=[];selected=null;refresh();renderAverages();await loadAverages();status('채택 결과 저장본 복원됨');},destroy(){dead=true;clearTimeout(timer);clearTimeout(contextTimer);averageVersion++;drawings.destroy();smaLegend.remove();WorkbenchCharts.remove(chart);document.removeEventListener('keydown',keyboard);window.removeEventListener('beforeunload',beforeUnload);},range(value){let from=0;if(value!=='all'){const end=new Date(bars.at(-1).date+'T00:00:00Z');end.setUTCMonth(end.getUTCMonth()-Number(value));const start=end.toISOString().slice(0,10);from=bars.findIndex(b=>b.date>=start);if(from<0)from=bars.length-1;}chart.timeScale().setVisibleLogicalRange({from,to:bars.length-1+Math.min(60,Math.max(10,Math.round((bars.length-from)*.2)))});}};
     return active;
   }
-  return {mount,closeActive};
+  return {mount,closeActive,current:()=>active};
 })();
