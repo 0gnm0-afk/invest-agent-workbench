@@ -137,7 +137,14 @@ class DailyLaunch:
                     if run['state'] == 'failed' and not record['error']:
                         allowed_errors = ('market_authentication_http_403_ip_not_allowed',
                                           'market_http_403_ip_not_allowed',
-                                          'market_authentication_http_403')
+                                          'market_authentication_http_403',
+                                          'market_authentication_http_401',
+                                          'market_http_401',
+                                          'market_authentication_unavailable',
+                                          'basis_document_changed_review_required',
+                                          'basis_document_refresh_unavailable',
+                                          'basis_document_redirect_refused',
+                                          'basis_document_not_current')
                         record['error'] = next((code for code in allowed_errors
                                                 if code in run.get('error','')), 'market_pipeline_failed')
                     if run['state'] in ('succeeded','partial') and not display:

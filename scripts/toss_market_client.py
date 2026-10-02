@@ -48,20 +48,33 @@ class TossMarketClient:
             raise ValueError('invalid_market_request_interval')
         self._min_interval = min_interval
         self._observer = observer
-        try:
-            self._token = get_token()
-        except urllib.error.HTTPError as exc:
-            try:
-                code = _http_error_code(exc, 'market_authentication_http')
-            finally:
-                exc.close()
-            raise MarketReadError(code) from None
-        except (Exception, SystemExit):
-            raise MarketReadError('market_authentication_unavailable') from None
         self._lock = threading.Lock()
+        self._auth_lock = threading.Lock()
         self._next = 0.0
-        self._interval = 1.0  # Safe first request for the lowest market group limit.
+        self._interval = 1.0
         self._auth_failed = False
+        self._token = self._current_token()
+
+    def _current_token(self, rejected_token=None):
+        with self._auth_lock:
+            with self._lock:
+                if self._auth_failed:
+                    raise MarketReadError('market_authentication_unavailable')
+            try:
+                value = get_token() if rejected_token is None else get_token(rejected_token=rejected_token)
+            except urllib.error.HTTPError as exc:
+                try:
+                    code = _http_error_code(exc, 'market_authentication_http')
+                finally:
+                    exc.close()
+            except (Exception, SystemExit):
+                code = 'market_authentication_unavailable'
+            else:
+                self._token = value
+                return value
+            with self._lock:
+                self._auth_failed = True
+            raise MarketReadError(code) from None
 
     def _observe(self, path, params, status, headers, started, payload=None):
         if self._observer:
@@ -95,10 +108,13 @@ class TossMarketClient:
         if path not in allowed:
             raise MarketReadError('market_endpoint_not_allowed')
         url = BASE + path + '?' + urllib.parse.urlencode(params)
-        for attempt in range(3):
+        attempt = 0
+        refreshed = False
+        while attempt < 3:
             self._wait()
+            request_token = self._current_token()
             started = time.monotonic()
-            request = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + self._token})
+            request = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + request_token})
             try:
                 with urllib.request.urlopen(request, timeout=15) as response:
                     limit = response.headers.get('X-RateLimit-Limit')
@@ -116,6 +132,10 @@ class TossMarketClient:
                     code = _http_error_code(exc, 'market_http')
                 finally:
                     exc.close()
+                if status == 401 and not refreshed:
+                    refreshed = True
+                    self._current_token(rejected_token=request_token)
+                    continue
                 if status in (401, 403):
                     with self._lock:
                         self._auth_failed = True
@@ -137,3 +157,4 @@ class TossMarketClient:
                 if attempt == 2:
                     raise MarketReadError('market_transport_or_payload_unavailable') from None
                 time.sleep(attempt + 1)
+            attempt += 1

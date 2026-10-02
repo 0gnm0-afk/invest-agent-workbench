@@ -224,6 +224,21 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
         hashes = code_hashes(Path(config['engine']))
         write_json(output/'config.json', config)
         seed, inputs = seed_check(config)
+        basis_rechecks = None
+        if len(seed.get('roots', [])) >= 3:
+            evidence = Path(seed['roots'][2])
+            if mode == 'live' or mode == 'recover' and nh_evidence is None:
+                from basis_refresh import prepare
+                basis_rechecks = prepare(evidence, output/'basis', now())
+            elif saved_run:
+                saved = Path(saved_run).resolve()
+                saved_manifest = sector.load(saved/'manifest.json')
+                sector.checked(saved/'run.json', saved_manifest['output_hashes']['run.json'], {})
+                basis_rechecks = sector.load(saved/'run.json').get('basis_rechecks')
+            if basis_rechecks:
+                run['basis_rechecks'] = str(basis_rechecks)
+                sector.load_basis(evidence, sector.checked, sector.load, inputs, now(),
+                                  sector.age_issue, rechecks=basis_rechecks)
         update('inputs', 'completed')
         if saved_run:
             saved_run = Path(saved_run).resolve()
@@ -313,7 +328,7 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
         update(stage, 'completed')
         stage = 'sector_screen'
         update(stage, 'running')
-        observation, groups, sector_inputs = sector.build(source, *[Path(p) for p in seed['roots'][1:]], now(), allow_universe_changes=True)
+        observation, groups, sector_inputs = sector.build(source, *[Path(p) for p in seed['roots'][1:]], now(), allow_universe_changes=True, basis_rechecks=basis_rechecks)
         inputs.update(sector_inputs)
         export_sectors(output/'sectors', observation, groups)
         screening = enrich(screening, observation, groups)
@@ -406,7 +421,8 @@ def verify(output):
     base = screen(snapshot)
     saved = sector.load(output/'screen.json')
     report, groups, _ = sector.build(source, *[Path(p) for p in seed['roots'][1:]],
-        sector.load(output/'sectors/observation.json')['applied_at'], allow_universe_changes=True)
+        sector.load(output/'sectors/observation.json')['applied_at'], allow_universe_changes=True,
+        basis_rechecks=run.get('basis_rechecks'))
     if report != sector.load(output/'sectors/observation.json') or groups != sector.load(output/'sectors/groups.json'):
         raise ValueError('sector_replay_mismatch')
     if base != sector.load(output/'screen-base.json') or enrich(base, report, groups) != saved:

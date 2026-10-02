@@ -18,8 +18,10 @@ def response():
 
 class MarketClientTests(unittest.TestCase):
     def setUp(self):
-        with patch('toss_market_client.get_token', return_value='synthetic-token'):
-            self.client = TossMarketClient()
+        mock = patch('toss_market_client.get_token', return_value='synthetic-token')
+        self.auth = mock.start()
+        self.addCleanup(mock.stop)
+        self.client = TossMarketClient()
 
     def test_account_and_order_endpoints_never_requested(self):
         with patch('toss_market_client.urllib.request.urlopen') as opening:
@@ -52,7 +54,36 @@ class MarketClientTests(unittest.TestCase):
                 self.client('/api/v1/candles', {})
             with self.assertRaisesRegex(MarketReadError, '^market_authentication_unavailable$'):
                 self.client('/api/v1/candles', {})
-            self.assertEqual(opening.call_count, 1)
+            self.assertEqual(opening.call_count, 2)
+
+    def test_401_refreshes_once_and_replays_same_market_get(self):
+        error = urllib.error.HTTPError('url',401,'expired',{},io.BytesIO(b'private'))
+        self.auth.reset_mock()
+        self.auth.side_effect = ['old', 'new', 'new']
+        with patch('toss_market_client.urllib.request.urlopen',side_effect=[error,response()]) as opening, patch.object(self.client,'_wait'):
+            self.client('/api/v1/candles',{'symbol':'ABC'})
+        self.assertEqual(self.auth.call_args_list[1].kwargs, {'rejected_token':'old'})
+        self.assertEqual([c.args[0].get_header('Authorization') for c in opening.call_args_list],['Bearer old','Bearer new'])
+        self.assertEqual(opening.call_args_list[0].args[0].full_url,opening.call_args_list[1].args[0].full_url)
+        self.assertFalse(self.client._auth_failed)
+
+    def test_refresh_denial_is_safe_and_stops_following_calls(self):
+        first=urllib.error.HTTPError('url',401,'expired',{},io.BytesIO(b'private'))
+        denied=urllib.error.HTTPError('url',403,'denied',{},io.BytesIO(b'private'))
+        self.auth.side_effect=['old',denied]
+        with patch('toss_market_client.urllib.request.urlopen',side_effect=first) as opening, patch.object(self.client,'_wait'):
+            with self.assertRaisesRegex(MarketReadError,'^market_authentication_http_403$'):
+                self.client('/api/v1/candles',{})
+            with self.assertRaisesRegex(MarketReadError,'^market_authentication_unavailable$'):
+                self.client('/api/v1/candles',{})
+        self.assertEqual(opening.call_count,1)
+
+    def test_token_checked_again_between_requests(self):
+        self.auth.side_effect=['near-expiry','renewed']
+        with patch('toss_market_client.urllib.request.urlopen',side_effect=lambda *a,**k:response()) as opening, patch.object(self.client,'_wait'):
+            self.client('/api/v1/candles',{})
+            self.client('/api/v1/candles',{})
+        self.assertEqual([c.args[0].get_header('Authorization') for c in opening.call_args_list],['Bearer near-expiry','Bearer renewed'])
 
     def test_token_403_is_specific_and_never_exposes_response_body(self):
         error = urllib.error.HTTPError('url', 403, 'denied', {}, io.BytesIO(b'private-body'))

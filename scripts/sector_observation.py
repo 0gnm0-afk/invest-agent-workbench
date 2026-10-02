@@ -451,9 +451,9 @@ def align_groups(groups, universe, applied):
     return result, changes
 
 
-def build(market_root, classification_root, evidence, nh_root, applied, *, allow_universe_changes=False):
+def build(market_root, classification_root, evidence, nh_root, applied, *, allow_universe_changes=False, basis_rechecks=None):
     inputs = {}
-    basis_contract = load_basis(evidence, checked, load, inputs, applied, age_issue)
+    basis_contract = load_basis(evidence, checked, load, inputs, applied, age_issue, rechecks=basis_rechecks)
     if (evidence/'wics-public.json').exists() and basis_contract is None:
         raise ValueError('WICS_observation_requires_verified_calculation_basis')
     market_manifest = load(checked(market_root / 'manifest.json', None, inputs))

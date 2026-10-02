@@ -20,6 +20,18 @@ def cached(root, run, config, source, original_observation, review):
     for path, expected in inputs.items():
         so.checked(path, expected, {})
     applied = original_observation['applied_at']
+    run = Path(run)
+    run_manifest = so.load(run/'manifest.json')
+    so.checked(run/'run.json', run_manifest['output_hashes']['run.json'], inputs)
+    basis_rechecks = so.load(run/'run.json').get('basis_rechecks')
+    if basis_rechecks:
+        basis_inputs = {}
+        so.load_basis(Path(seed['roots'][2]), so.checked, so.load, basis_inputs, applied,
+                      so.age_issue, rechecks=basis_rechecks)
+        for path, expected in basis_inputs.items():
+            if run_manifest['input_hashes'].get(path) != expected:
+                raise ValueError('projection_unpinned_basis_input')
+        inputs.update(basis_inputs)
     names = ['sector_projection.py', 'sector_observation.py', 'sector_signals.py', 'sector_basis.py',
              'wics_classification.py', 'finviz_public_classification.py', 'sector_external_review.py']
     key_data = dict(inputs=inputs, seed=config['sector_manifest_sha256'], applied=applied,
@@ -34,7 +46,7 @@ def cached(root, run, config, source, original_observation, review):
             so.checked(output, meta['sha256'], {})
             return so.load(output)
         observation, groups, verified = so.build(Path(source), *[Path(p) for p in seed['roots'][1:]],
-                                                applied, allow_universe_changes=True)
+                                                applied, allow_universe_changes=True, basis_rechecks=basis_rechecks)
         # Every dependency read during replay must agree with pinned evidence.
         for path, expected in verified.items():
             if path not in inputs or inputs[path] != expected:

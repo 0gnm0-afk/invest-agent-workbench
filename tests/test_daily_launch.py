@@ -82,6 +82,15 @@ class Launch(unittest.TestCase):
         self.assertEqual(a['error'],'market_authentication_http_403_ip_not_allowed')
         self.assertEqual(b['error'],a['error']);self.assertTrue(b['reused'])
         self.assertTrue(self.gate.public(a)['display_stale']);self.assertEqual(len(self.calls),1)
+    def test_basis_refresh_error_survives_receipt(self):
+        self.result('old')
+        def failed(plan,progress):
+            result=self.result('failed','failed',screen=False)
+            result['error']='ValueError: basis_document_changed_review_required'
+            return result
+        self.gate.runner=failed
+        self.assertEqual(self.gate.once(NOW)['error'],'basis_document_changed_review_required')
+
     def test_interrupted_receipt_never_reruns_automatically(self):
         self.gate.save({'day':'2026-09-30','state':'running','display_run':None})
         a=self.gate.once(NOW);self.assertEqual(a['state'],'interrupted');self.assertEqual(self.calls,[])
