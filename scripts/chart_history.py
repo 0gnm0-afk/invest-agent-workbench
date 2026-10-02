@@ -96,6 +96,10 @@ class HistoryStore:
         return {**source, 'name':stock.get('name'), 'bars':aggregate(bars, frame), 'history':info, 'timeframe':frame}
 
     def ensure(self, stock, retry=False):
+        from market_scope import match
+        exclusion = match(stock)
+        if exclusion:
+            return {**self.view(stock), 'history': {'state':'excluded','reason':exclusion['reason'], 'approved_on':exclusion['approved_on']}}
         if self.saved.packet(stock) is not None:
             return self.view(stock)
         # Cross-process file lock prevents two dashboard launchers fetching the same cache.

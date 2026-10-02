@@ -137,6 +137,8 @@ def recover(source, output, config, *, evidence_root=None, prior_source=None):
         raise ValueError('nh_fallback_output_already_exists')
     output.mkdir(parents=True)
     original = json.loads((source/'snapshot.json').read_text(encoding='utf-8'))
+    import market_scope
+    original = market_scope.apply_snapshot(original, market_scope.load())
     targets = [r for r in original['errors']
                if r['market'] in ('KR','US') and r.get('error_code') == 'market_transport_or_payload_unavailable']
     inputs = {}
@@ -222,6 +224,9 @@ def recover(source, output, config, *, evidence_root=None, prior_source=None):
         and not coverage['scope_errors'] and not original['errors']
         and not any(str(r.get('market_cap_quality','')).startswith('unavailable')
                     for r in original['universe']) and len(original['series'])==len(original['universe'])))
+    if 'active_scope_complete' in coverage:
+        from market_scope import refresh_coverage
+        refresh_coverage(original)
     original['source'] = 'live_public_toss_with_qualified_nh_fallback'
     original['collection_mode'] = 'toss_main_nh_failed_symbols_only_v1'
     for market in {r['market'] for r in recovered}:

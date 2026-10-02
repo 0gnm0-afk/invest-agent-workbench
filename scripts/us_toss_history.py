@@ -149,6 +149,10 @@ class Collector:
         return value
 
     def collect_one(self, item, end, retry=False):
+        from market_scope import match
+        exclusion = match({'market':self.market,'symbol':item['symbol']})
+        if exclusion:
+            return {'symbol':item['symbol'],'market':self.market,'state':'excluded','reason':exclusion['reason'],'bars':[]}
         symbol = item['symbol']
         saved = self.root/'series'/(hashlib.sha256(symbol.encode()).hexdigest()+'.json')
         if saved.exists():

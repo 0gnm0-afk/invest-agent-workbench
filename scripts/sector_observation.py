@@ -477,6 +477,8 @@ def build(market_root, classification_root, evidence, nh_root, applied, *, allow
     changes = None
     if allow_universe_changes:
         groups, changes = align_groups(groups, universe, applied)
+    from classification_refresh import apply as apply_refresh
+    groups = apply_refresh(groups, snapshot, checked, inputs, applied, classification_age_issue, SECTORS)
     wics = load_wics(evidence, checked, load, inputs)
     series = {}
     for row in snapshot['series']:

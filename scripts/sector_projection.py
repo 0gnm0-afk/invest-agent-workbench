@@ -32,8 +32,18 @@ def cached(root, run, config, source, original_observation, review):
             if run_manifest['input_hashes'].get(path) != expected:
                 raise ValueError('projection_unpinned_basis_input')
         inputs.update(basis_inputs)
+    reference = so.load(Path(source)/'snapshot.json').get('classification_refresh')
+    if reference:
+        from classification_refresh import apply
+        refresh_inputs = {}
+        apply([], {'classification_refresh':reference}, so.checked, refresh_inputs, applied,
+              so.classification_age_issue, so.SECTORS)
+        for path, expected in refresh_inputs.items():
+            if run_manifest['input_hashes'].get(path) != expected:
+                raise ValueError('projection_unpinned_classification_refresh')
+        inputs.update(refresh_inputs)
     names = ['sector_projection.py', 'sector_observation.py', 'sector_signals.py', 'sector_basis.py',
-             'wics_classification.py', 'finviz_public_classification.py', 'sector_external_review.py']
+             'wics_classification.py', 'finviz_public_classification.py', 'sector_external_review.py', 'classification_refresh.py']
     key_data = dict(inputs=inputs, seed=config['sector_manifest_sha256'], applied=applied,
                     settings=config.get('sector_states'), review=review,
                     code={n:so.sha(Path(__file__).parent/n) for n in names})

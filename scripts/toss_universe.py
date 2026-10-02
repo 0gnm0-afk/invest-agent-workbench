@@ -9,6 +9,7 @@ from pathlib import Path
 from invest_agent.trading.contracts import digest
 from invest_agent.trading.runner import atomic_write
 from market_quality import quote_time_state
+from market_scope import match as excluded_record
 
 EXCHANGES = {'KR': ('KOSPI',), 'US': ('NASDAQ', 'NYSE')}
 BATCH_SIZE = 200
@@ -60,13 +61,14 @@ def _cache_write(path, rows, meta, observed_at):
     atomic_write(path, json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
 
-def _live_exchange(get, exchange, observed_at):
+def _live_exchange(get, exchange, observed_at, exclusions=None):
     base = _result(get, '/api/v1/stocks/all', {
         'market': exchange, 'status': 'ACTIVE', 'securityType': 'STOCK', 'commonShare': 'true',
     })
     if not base:
         raise ValueError('Empty Toss exchange listing')
     symbols = []
+    excluded = []
     by_symbol = {}
     for item in base:
         symbol = item.get('symbol') if isinstance(item, dict) else None
@@ -76,6 +78,11 @@ def _live_exchange(get, exchange, observed_at):
             raise ValueError('Toss listing filter contract changed')
         if symbol in by_symbol:
             raise ValueError('Duplicate Toss listing symbol')
+        market = 'KR' if exchange == 'KOSPI' else 'US'
+        record = excluded_record({'market':market,'symbol':symbol+'.KS' if market=='KR' else symbol}, exclusions) if exclusions else None
+        if record:
+            excluded.append({**record,'exchange':exchange,'observed_isin_code':item.get('isinCode')})
+            continue
         symbols.append(symbol)
         by_symbol[symbol] = item
 
@@ -154,8 +161,9 @@ def _live_exchange(get, exchange, observed_at):
         'state': state,
         'reason': None if state == 'available' else 'listing_enrichment_partial',
         'listed': len(base),
-        'eligible_by_listing_heuristic': len(base),
-        'enriched': len(base) - missing_enrichment,
+        'eligible_by_listing_heuristic': len(symbols),
+        'approved_exclusions': excluded,
+        'enriched': len(symbols) - missing_enrichment,
         'missing_enrichment': missing_enrichment,
         'missing_price_time': missing_price_time,
         'batch_failures': failures,
@@ -166,7 +174,7 @@ def _live_exchange(get, exchange, observed_at):
     return rows, meta
 
 
-def discover(get, markets, limit_per_exchange=None, *, cache_root=None, now=None):
+def discover(get, markets, limit_per_exchange=None, *, cache_root=None, now=None, exclusions=None):
     if limit_per_exchange is not None and (
         isinstance(limit_per_exchange, bool) or not isinstance(limit_per_exchange, int) or limit_per_exchange < 1
     ):
@@ -184,10 +192,10 @@ def discover(get, markets, limit_per_exchange=None, *, cache_root=None, now=None
         if market not in markets:
             continue
         for exchange in EXCHANGES[market]:
-            cache_path = cache_root / (exchange + '.json') if cache_root else None
+            cache_path = cache_root / (exchange + ('-'+exclusions['sha256'][:12] if exclusions else '') + '.json') if cache_root else None
             cached = _cache_read(cache_path, now) if cache_path and cache_path.is_file() else None
             try:
-                rows, meta = cached or _live_exchange(get, exchange, observed_at)
+                rows, meta = cached or _live_exchange(get, exchange, observed_at, exclusions)
                 if cache_path and cached is None and meta['state'] == 'available':
                     _cache_write(cache_path, rows, meta, observed_at)
             except (Exception, SystemExit) as exc:

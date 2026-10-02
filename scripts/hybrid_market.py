@@ -13,6 +13,7 @@ from toss_candles import daily_series
 from daily_launch import capped_sessions
 from toss_universe import discover
 from market_quality import complete_cap, error_disposition
+import market_scope
 
 COLLECTOR_ID = 'toss_openapi_kr_us_v1'
 
@@ -35,7 +36,7 @@ def collector_version():
     folder = Path(__file__).parent
     return digest([folder.joinpath(name).read_text(encoding='utf-8') for name in (
         'hybrid_market.py', 'toss_universe.py', 'toss_candles.py',
-        'toss_market_client.py', 'toss_api.py', 'market_quality.py', 'market_lifecycle.json', 'daily_launch.py',
+        'toss_market_client.py', 'toss_api.py', 'market_quality.py', 'market_lifecycle.json', 'daily_launch.py', 'market_scope.py', 'market_exclusions.json',
     )])
 
 
@@ -75,10 +76,11 @@ def collect(config, account, cache_root, get, *, now=None, refresh=False,
 
 
 def _collect(config, account, root, get, now, refresh, prior_series, prior_source):
+    scope_policy = market_scope.load()
     if config.get('universe_mode') == 'exchange_listings':
         universe, listings = discover(
             get, config['markets'], config.get('limit_per_exchange'),
-            cache_root=root / 'universe', now=now,
+            cache_root=root / 'universe', now=now, exclusions=scope_policy,
         )
     else:
         universe, listings = config['universe'], None
@@ -96,7 +98,8 @@ def _collect(config, account, root, get, now, refresh, prior_series, prior_sourc
                     {'market': position['market'], 'symbol': position['quote_symbol'],
                      'provider_symbol': position.get('provider_symbol'), 'benchmark': position['benchmark']},
                 )
-    universe = list(unique.values())
+    universe, scope_exclusions = market_scope.partition(list(unique.values()), scope_policy)
+    scope_exclusions.extend(r for meta in (listings or {}).values() for r in meta.get('approved_exclusions',[]))
     if not universe and not listings:
         raise ValueError('Explicit universe must not be empty')
     if any(row['market'] not in ('KR', 'US') for row in universe):
@@ -142,6 +145,8 @@ def _collect(config, account, root, get, now, refresh, prior_series, prior_sourc
     progress()
 
     def read_series(market, symbol, benchmark=None, provider_symbol=None, *, raw=False, listing=None):
+        if market_scope.match({'market':market,'symbol':symbol}, scope_policy):
+            raise ValueError('approved_market_exclusion')
         if market not in sessions:
             raise ValueError('completed_sessions_unavailable')
         identity = {
@@ -315,7 +320,9 @@ def _collect(config, account, root, get, now, refresh, prior_series, prior_sourc
             })
     stats['state'] = 'finished'
     progress()
-    return {
+    result = {
+        'scope_exclusions': scope_exclusions,
+        'classification_refresh': config.get('classification_refresh'),
         'schema_version': 1,
         'source': 'live_public',
         'fetched_at': now.isoformat(),
@@ -343,3 +350,4 @@ def _collect(config, account, root, get, now, refresh, prior_series, prior_sourc
         'collection_stats': stats,
         'providers': {'KR': 'Toss adjusted candles', 'US': 'Toss adjusted candles (SPY benchmark proxy)'},
     }
+    return market_scope.apply_snapshot(result, scope_policy)

@@ -235,7 +235,11 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
                 saved_manifest = sector.load(saved/'manifest.json')
                 sector.checked(saved/'run.json', saved_manifest['output_hashes']['run.json'], {})
                 basis_rechecks = sector.load(saved/'run.json').get('basis_rechecks')
+            elif source and (Path(source)/'basis/rechecks.json').is_file():
+                source_check(Path(source))
+                basis_rechecks = Path(source)/'basis/rechecks.json'
             if basis_rechecks:
+                basis_rechecks = Path(basis_rechecks).resolve()
                 run['basis_rechecks'] = str(basis_rechecks)
                 sector.load_basis(evidence, sector.checked, sector.load, inputs, now(),
                                   sector.age_issue, rechecks=basis_rechecks)
@@ -380,8 +384,11 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
         sector_signals.render(states, output/'sectors')
         run['sector_state_counts'] = dict(sector_signals.Counter(s['current']['state'] for s in states['sectors']))
         update(stage, 'completed_with_limitations')
+        from market_scope import analysis_pending
+        run['analysis_pending'] = analysis_pending(screening, snapshot)
+        run['approved_exclusions'] = snapshot.get('scope_exclusions', [])
         del snapshot
-        incomplete = chart_result['failed'] > 0 or not quality['data_complete'] or screening['unavailable_count'] > 0 or any(r['unmatched'] for r in observation['coverage'].values())
+        incomplete = chart_result['failed'] > 0 or not quality['data_complete'] or screening['unavailable_count'] > len(run['analysis_pending']) or any(r['unmatched'] for r in observation['coverage'].values())
         run['state'] = 'failed' if quality['unexpected_failures'] else 'partial' if incomplete else 'succeeded'
         run['processing_state'] = 'failed' if quality['unexpected_failures'] else 'completed_with_exceptions' if incomplete else 'completed'
         stage = 'report'
@@ -419,6 +426,10 @@ def verify(output):
     if audit(snapshot) != sector.load(output/'quality.json'):
         raise ValueError('quality_replay_mismatch')
     base = screen(snapshot)
+    if 'analysis_pending' in run:
+        from market_scope import analysis_pending
+        if analysis_pending(base, snapshot) != run['analysis_pending'] or snapshot.get('scope_exclusions',[]) != run.get('approved_exclusions'):
+            raise ValueError('scope_or_analysis_pending_replay_mismatch')
     saved = sector.load(output/'screen.json')
     report, groups, _ = sector.build(source, *[Path(p) for p in seed['roots'][1:]],
         sector.load(output/'sectors/observation.json')['applied_at'], allow_universe_changes=True,

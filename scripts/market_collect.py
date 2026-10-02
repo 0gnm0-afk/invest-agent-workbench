@@ -57,7 +57,7 @@ def audit(snapshot):
                         'usability': history_usability(bars, sessions, snapshot['profile'][row['market']]),
                         'short_history': len(bars) < len(sessions)})
     quality_issues = sum(bool(r['missing_sessions'] or r['invalid_sessions'] or r['non_sessions']) for r in quality)
-    complete = snapshot['coverage']['market_wide'] and not quality_issues
+    complete = snapshot['coverage'].get('active_scope_complete', snapshot['coverage']['market_wide']) and not quality_issues
     dispositions = [{**r, 'disposition': error_disposition(r, universe[(r['market'], r['symbol'])],
                      snapshot['sessions'][r['market']][-1])} for r in snapshot['errors']]
     cap_issues = [{'market': r['market'], 'symbol': r['symbol'],
@@ -72,7 +72,8 @@ def audit(snapshot):
     return {'state': 'succeeded' if complete else 'partial', 'exchanges': exchanges,
             'processing_state': 'failed' if unexpected else 'completed_with_exceptions' if exceptions else 'completed',
             'data_complete': complete,
-            'scope_basis': 'toss_provided_active_common_stock',
+            'scope_basis': 'user_approved_active_market_scope' if snapshot.get('scope_exclusions') else 'toss_provided_active_common_stock',
+            'approved_exclusions': snapshot.get('scope_exclusions', []),
             'exceptions': dispositions, 'market_cap_issues': cap_issues,
             'unexpected_failures': unexpected,
             'market_cap_completed_close_estimates': sum(r.get('market_cap_quality') == 'completed_close_estimate'
@@ -135,6 +136,8 @@ def run(root, config_path=None, prior_source=None, *, session_cutoff=None, evalu
             config = {'profile': source['profile'], 'markets': ['KR', 'US'],
                       'scope': 'market_only_toss_provided_universe', 'universe_mode': 'exchange_listings',
                       'limit_per_exchange': None}
+            if source.get('classification_refresh'):
+                config['classification_refresh'] = source['classification_refresh']
             if session_cutoff is not None:
                 config['session_cutoff'] = session_cutoff
             prior = None

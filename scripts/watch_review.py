@@ -107,6 +107,8 @@ def render(run,output,screening=None,observation=None):
     refs={(r['market'],r['symbol']):r for r in charts['rows']}
     body='<h1>스크리너 — 관찰할 종목부터 진입 조건까지</h1><p>'+review['policy']+'</p>'
     body+='<p class="muted">가격 완료 세션: 한국 '+esc(review['session_dates']['KR'])+' · 미국 '+esc(review['session_dates']['US'])+' · 저장 자료 검토</p>'
+    if run.get('approved_exclusions') or run.get('analysis_pending'):
+        body+='<p class="muted">사용자 승인 수집 제외 '+str(len(run.get('approved_exclusions',[])))+'종목 · 신규 이력 분석 대기 '+str(len(run.get('analysis_pending',[])))+'종목. 원자료와 제외 사유는 보존합니다.</p>'
     body+='<nav><a href="entry-scan.html">전체 후보·제외 사유 검색</a><a href="candidates.csv">관찰 포함 후보 CSV</a><a href="screening-rules.html">단계별 판정 기준</a><a href="sectors/observation.html">섹터 상태·추이</a></nav>'
     body+='<p class="note">관찰 시작·돌파 대기는 매수 조건 충족을 뜻하지 않습니다. 재무·기관·질적 조건은 미검증이며 구조 위험은 현재 종가에서 참고 저점까지의 거리입니다. 횡보 거리비는 상단까지의 거리÷하단까지의 거리이며 기대수익률이 아닙니다. 지지선 이탈·갭 위험은 남아 있습니다.</p>'
     for market,g in review['markets'].items():

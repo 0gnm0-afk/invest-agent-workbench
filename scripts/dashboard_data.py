@@ -45,6 +45,7 @@ def saved_market(root=ROOT, run_dir=None):
     run = artifact('run.json')
     result = {'state': run['state'], 'run_id': run_dir.name, 'processing_state': run['processing_state'],
               'data_times': run.get('data_times', {}), 'quality': run.get('quality', {}),
+              'approved_exclusions': run.get('approved_exclusions', []), 'analysis_pending': run.get('analysis_pending', []),
               'finished_at': run.get('finished_at'), 'coverage': run.get('sector_coverage'),
               'entries': [], 'sectors': [], 'stocks': {}, 'errors': [], 'session_dates': {},
               'candidate_count': None, 'entry_candidate_count': None}
