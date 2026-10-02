@@ -155,6 +155,18 @@ class RefreshTests(unittest.TestCase):
     def test_future_evidence_is_rejected(self):
         meta=json.loads((self.root/'meta.json').read_text());meta['observed_at']='2099-01-01T00:00:00+00:00';self.write('meta.json',meta);self.manifest['records'][0]['meta_sha256']=self.sha('meta.json');self.sync()
         with self.assertRaisesRegex(ValueError,'timestamp_invalid'):self.run_refresh()
+    def test_verified_operating_unit_can_be_repaired_without_excluding_it(self):
+        self.manifest['records'][0]['allow_operating_unit']=True;self.sync()
+        original={k:self.row[k] for k in ('market','symbol','isin_code','exchange')}
+        original.update(identity_matched=True,source_security_type='유닛')
+        row={**self.row,'reason':'original_conflict:security_type_conflict','original_classification':original}
+        self.assertEqual(self.run_refresh(row)[0]['group_state'],'matched')
+        for typ in ('우선주','폐쇄형펀드'):
+            row['original_classification']['source_security_type']=typ
+            self.assertEqual(self.run_refresh(row)[0]['group_state'],'unmatched')
+        row['original_classification'].update(source_security_type='유닛',isin_code='OTHER')
+        self.assertEqual(self.run_refresh(row)[0]['group_state'],'unmatched')
+
     def test_type_conflict_not_overridden(self):
         row={**self.row,'reason':'original_conflict:security_type_conflict'}
         self.assertEqual(self.run_refresh(row)[0],row)

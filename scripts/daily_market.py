@@ -316,6 +316,13 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
         stage = 'quality'
         update(stage, 'running')
         snapshot = sector.load(source/'snapshot.json')
+        if mode == 'review' and snapshot.get('classification_refresh') != config.get('classification_refresh'):
+            from automatic_scope import refresh_classification_source
+            source = refresh_classification_source(source,config.get('classification_refresh'),output/'classification-source')
+            run['market_source'] = str(source)
+            inputs.update({str(source/name):h for name,h in sector.load(source/'manifest.json').items()})
+            inputs[str(source/'manifest.json')] = sector.sha(source/'manifest.json')
+            snapshot = sector.load(source/'snapshot.json')
         if mode in ('replay','review') and snapshot.get('nh_fallback'):
             run['nh_fallback'] = saved_fallback_summary(snapshot['nh_fallback'])
             run['nh_fallback']['provenance'] = 'saved_source_no_new_requests'
@@ -334,6 +341,29 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
         update(stage, 'running')
         observation, groups, sector_inputs = sector.build(source, *[Path(p) for p in seed['roots'][1:]], now(), allow_universe_changes=True, basis_rechecks=basis_rechecks)
         inputs.update(sector_inputs)
+        # Diagnose first: normal types/classes/small caps never enter this policy.
+        import automatic_scope
+        import market_scope
+        scope_policy = market_scope.load()
+        narrowed_source, auto_records = automatic_scope.derive(source, groups, scope_policy,
+            output/'automatic-scope', as_of=now())
+        if auto_records:
+            source = narrowed_source
+            run['market_source'] = str(source)
+            run['automatic_exclusion_count'] = len(auto_records)
+            inputs.update({str(source/name):h for name,h in sector.load(source/'manifest.json').items()})
+            inputs[str(source/'manifest.json')] = sector.sha(source/'manifest.json')
+            snapshot = sector.load(source/'snapshot.json')
+            quality = audit(snapshot)
+            write_json(output/'quality.json', quality)
+            run['quality'] = {k:quality[k] for k in ('state','processing_state','data_complete','quality_issue_series','unexpected_failures')}
+            run['quality'].update({k:snapshot['collection_stats'][k] for k in ('requested','received','failed')})
+            screening = automatic_scope.filter_screen(screening,snapshot)
+            write_json(output/'screen-base.json', screening)
+            observation, groups, sector_inputs = sector.build(source, *[Path(p) for p in seed['roots'][1:]], now(), allow_universe_changes=True, basis_rechecks=basis_rechecks)
+            inputs.update(sector_inputs)
+            if mode not in ('replay','review'):
+                automatic_scope.remember(auto_records,scope_policy)
         export_sectors(output/'sectors', observation, groups)
         screening = enrich(screening, observation, groups)
         write_json(output/'screen.json', screening)
@@ -423,6 +453,8 @@ def verify(output):
     seed, _ = seed_check(config)
     source = Path(run['market_source'])
     snapshot = sector.load(source/'snapshot.json')
+    from automatic_scope import verify_derivation
+    verify_derivation(source)
     if audit(snapshot) != sector.load(output/'quality.json'):
         raise ValueError('quality_replay_mismatch')
     base = screen(snapshot)

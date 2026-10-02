@@ -12,18 +12,34 @@ def load(path=None):
     payload = json.loads(path.read_text(encoding='utf-8'))
     if payload.get('schema') != 1 or payload.get('scope') != 'market_symbol_until_user_restores':
         raise ValueError('invalid_market_exclusion_policy')
+    registry_raw = b''
+    if (payload.get('automatic') or {}).get('enabled'):
+        from automatic_scope import read_registry
+        automatic, registry_raw = read_registry()
+        manual_keys = {(r['market'],r['symbol']) for r in payload['records']}
+        payload['records'] += [r for r in automatic if (r['market'],r['symbol']) not in manual_keys]
     seen = set()
     for r in payload['records']:
         key = r['market'], r['symbol']
         if key in seen or r['market'] not in ('KR','US') or not all(r.get(k) for k in ('symbol','reason','approved_on','approval','evidence_run')):
             raise ValueError('invalid_or_duplicate_market_exclusion')
         seen.add(key)
-    return {**payload, 'path': str(path.resolve()), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+    return {**payload, 'path': str(path.resolve()), 'sha256': hashlib.sha256(path.read_bytes()+registry_raw).hexdigest()}
 
 
 def match(row, policy=None):
     policy = policy if policy is not None else load()
-    return next((r for r in policy['records'] if (r['market'],r['symbol']) == (row['market'],row['symbol'])), None)
+    found = next((r for r in policy['records'] if (r['market'],r['symbol']) == (row['market'],row['symbol'])), None)
+    if found:
+        if found.get('automatic_rule'):
+            from automatic_scope import instrument
+            if row.get('isin_code') and found.get('isin_code') != row['isin_code']:
+                return None
+            if instrument(row, policy.get('automatic') or {})[0] == 'etf':
+                return None
+        return found
+    # Type/size alone never creates an exclusion. Only diagnosed records apply.
+    return None
 
 
 def partition(rows, policy):

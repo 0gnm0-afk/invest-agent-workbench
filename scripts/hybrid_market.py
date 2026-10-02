@@ -36,7 +36,7 @@ def collector_version():
     folder = Path(__file__).parent
     return digest([folder.joinpath(name).read_text(encoding='utf-8') for name in (
         'hybrid_market.py', 'toss_universe.py', 'toss_candles.py',
-        'toss_market_client.py', 'toss_api.py', 'market_quality.py', 'market_lifecycle.json', 'daily_launch.py', 'market_scope.py', 'market_exclusions.json',
+        'toss_market_client.py', 'toss_api.py', 'market_quality.py', 'market_lifecycle.json', 'daily_launch.py', 'market_scope.py', 'market_exclusions.json', 'automatic_scope.py',
     )])
 
 

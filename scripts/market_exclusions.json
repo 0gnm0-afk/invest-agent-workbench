@@ -1260,5 +1260,29 @@
         "state": "unavailable_shares"
       }
     }
-  ]
+  ],
+  "automatic": {
+    "schema": 1,
+    "enabled": true,
+    "rule_id": "us_materiality_types_v1",
+    "approved_on": "2026-10-02",
+    "approval": "사용자: 정상 자료 종목은 유형/시총/복수 주식과 무관하게 유지. 실제 자료/분류 문제 대상 중 채권·우선주·ETF 아닌 펀드 및 중요성 기준 미만을 자동 제외. ETF 유지. 시총 결측은 중요성 낮음으로 간주하지 않음.",
+    "market": "US",
+    "exclude_types": [
+      "bond",
+      "preferred_or_bond",
+      "non_etf_fund"
+    ],
+    "preserve_types": [
+      "etf"
+    ],
+    "problem_market_cap_below_usd": 2000000000,
+    "max_cap_age_days": 7,
+    "multiple_classes": "preserve_independently",
+    "facts": {
+      "path": "<user-home>\\Desktop\\workspace\\invest-agent-workbench\\runtime\\automatic-scope-evidence\\2026-10-02\\facts.json",
+      "sha256": "c58cbdcdc2154ff79a6d9e6bbdc8d8597ce4e613053550fd124a14db0b1760d3"
+    },
+    "requires_confirmed_problem": true
+  }
 }

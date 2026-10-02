@@ -79,7 +79,10 @@ def _live_exchange(get, exchange, observed_at, exclusions=None):
         if symbol in by_symbol:
             raise ValueError('Duplicate Toss listing symbol')
         market = 'KR' if exchange == 'KOSPI' else 'US'
-        record = excluded_record({'market':market,'symbol':symbol+'.KS' if market=='KR' else symbol}, exclusions) if exclusions else None
+        record = excluded_record({'market':market,'symbol':symbol+'.KS' if market=='KR' else symbol,
+                                  'isin_code':item.get('isinCode'),'exchange':exchange,
+                                  'name':item.get('name'),'english_name':item.get('englishName'),
+                                  'securityType':item.get('securityType')}, exclusions) if exclusions else None
         if record:
             excluded.append({**record,'exchange':exchange,'observed_isin_code':item.get('isinCode')})
             continue
