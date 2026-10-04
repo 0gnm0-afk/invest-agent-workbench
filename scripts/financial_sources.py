@@ -107,7 +107,8 @@ class Collector:
                 # Never silently mix separate and consolidated accounts.
                 shares = self.dart('stockTotqySttus',prefix+'-shares.json',**args)
                 reports.append(dict(year=year,quarter=quarter,end=end.isoformat(),fs=fs,shares=shares,prefix=prefix))
-        return dict(provider='DART',identity=company,reports=reports)
+        from financial_dart_supplement import collect_annual_supplements
+        return collect_annual_supplements(self, dict(provider='DART',identity=company,reports=reports))
 
     def usa(self, symbol):
         listing = self.fetch('https://www.sec.gov/files/company_tickers.json','tickers.json',sec=True)

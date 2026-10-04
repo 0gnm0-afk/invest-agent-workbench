@@ -12,7 +12,9 @@ class Element {
     const match=selector.match(/^\[data-(metric|period-cell)\]$/);
     if(!match)return [];
     const attr=match[1],key=attr==='metric'?'metric':'periodCell',content=attr==='metric'?this.querySelector('#financial-content').innerHTML:this.querySelector('#financial-period-table').innerHTML;
-    return [...content.matchAll(new RegExp(`data-${attr}="([^"]+)"`,'g'))].map(m=>new Element({[key]:m[1]}));
+    this.lists||=new Map();const cacheKey=selector+content;
+    if(!this.lists.has(cacheKey))this.lists.set(cacheKey,[...content.matchAll(new RegExp(`data-${attr}="([^"]+)"`,'g'))].map(m=>new Element({[key]:m[1]})));
+    return this.lists.get(cacheKey);
   }
   setAttribute(name,value) { this[name]=value; }
 }
@@ -65,5 +67,20 @@ const result={snapshot_id:'new',collected_at:'2026-10-04T00:00:00Z',recalculated
   kr.annual.at(-1).values.display_eps.value=3183.5;
   const korean=harness(kr);await korean.mount();assert.match(korean.root.querySelector('#financial-period-table').innerHTML,/3,184/);assert.match(korean.root.querySelector('#financial-title-eps').textContent,/K-IFRS · 연결 · 기본 EPS/);assert.equal(korean.charts.at(-1).series[0].options.priceFormat.formatter(3183.5),'3,184');
   const empty=harness({...result,snapshot_id:'empty',annual:[],quarterly:[],summary:[]});await empty.mount();assert.match(empty.root.querySelector('#financial-period-table').innerHTML,/표시할 공시 기간이 없습니다/);
+  const bankResult={...result,snapshot_id:'bank-status',supplemented_at:'2026-10-04T01:00:00Z',coverage_metadata:{annual_years:[2023,2024,2025],reported_eps_years:[2020,2021,2022,2023,2024,2025],notes:['재무제표 원문은 2023년 이후, 공시 EPS는 2020년 이후 확보했습니다.']},summary:[
+    summary('current','유동비율',null,'ratio',{status:'not_applicable',reason:'은행은 유동성 순서로 자산·부채를 표시합니다.'}),
+    summary('institution','기관 지분/변화',null,'ratio',{status:'unavailable',reason:'별도 공시자료를 아직 연결하지 않았습니다.'}),
+    summary('dividend','주당배당 · 최근 연간',1234.5,'USD/share',{formula:'확정 연간 보통주 주당배당금'}),
+    summary('payout','배당성향 · 최근 연간',.35,'ratio',{kind:'percent',formula:'동일 회계연도 보통주 배당 / 순이익'}),
+    summary('eps_cagr5','공시 EPS 5년 CAGR',.0834,'ratio',{kind:'percent',status:'comparison_warning',eps_basis:'reported',report_year:2025,report_column:'frmtrm',period_name:'2024년',comparison_note:'과거 공시 EPS의 종류·회계정책 기준이 다를 수 있습니다.'})]};
+  const bank=harness(bankResult);await bank.mount();const bankHtml=bank.root.querySelector('#financial-content').innerHTML;
+  assert.match(bankHtml,/업종 비적용/);assert.match(bankHtml,/자료 미확보/);assert.match(bankHtml,/class="financial-value not-applicable"/);
+  assert.match(bankHtml,/주당배당 · 최근 연간/);assert.match(bankHtml,/1,234\.50/);assert.match(bankHtml,/배당성향 · 최근 연간/);
+  assert.match(bankHtml,/8\.34%/);assert.match(bankHtml,/기준 확인/);assert.match(bankHtml,/과거 공시 EPS의 종류·회계정책 기준이 다를 수 있습니다/);assert.match(bankHtml,/재무제표 원문은 2023년 이후/);
+  assert.match(bank.root.querySelector('#financial-status').textContent,/수집 .*자료 보완 .*재계산/);
+  bank.root.querySelectorAll('[data-metric]').find(b=>b.dataset.metric==='current').onclick();
+  assert.match(bank.root.querySelector('#financial-evidence-body').innerHTML,/업종 비적용/);assert.match(bank.root.querySelector('#financial-evidence-body').innerHTML,/유동성 순서/);
+  bank.root.querySelectorAll('[data-metric]').find(b=>b.dataset.metric==='eps_cagr5').onclick();
+  assert.match(bank.root.querySelector('#financial-evidence-body').innerHTML,/EPS 기준: 공시 EPS/);assert.match(bank.root.querySelector('#financial-evidence-body').innerHTML,/공시 비교열: 전기/);assert.match(bank.root.querySelector('#financial-evidence-body').innerHTML,/공시 기간: 2024년/);
   console.log('Financial UI: six columns, estimates excluded, actuals/growth, EPS basis, 3y/8q, bank evidence, USD/KRW, legacy, missing and immutability: PASS');
 })().catch(error=>{console.error(error);process.exitCode=1;});

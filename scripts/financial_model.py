@@ -1,9 +1,11 @@
 """Financial facts with per-value provenance; missing never means zero."""
 import math
+import re
 from datetime import date, timedelta
 from financial_revenue import select_dart_revenue, select_sec_revenue, revenue_metadata
+from financial_dart_supplement import annual_supplement_candidates, COMMON_STOCK
 
-VERSION = 'financial-actuals-2'
+VERSION = 'financial-dart-periods-4'
 
 def number(value):
     if value is None or value in ('', '-', 'N/A') or isinstance(value, bool):
@@ -71,76 +73,180 @@ DART_MAP = {
  'da':('CF',['ifrs-full_AdjustmentsForDepreciationDepletionAndAmortisationExpense'],['감가상각비와 무형자산상각비']),
 }
 
+def dart_period_name(value):
+    match=re.search(r'제\s*(\d+)\s*기',str(value or ''))
+    if not match:return None
+    quarter=re.search(r'([1-4])\s*분기',str(value))
+    return int(match[1]),int(quarter[1]) if quarter else 2 if '반기' in str(value) else 0
+
+def dart_comparative_period(row, report, column, offset, quarter):
+    """Comparative values need an explicit matching fiscal-term label, never position alone."""
+    codes={1:'11013',2:'11012',3:'11014',4:'11011'}
+    if str(row.get('bsns_year'))!=str(report['year']) or row.get('reprt_code')!=codes[report['quarter']]:return False
+    current=dart_period_name(row.get('thstrm_nm'));previous=dart_period_name(row.get(column))
+    expected=0 if quarter==4 else quarter
+    return bool(current and previous and current[0]-previous[0]==offset and previous[1]==expected and
+                current[1]==(0 if report['quarter']==4 else report['quarter']))
+
+def latest_dart_fact(target, key, cell):
+    """Latest filing wins for the actual period; preserve replaced values as evidence."""
+    old=target.get(key)
+    rank=lambda value:(value.get('filed') or '',value.get('receipt') or '')
+    if old and old.get('conflicting_values') and rank(cell)==rank(old):
+        target[key]=dict(old,conflicting_values=sorted(set(old['conflicting_values']+[cell['value']])-{None}));return
+    if old is None or (old['value'] is None and cell['value'] is not None):target[key]=cell;return
+    if cell['value'] is None:return
+    if rank(cell)<rank(old):return
+    if rank(cell)==rank(old) and cell['value']!=old['value']:
+        target[key]=dict(cell,value=None,status='unavailable',reason='동일 공시·회계기간 계정값 충돌',
+                         conflicting_values=[old['value'],cell['value']]);return
+    if cell['value']!=old['value']:
+        cell=dict(cell,previous_disclosures=old.get('previous_disclosures',[])+[
+            {k:old.get(k) for k in ('value','filed','receipt','sources','report_column','report_year')}],
+            comparison_note='같은 회계기간의 최신 공시 비교값 채택. 과거 제출값과 다르며 재작성·정정 효과를 포함할 수 있습니다.')
+    elif old.get('previous_disclosures'):
+        cell=dict(cell,previous_disclosures=old['previous_disclosures'],comparison_note=old.get('comparison_note'))
+    target[key]=cell
+
+def dart_share_values(report, corp_code):
+    rows=report.get('shares',{}).get('list',[]);end=report['end']
+    if any(r.get('corp_code') not in (None,corp_code) for r in rows):raise ValueError('DART_SHARES_IDENTITY_MISMATCH')
+    clean=lambda value:re.sub(r'\s+','',str(value or ''))
+    aliases={'common':COMMON_STOCK,
+             'preferred':{'우선주','우선주식','의결권없는우선주','의결권없는우선주식'}}
+    values={}
+    for kind,labels in aliases.items():
+        selected=[r for r in rows if clean(r.get('se')) in labels and r.get('stlm_dt')==end]
+        signatures={(r.get('distb_stock_co'),r.get('istc_totqy'),r.get('tesstk_co'),r.get('rcept_no')) for r in selected}
+        row=selected[0] if len(signatures)==1 else {}
+        receipt=row.get('rcept_no');filed=f'{receipt[:4]}-{receipt[4:6]}-{receipt[6:8]}' if receipt else None
+        fields=[('shares','distb_stock_co'),('issued_shares','istc_totqy'),('treasury_shares','tesstk_co')] if kind=='common' else [('preferred_shares','distb_stock_co')]
+        for key,field in fields:
+            values[key]=fact(row.get(field),unit='shares',end=end,filed=filed,sources=[report['prefix']+'-shares.json'],
+                tag=field,receipt=receipt,account=row.get('se'),formula='공시 보통주 유통주식수' if key=='shares' else '주식종류별 공시 원값',
+                reason=None if row else '해당 기말의 명시 보통주/우선주 종류별 수량 미확보',status=None if row else 'unavailable',stock_class_present=bool(selected))
+        if kind=='common' and all(values[k]['value'] is not None for k in ('shares','issued_shares','treasury_shares')):
+            if values['shares']['value']!=values['issued_shares']['value']-values['treasury_shares']['value']:
+                values['shares'].update(value=None,status='unavailable',reason='공시 유통주식수와 발행주식수−자기주식 불일치')
+    common,preferred=values['shares'],values['preferred_shares']
+    totals=[r for r in rows if clean(r.get('se'))=='합계' and r.get('stlm_dt')==end]
+    signatures={(r.get('distb_stock_co'),r.get('rcept_no')) for r in totals}
+    total=totals[0] if len(signatures)==1 else {}
+    # A dash stays unknown unless the same filing's total proves no non-common shares remain.
+    if (preferred.get('stock_class_present') and preferred['value'] is None and
+            common['value'] is not None and common['value']>=0 and common.get('receipt') and
+            common['receipt']==preferred.get('receipt')==total.get('rcept_no') and
+            number(total.get('distb_stock_co'))==common['value']):
+        total_fact=fact(total['distb_stock_co'],unit='shares',end=end,filed=common.get('filed'),
+            sources=common['sources'],formula='공시 합계 유통주식수')
+        derived=calc('동일 공시·동일 기말 합계 유통주식수 − 보통주 유통주식수',
+            [total_fact,common],lambda a,b:a-b,'shares')
+        values['preferred_shares']=dict(preferred,**derived,status='derived',
+            reported_value=next(r.get('distb_stock_co') for r in rows
+                if clean(r.get('se')) in aliases['preferred'] and r.get('stlm_dt')==end),
+            comparison_note='우선주 원공시 수량은 미기재. 같은 공시의 합계와 보통주 유통주식수가 같아 잔여 수량 0을 확인했습니다.')
+    return values
+
 def dart_normalize(source):
-    company = source['identity']; annual=[]; quarterly=[]; cumulative={}; warnings=[]
-    for report in source['reports']:
-        if report['fs'].get('status') != '000':
-            continue
-        y,q,end = report['year'],report['quarter'],report['end']
-        values={}; ytd={}; rows=report['fs']['list']; prefix=report['prefix']
-        if any(r.get('corp_code') != company['corp_code'] for r in rows):
-            raise ValueError('DART_IDENTITY_MISMATCH')
-        revenue=select_dart_revenue(rows)
-        for key,(sj,ids,names) in DART_MAP.items():
-            candidates=[r for r in rows if r.get('sj_div') in (('IS','CIS') if sj=='IS' else (sj,))]
-            selected=[]
-            for tag in ids:
-                selected=[r for r in candidates if r.get('account_id') == tag]
-                if selected: break
+    company=source['identity']; annual_cells={};quarter_cells={};cumulative={};share_history=[];warnings=[]
+    cutoff=date.today().year-6; explicit_quarters=set();bank=False
+    def put(store,period,key,cell):latest_dart_fact(store.setdefault(period,{}),key,cell)
+    def select(rows,key):
+        sj,ids,names=DART_MAP[key]
+        candidates=[r for r in rows if r.get('sj_div') in (('IS','CIS') if sj=='IS' else (sj,)) and r.get('currency')=='KRW']
+        selected=[]
+        for field,aliases in (('account_id',ids),('account_nm',names)):
+            for alias in aliases:
+                selected=[r for r in candidates if r.get(field)==alias]
+                if selected:break
+            if selected:break
+        if key=='cash' and not any(number(r.get('thstrm_amount')) is not None for r in selected):
+            candidates=[r for r in rows if r.get('sj_div')=='CF' and r.get('currency')=='KRW']
+            selected=[r for r in candidates if r.get('account_id') in ('ifrs-full_CashAndCashEquivalentsAtEndOfPeriod','dart_CashAndCashEquivalentsAtEndOfPeriod','dart_CashAndCashEquivalentsAtEndOfPeriodCf')]
             if not selected:
-                for name in names:
-                    selected=[r for r in candidates if r.get('account_nm') == name]
-                    if selected: break
-            selected=[r for r in selected if r.get('currency')=='KRW']
-            unique={str(r.get('thstrm_amount')) for r in selected}
-            r=selected[0] if len(unique)==1 else {}
-            if key=='sales':
-                r=revenue['row'] or {}
-            metadata=revenue_metadata(revenue) if key=='sales' else {}
-            receipt=r.get('rcept_no'); filed=(receipt[:4]+'-'+receipt[4:6]+'-'+receipt[6:8]) if receipt else None
-            unit='KRW/share' if 'eps' in key else 'KRW'
-            isflow=sj!='BS'; start=f'{y}-01-01' if isflow else None
-            f=fact(r.get('thstrm_amount'),unit=unit,end=end,start=start,filed=filed,sources=[prefix+'-statements.json'],
-                   tag=r.get('account_id'), account=r.get('account_nm'), receipt=receipt,
-                   reason=revenue.get('reason') if key=='sales' else None,**metadata)
-            if isflow:
-                cumulative_value=r.get('thstrm_add_amount') if sj=='IS' and q in (2,3) else r.get('thstrm_amount')
-                ytd[key]=fact(cumulative_value,unit=unit,end=end,start=f'{y}-01-01',filed=filed,sources=f['sources'],tag=f.get('tag'),receipt=receipt,**metadata)
-            if sj=='IS' and q<4:
-                f['start']=f'{y}-{(q-1)*3+1:02d}-01'
-            if sj=='CF' and q in (2,3):
-                f=calc('당기 누적 현금흐름 − 직전 분기 누적', [ytd[key],cumulative.get((y,q-1),{}).get(key)], lambda a,b:a-b,unit)
-                f['start']=f'{y}-{(q-1)*3+1:02d}-01'
-            values[key]=f
-        shrows=report['shares'].get('list',[])
-        common=[r for r in shrows if r.get('se')=='보통주' and r.get('stlm_dt')==end]
-        preferred=[r for r in shrows if r.get('se')=='우선주' and r.get('stlm_dt')==end]
-        r=common[0] if len(common)==1 else {}
-        receipt=r.get('rcept_no'); filed=(receipt[:4]+'-'+receipt[4:6]+'-'+receipt[6:8]) if receipt else None
-        for key,field in [('shares','distb_stock_co'),('issued_shares','istc_totqy'),('treasury_shares','tesstk_co')]:
-            values[key]=fact(r.get(field),unit='shares',end=end,filed=filed,sources=[prefix+'-shares.json'],tag=field,receipt=receipt,
-                             formula='보통주 발행 − 자기주식' if key=='shares' else '보통주 공시 원값')
-        values['preferred_shares']=fact(preferred[0].get('distb_stock_co') if len(preferred)==1 else None,unit='shares',end=end,filed=filed,sources=[prefix+'-shares.json'])
-        values['debt']=calc('단기차입금 + 유동성장기부채 + 장기차입금 + 사채 (리스 별도)',[values[k] for k in ('debt_short','debt_current','debt_long','bonds')],lambda *a:sum(a),'KRW')
-        cumulative[(y,q)]=ytd
-        row=dict(date=end,label=f'{y} Q{q}',fy=y,fq=q,values=values)
-        if q==4:
-            annual.append(dict(row,label=f'FY {y}',fq=0))
-            v=dict(values)
-            for key,(sj,_,_) in DART_MAP.items():
-                if sj!='BS':
-                    if 'eps' in key:
-                        v[key]=fact(unit=values[key]['unit'],end=end,start=f'{y}-10-01',reason='4분기 EPS 별도 공시 미확보: 연간 EPS−9개월 EPS는 가중주식수 차이로 계산하지 않음')
-                    else:
-                        v[key]=(revenue_calc if key=='sales' else calc)('연간 실적 − 9개월 누적 실적',[ytd.get(key),cumulative.get((y,3),{}).get(key)],lambda a,b:a-b,'KRW')
-                        v[key]['start']=f'{y}-10-01'
-            row=dict(row,values=v)
-        quarterly.append(row)
+                selected=[r for r in candidates if re.fullmatch(r'(기말|반기말|분기말|연도말|보고기간말)(의)?현금및현금성자산',re.sub(r'\s+','',r.get('account_nm','')))]
+        return selected
+    for report in sorted(source['reports'],key=lambda r:(r['year'],r['quarter'])):
+        y,q,end=report['year'],report['quarter'],report['end'];prefix=report['prefix']
+        shares=dart_share_values(report,company['corp_code'])
+        share_history.append(dict(date=end,values=shares))
+        if report['fs'].get('status')!='000':continue
+        explicit_quarters.add((y,q));rows=report['fs']['list']
+        if any(r.get('corp_code')!=company['corp_code'] for r in rows):raise ValueError('DART_IDENTITY_MISMATCH')
+        revenue=select_dart_revenue(rows)
+        bank=bank or revenue.get('basis')=='bank_net_revenue' or any(r.get('account_id') in ('ifrs-full_InterestRevenueExpense','ifrs_InterestRevenueExpense') and r.get('sj_div') in ('IS','CIS') for r in rows)
+        for key,(sj,_,_) in DART_MAP.items():
+            selected=([revenue['row']] if revenue.get('row') else []) if key=='sales' else select(rows,key)
+            row=selected[0] if selected else {};metadata=revenue_metadata(revenue) if key=='sales' else {}
+            instant=sj=='BS';unit='KRW/share' if 'eps' in key else 'KRW'
+            def cell(column,target_y,target_q,*,cumulative_value=False):
+                target_end=f'{target_y}-{target_q*3:02d}-'+('31' if target_q in (1,4) else '30')
+                receipt=row.get('rcept_no');filed=f'{receipt[:4]}-{receipt[4:6]}-{receipt[6:8]}' if receipt else None
+                vals={str(r.get(column)) for r in selected}
+                amount=row.get(column) if len(vals)==1 else None
+                start=None if instant else f'{target_y}-01-01' if target_q==4 or sj=='CF' or cumulative_value else f'{target_y}-{(target_q-1)*3+1:02d}-01'
+                return fact(amount,unit=unit,end=target_end,start=start,filed=filed,sources=[prefix+'-statements.json'],
+                    tag=row.get('account_id'),account=row.get('account_nm'),receipt=receipt,report_year=y,report_column=column,
+                    period_name=row.get(column.replace('_amount','_nm').replace('_add_nm','_nm')),
+                    comparative=target_y!=y,formula='공시 비교기간 원값' if target_y!=y else '공시 원값',**metadata)
+            current=cell('thstrm_amount',y,q)
+            put(annual_cells if q==4 else quarter_cells,y if q==4 else (y,q),key,current)
+            if not instant:
+                put(cumulative,(y,q),key,cell('thstrm_add_amount' if sj=='IS' and q in (2,3) else 'thstrm_amount',y,q,cumulative_value=True))
+            if key=='sales' and row.get('account_id')=='derived_BankNetRevenue':
+                # This helper sums only current/current-YTD components; inherited comparison fields are not totals.
+                continue
+            # Annual comparisons are annual amounts, never the current report year's values.
+            if q==4:
+                for offset,column in ((1,'frmtrm'),(2,'bfefrmtrm')):
+                    if y-offset>=cutoff and dart_comparative_period(row,report,column+'_nm',offset,4):
+                        put(annual_cells,y-offset,key,cell(column+'_amount',y-offset,4))
+                        if not instant:put(cumulative,(y-offset,4),key,cell(column+'_amount',y-offset,4,cumulative_value=True))
+            elif y-1>=cutoff:
+                if instant and row.get('sj_div')=='BS' and dart_comparative_period(row,report,'frmtrm_nm',1,4):
+                    put(annual_cells,y-1,key,cell('frmtrm_amount',y-1,4))
+                elif dart_comparative_period(row,report,'frmtrm_q_nm',1,q):
+                    put(quarter_cells,(y-1,q),key,cell('frmtrm_q_amount',y-1,q))
+                    if not instant:
+                        put(cumulative,(y-1,q),key,cell('frmtrm_add_amount' if sj=='IS' and q in (2,3) else 'frmtrm_q_amount',y-1,q,cumulative_value=True))
+    for candidate in annual_supplement_candidates(source):
+        if candidate['fy']<cutoff:continue
+        key=candidate['key'];cell=dict(candidate);cell.pop('key');fy=cell.pop('fy')
+        cell=fact(**cell)
+        put(annual_cells,fy,key,cell)
+    warnings.extend(source.get('annual_supplement_errors',[]))
+    shares_by_end={row['date']:row['values'] for row in share_history}
+    core={'sales','income','operating','eps','basic_eps','reported_eps'}
+    annual_cells={y:v for y,v in annual_cells.items() if any(v.get(k,{}).get('value') is not None for k in core)}
+    for (y,q),values in list(quarter_cells.items()):
+        for key,(sj,_,_) in DART_MAP.items():
+            if sj=='CF' and q>1:
+                values[key]=calc('당기 누적 현금흐름 − 직전 분기 누적',[cumulative.get((y,q),{}).get(key),cumulative.get((y,q-1),{}).get(key)],lambda a,b:a-b,'KRW')
+                values[key]['start']=f'{y}-{(q-1)*3+1:02d}-01'
+    for y,annual_values in annual_cells.items():
+        if (y,4) not in explicit_quarters and not any(cumulative.get((y,3),{}).get(k,{}).get('value') is not None and annual_values.get(k,{}).get('value') is not None for k in ('sales','income','operating')):continue
+        values={k:dict(v) for k,v in annual_values.items() if k in DART_MAP and DART_MAP[k][0]=='BS'}
+        for key,(sj,_,_) in DART_MAP.items():
+            if sj=='BS':continue
+            if 'eps' in key:
+                values[key]=fact(unit='KRW/share',end=f'{y}-12-31',start=f'{y}-10-01',reason='4분기 EPS 별도 공시 미확보: 연간 EPS−9개월 EPS는 가중주식수 차이로 계산하지 않음')
+            else:
+                values[key]=(revenue_calc if key=='sales' else calc)('연간 실적 − 9개월 누적 실적',[annual_values.get(key),cumulative.get((y,3),{}).get(key)],lambda a,b:a-b,'KRW')
+                values[key]['start']=f'{y}-10-01'
+        quarter_cells[(y,4)]=values
+    def finish(values,end):
+        values=dict(values);values.update(shares_by_end.get(end,{}))
+        values['debt']=calc('단기차입금 + 유동성장기부채 + 장기차입금 + 사채 (리스 별도)',[values.get(k) for k in ('debt_short','debt_current','debt_long','bonds')],lambda *a:sum(a),'KRW')
+        return values
+    annual=[dict(date=f'{y}-12-31',label=f'FY {y}',fy=y,fq=0,values=finish(v,f'{y}-12-31')) for y,v in sorted(annual_cells.items())]
+    quarterly=[dict(date=(end:=f'{y}-{q*3:02d}-'+('31' if q in (1,4) else '30')),label=f'{y} Q{q}',fy=y,fq=q,values=finish(v,end)) for (y,q),v in sorted(quarter_cells.items())]
     return dict(provider='DART',name=company.get('corp_name'),standard='K-IFRS · 연결',currency='KRW',annual=annual,quarterly=quarterly,
+                share_history=share_history,industry_model='bank' if bank else 'general',
                 identity=dict(corp_code=company['corp_code'],symbol=company['stock_code']),warnings=warnings,
-                limitations=['4분기 EPS는 별도 확정값 미확보 시 결측. 연간·누적 EPS 차감 금지.',
-                            '보통주 유통주식수는 기말 발행주식수−자기주식. EPS의 기간 가중평균주식수와 다릅니다.',
-                            '우선주가 있는 회사는 공식 대응이 확인된 우선주의 동일일 저장가격까지 있어야 기업 전체 가치배수를 계산합니다.'])
+                limitations=['명시된 회계기간의 최신 공시 당기·비교값을 채택합니다. 과거 제출값과 재작성 차이가 있을 수 있습니다.',
+                            '4분기 EPS는 별도 확정값 미확보 시 결측. 연간·누적 EPS 차감 금지.',
+                            '보통주 유통주식수는 최신 확인 공시일을 따로 표시하며 EPS의 기간 가중평균주식수와 다릅니다.',
+                            '배당 공시의 연결 EPS는 기본·희석 구분이 없어 별도 공시 EPS 계열로 보존합니다.'])
 SEC_MAP = {
  'sales':['RevenueFromContractWithCustomerExcludingAssessedTax','Revenues','SalesRevenueNet'],
  'income':['NetIncomeLossAvailableToCommonStockholdersBasic','NetIncomeLoss'],
@@ -387,10 +493,15 @@ def summarize(normal, stock):
     if not quarters or not annual:
         raise ValueError('OFFICIAL_PERIODS_UNAVAILABLE')
     current=quarters[-1]; v=current['values']; year=annual[-1]; qrows=quarters
+    bank=normal.get('industry_model')=='bank' or v.get('sales',{}).get('basis')=='bank_net_revenue'
+    bank_inapplicable={'fcf','pfcf','ev','evsales','evebitda','current','quick','debt_equity','long_debt_equity','gross_margin','roic'}
     t={key:actual_ttm(qrows,annual,key) for key in ('sales','income','net_income','gross','operating','cfo','capex','eps','dividend','da')}
     eps_label={frame:('기본' if basis=='basic' else '희석')+' EPS' for frame,basis in normal['eps_basis'].items()}
     items=[]
     def add(id,label,cell,group='실적',kind=None):
+        if bank and id in bank_inapplicable:
+            cell=dict(cell,value=None,status='not_applicable',display_text='업종 비적용',
+                      reason='은행은 예금·대출·금융자산 중심으로 운영되어 일반기업의 유동성·산업부채·FCF·EV·매출원가 기준 지표를 적용하지 않습니다.')
         items.append(dict(cell,id=id,label=label,group=group,kind=kind or cell.get('kind') or ('money' if cell['unit'].startswith(currency) else 'number')))
     def ratio(id,label,a,b,group='가치',percent=False):
         if b and b.get('basis') in ('bank_net_revenue','insurance_revenue'):
@@ -400,6 +511,10 @@ def summarize(normal, stock):
             cell.update(revenue_metadata(b))
         if b and b.get('eps_basis'):
             cell['eps_basis']=b['eps_basis']
+        if bank and id=='pb':
+            label='P/B · 지배주주자본 기준'
+            cell.update(formula='보통주 시가총액 / 지배주주자본',equity_basis='parent_equity',
+                        comparison_note='지배주주자본에는 신종자본증권 등 다른 자본성 항목이 포함될 수 있으며 보통주 귀속 순자산으로 조정한 P/B가 아닙니다.')
         if id in ('pe','pe_annual') and b and b.get('value') is not None and b['value']<=0:
             cell.update(display_text='적자' if b['value']<0 else '비교불가',reason='EPS가 음수여서 P/E를 계산하지 않음' if b['value']<0 else 'EPS가 0이어서 P/E를 계산하지 않음')
         add(id,label,cell,group,'percent' if percent else 'multiple')
@@ -408,20 +523,26 @@ def summarize(normal, stock):
     def market(value,formula,unit=currency):
         return fact(value,unit=unit,end=price_date,sources=['saved-price.json'],formula=formula)
     price=market(last.get('close'),'저장된 완료 일봉 종가 · 공급자 수정주가')
-    shares=v.get('shares',fact(unit='shares'))
+    share_records=[r for r in normal.get('share_history',[]) if r['values'].get('shares',{}).get('value') is not None and (not price_date or r['date']<=price_date)]
+    share_record=max(share_records,key=lambda r:r['date']) if share_records else None
+    shares=share_record['values']['shares'] if share_record else v.get('shares',fact(unit='shares'))
+    if shares['value'] is not None and shares.get('end')!=current['date']:
+        shares=dict(shares,comparison_note='최신 수량이 아니라 가장 최근에 수량을 확인한 공시 기말입니다. 이후 주식수 변동을 추정하지 않습니다.')
     cap=calc('저장 종가 × 최근 공시 보통주 유통주식수',[price,shares],lambda a,b:a*b,currency)
     # Price predating financial balance cannot be presented as current valuation.
     if not price_date or price_date<current['date']:
         cap=fact(unit=currency,reason='가격 기준일이 최신 재무기간보다 이전')
         price_for_valuation=fact(unit=currency,reason='가격/재무 시점 불일치')
     else: price_for_valuation=price
-    multi_class=normal['provider']=='DART' and (v.get('preferred_shares',{}).get('value') or 0)>0
-    enterprise_cap=fact(unit=currency,reason='우선주 시가총액·보통주 귀속 자본 미확보: 보통주만으로 전체 기업 배수 계산 불가') if multi_class else cap
+    preferred_shares=share_record['values'].get('preferred_shares') if share_record else v.get('preferred_shares')
+    multi_class=normal['provider']=='DART' and (preferred_shares or {}).get('value') is not None and preferred_shares['value']>0
+    preferred_unknown=normal['provider']=='DART' and (preferred_shares or {}).get('stock_class_present') and preferred_shares.get('value') is None
+    enterprise_cap=fact(unit=currency,reason='우선주 종류가 공시되었으나 수량이 미확보되어 전체 시가총액을 확정하지 않음') if preferred_unknown else fact(unit=currency,reason='우선주 시가총액·보통주 귀속 자본 미확보: 보통주만으로 전체 기업 배수 계산 불가') if multi_class else cap
     preferred_price=stock.get('preferred_price',{})
     pb=preferred_price.get('bar') or {}
     if multi_class and preferred_price.get('currency')==currency and pb.get('date')==price_date:
         pp=fact(pb.get('close'),unit=currency,end=price_date,sources=['saved-price.json'],formula='공식 종목 대응 삼성전자우 저장 종가')
-        preferred_cap=calc('우선주 저장 종가 × 우선주 기말 유통주식수',[pp,v.get('preferred_shares')],lambda a,b:a*b,currency)
+        preferred_cap=calc('우선주 저장 종가 × 우선주 기말 유통주식수',[pp,preferred_shares],lambda a,b:a*b,currency)
         enterprise_cap=calc('보통주 시가총액 + 우선주 시가총액 (종류별 가격×유통주식수)',[cap,preferred_cap],lambda a,b:a+b,currency)
     fcf=calc('TTM 영업현금흐름 − TTM 공시 자본지출 (유형/생산자산 태그 기준, 금융상환 제외)',[t['cfo'],t['capex']],lambda a,b:a-b,currency)
     ev=calc('시가총액 + 이자부 부채 − 현금및현금성자산 (단기투자자산 제외)',[enterprise_cap,v.get('debt'),v.get('cash')],lambda a,b,c:a+b-c,currency)
@@ -430,8 +551,8 @@ def summarize(normal, stock):
     add('market_cap','보통주 시가총액',cap,'가치');add('all_market_cap','전체 주식 시가총액',enterprise_cap,'가치');add('ev','기업가치 · EV',ev,'가치')
     ratio('pe','P/E · 실적 TTM',price_for_valuation,t['eps'])
     ratio('pe_annual','P/E · 최근 연간',price_for_valuation,year['values']['display_eps'])
-    ratio('ps','P/S · TTM',enterprise_cap,t['sales']);ratio('pb','P/B',enterprise_cap,v.get('equity'))
-    ratio('pc','P/Cash',enterprise_cap,v.get('cash'));ratio('pfcf','P/FCF',enterprise_cap,fcf)
+    ratio('ps','P/S · 보통주시총 기준' if bank else 'P/S · TTM',cap if bank else enterprise_cap,t['sales']);ratio('pb','P/B',cap if bank else enterprise_cap,v.get('equity'))
+    ratio('pc','P/Cash · 보통주시총 기준' if bank else 'P/Cash',cap if bank else enterprise_cap,v.get('cash'));ratio('pfcf','P/FCF',enterprise_cap,fcf)
     ratio('evsales','EV/Sales',ev,t['sales'])
     ebitda=calc('TTM 영업이익 + TTM 감가상각·무형자산상각',[t['operating'],t['da']],lambda a,b:a+b,currency)
     ratio('evebitda','EV/EBITDA',ev,ebitda)
@@ -448,10 +569,17 @@ def summarize(normal, stock):
     ratio('quick','당좌비율 · 보수적',quick,v.get('current_liabilities'),'수익·재무')
     ratio('debt_equity','이자부부채/자본',v.get('debt'),v.get('equity'),'수익·재무')
     ratio('long_debt_equity','장기부채/자본',v.get('debt_long'),v.get('equity'),'수익·재무')
-    add('shares','보통주 유통주식수',shares,'주식·배당','shares')
-    add('dividend','선언 주당배당 · TTM',t['dividend'],'주식·배당')
-    ratio('yield','배당수익률 · TTM',t['dividend'],price_for_valuation,'주식·배당',True)
-    ratio('payout','배당성향 · TTM EPS',t['dividend'],t['eps'],'주식·배당',True)
+    add('shares','보통주 유통주식수 · 최근 확인',shares,'주식·배당','shares')
+    dividend=t['dividend'];payout_eps=t['eps'];dividend_label='선언 주당배당 · TTM';yield_label='배당수익률 · TTM';payout_label='배당성향 · TTM EPS'
+    if dividend['value'] is None:
+        dividend_year=next((row for row in reversed(annual) if row['values'].get('dividend',{}).get('value') is not None and row['date']<=current['date']),None)
+        if dividend_year:
+            dividend=dict(dividend_year['values']['dividend'],comparison_note='확정된 최근 연간 주당배당입니다. TTM·예상 배당으로 환산하지 않습니다.')
+            payout_eps=dividend_year['values'].get('display_eps')
+            dividend_label='주당배당 · 최근 연간';yield_label='배당수익률 · 최근 연간';payout_label='배당성향 · 연간 EPS'
+    add('dividend',dividend_label,dividend,'주식·배당')
+    ratio('yield',yield_label,dividend,price_for_valuation,'주식·배당',True)
+    ratio('payout',payout_label,dividend,payout_eps,'주식·배당',True)
     for key,label in [('sales',sales_label),('operating','영업이익'),('income','지배주주 순이익'),('eps','EPS')]:
         value_key='display_eps' if key=='eps' else key
         for lag,title in [(1,'직전분기 대비'),(4,'전년동기 대비')]:
@@ -462,7 +590,16 @@ def summarize(normal, stock):
         add(key+'_ttm_growth',label+' TTM 전년 대비',growth(t[key],previous_ttm),'성장','percent')
         for years in (3,5):
             previous=comparable_period(annual,year,years=years)
-            add(f'{key}_cagr{years}',label+f' {years}년 CAGR',growth(year['values'].get(value_key),previous['values'].get(value_key) if previous else None,years=years),'성장','percent')
+            cagr=growth(year['values'].get(value_key),previous['values'].get(value_key) if previous else None,years=years)
+            cagr_label=label+f' {years}년 CAGR'
+            if key=='eps' and (year['values'].get(value_key,{}).get('value') is None or not previous or previous['values'].get(value_key,{}).get('value') is None):
+                latest_year=int(year['date'][:4]);reported={int(row['date'][:4]):row['values'].get('reported_eps') for row in annual}
+                if all(reported.get(y) and reported[y]['value'] is not None for y in range(latest_year-years,latest_year+1)):
+                    cagr=growth(reported[latest_year],reported[latest_year-years],years=years)
+                    cagr_label=f'공시 EPS {years}년 CAGR'
+                    cagr.update(eps_basis='reported',status='comparison_warning',
+                        comparison_note='전기간 배당관련 공시의 연결 EPS라는 동일 원천 계열을 사용합니다. 기본·희석 구분은 명시되지 않았으며 기간 중 회계정책 변경·재작성 효과가 포함될 수 있습니다. XBRL 기본·희석 EPS와 혼합하지 않습니다.')
+            add(f'{key}_cagr{years}',cagr_label,cagr,'성장','percent')
     add('price','저장 종가',price,'시세')
     add('previous_close','전일 종가',market(bars[-2]['close'] if len(bars)>1 else None,'직전 저장 완료봉 종가'),'시세')
     for n in (20,50,200):
@@ -488,5 +625,8 @@ def summarize(normal, stock):
     add('rsi','RSI · 14 Wilder',market(rsi,'상승/하락 종가 변화 14기간 Wilder','index'),'시세','number')
     for id,label,reason in [('float','유동주식수','비유동 보유분 자료 미확보'),('insider','내부자 지분/변화','내부자 소유권 공시 별도 집계 미구현'),('institution','기관 지분/변화','기관 보유보고서 별도 집계 미구현'),('short','공매도 잔고/비율','공식 공매도 잔고 원자료 미확보'),('beta','베타','동일 기간 시장 기준수익률 미연결'),('roic','ROIC','영업투하자본·세율 조정 근거 미확보')]:
         add(id,label,fact(reason=reason),'별도 자료','number')
-    return dict(schema=1,calculation_version=VERSION,**normal,summary=items,ttm=t,price_as_of=price_date,financial_as_of=current['date'],
+    coverage=dict(annual_years=[int(row['date'][:4]) for row in annual],reported_eps_years=[int(row['date'][:4]) for row in annual if row['values'].get('reported_eps',{}).get('value') is not None],
+                  quarterly_periods=[row['date'] for row in quarters],shares_latest_end=shares.get('end') if shares.get('value') is not None else None,
+                  notes=['당기·전기·전전기 명시기간 확인 후 최신 공시값 채택','공시 EPS는 기본·희석 EPS와 별도 계열'] if normal['provider']=='DART' else [])
+    return dict(schema=1,calculation_version=VERSION,**normal,summary=items,ttm=t,price_as_of=price_date,financial_as_of=current['date'],coverage_metadata=coverage,
                 price_provider=stock.get('provider'))

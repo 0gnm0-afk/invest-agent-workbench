@@ -74,6 +74,54 @@ class RecalculateSaved(unittest.TestCase):
         finally:
             unlock(lease)
 
+    def _make_dart_fixture(self):
+        self.key = 'KR:123456.KS'
+        self.folder = self.store.folder(self.key)
+        self.base = self.folder / 'snapshots' / self.sid
+        self.prior = dict(self.prior, key=self.key)
+        save(self.base / 'source.json', dict(provider='DART', identity={'corp_code':'00000001'}, reports=[]))
+        save(self.base / 'saved-price.json', dict(market='KR', symbol='123456.KS', bars=[]))
+        save(self.base / 'result.json', self.prior)
+        save(self.base / 'raw/facts.json', dict(official='retained'))
+        files = {str(p.relative_to(self.base)).replace('\\', '/'): hashlib.sha256(p.read_bytes()).hexdigest() for p in self.base.rglob('*') if p.is_file()}
+        save(self.base / 'manifest.json', dict(files=files))
+        save(self.folder / 'latest.json', dict(snapshot=self.sid, manifest_sha256=hashlib.sha256((self.base / 'manifest.json').read_bytes()).hexdigest()))
+        self.original = {str(p.relative_to(self.base)): p.read_bytes() for p in self.base.rglob('*') if p.is_file()}
+
+    def test_explicit_supplement_preserves_old_source_and_records_new_provenance(self):
+        self._make_dart_fixture()
+        def supplement(collector, source):
+            save(collector.folder / 'annual-extra.json', {'status':'000','list':[]})
+            collector.sources.append(dict(id='annual-extra.json', url='https://opendart.fss.or.kr/api/alotMatter.json'))
+            return dict(source, annual_supplements=[{'year':2025,'raw':{'status':'000','list':[]}}])
+        with patch('financial_dart_supplement.collect_annual_supplements', side_effect=supplement) as supplement_call, patch('financial_store.dart_normalize', return_value={'ok':True}), patch('financial_store.summarize', return_value={'summary':[], 'calculation_version':'new'}):
+            response = self.store.recalculate_saved(self.key, supplement=True)
+        supplement_call.assert_called_once()
+        self.assertEqual(response['state'], 'complete')
+        result = response['result']
+        self.assertEqual(result['collected_at'], self.prior['collected_at'])
+        self.assertIn('supplemented_at', result)
+        self.assertEqual({s['id'] for s in result['sources']}, {'facts.json','annual-extra.json'})
+        for name, raw in self.original.items():
+            self.assertEqual((self.base / name).read_bytes(), raw)
+        new_base = self.folder / 'snapshots' / result['snapshot_id']
+        self.assertTrue((new_base / 'raw/annual-extra.json').is_file())
+        self.assertIn('annual_supplements', json.loads((new_base / 'source.json').read_bytes()))
+
+    def test_failed_supplement_keeps_previous_success(self):
+        self._make_dart_fixture()
+        with patch('financial_dart_supplement.collect_annual_supplements', side_effect=ValueError('bad identity')):
+            response = self.store.recalculate_saved(self.key, supplement=True)
+        self.assertEqual(response['state'], 'failed')
+        self.assertEqual(response['result']['snapshot_id'], self.sid)
+        self.assertEqual(json.loads((self.folder / 'latest.json').read_bytes())['snapshot'], self.sid)
+
+    def test_sec_supplement_stays_offline(self):
+        with patch('financial_store.Collector') as collector, patch('financial_store.sec_normalize', return_value={'ok':True}), patch('financial_store.summarize', return_value={'summary':[]}):
+            response = self.store.recalculate_saved(self.key, supplement=True)
+        collector.assert_not_called()
+        self.assertEqual(response['state'], 'complete')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -12,6 +12,8 @@ window.WorkbenchFinancials = (() => {
   }
   function value(cell,currency,scaled=false){
     if(cell?.display_text)return cell.display_text;
+    if(cell?.status==='not_applicable')return '업종 비적용';
+    if(['unavailable','missing'].includes(cell?.status)&&cell?.value==null)return '자료 미확보';
     if(cell?.value==null)return '—';
     if(cell.kind==='percent')return n(cell.value*100)+'%';
     if(cell.kind==='multiple')return n(cell.value)+'배';
@@ -41,12 +43,15 @@ window.WorkbenchFinancials = (() => {
     for(const cell of remaining.values())columns.reduce((a,b)=>a.cells.length<=b.cells.length?a:b).cells.push(cell);
     return columns;
   }
-  function epsName(result,frame){return result.eps_basis?.[frame]==='basic'?'기본 EPS':'희석 EPS';}
+  function epsBasisName(basis){return basis==='reported'?'공시 EPS':basis==='basic'?'기본 EPS':'희석 EPS';}
+  function epsName(result,frame){return epsBasisName(result.eps_basis?.[frame]);}
   function periodCell(row,key){return key==='eps'?(Object.hasOwn(row.values||{},'display_eps')?row.values.display_eps:row.values?.eps):row.values?.[key];}
-  function metadata(cell){return [cell?.account_label?'표시 기준: '+cell.account_label:'',cell?.account?'공시 계정: '+cell.account:'',cell?.revenue_note?'매출 기준: '+cell.revenue_note:cell?.revenue_basis?'매출 기준: '+cell.revenue_basis:'',cell?.eps_basis?'EPS 기준: '+(cell.eps_basis==='basic'?'기본':'희석'):''].filter(Boolean);}
+  function valueClass(cell){return cell?.status==='not_applicable'?'not-applicable':cell?.status==='comparison_warning'?'comparison-note':cell?.value==null&&!cell?.display_text?'missing':'';}
+  function metadata(cell){return [cell?.account_label?'표시 기준: '+cell.account_label:'',cell?.account?'공시 계정: '+cell.account:'',cell?.revenue_note?'매출 기준: '+cell.revenue_note:cell?.revenue_basis?'매출 기준: '+cell.revenue_basis:'',cell?.eps_basis?'EPS 기준: '+epsBasisName(cell.eps_basis):'',cell?.report_year?'자료 사업연도: '+cell.report_year:'',cell?.report_column?'공시 비교열: '+({thstrm:'당기',frmtrm:'전기',lwfr:'전전기',bfefrmtrm:'전전기',thstrm_amount:'당기',frmtrm_amount:'전기',bfefrmtrm_amount:'전전기'}[cell.report_column]||cell.report_column):'',cell?.period_name?'공시 기간: '+cell.period_name:'',cell?.comparison_note?'비교 기준: '+cell.comparison_note:''].filter(Boolean);}
+  const comparisonMark=cell=>cell?.status==='comparison_warning'?'<small class="financial-comparison-mark">기준 확인</small>':'';
   function help(cell,result){
     if(!cell)return '공시 자료 미확보';
-    const dynamic=/(^eps|^annual_eps|^latest_quarter_eps|^pe$|^pe_annual$|^sales$)/.test(cell.id||'')||cell.eps_basis||cell.revenue_basis||cell.revenue_note;
+    const dynamic=/(^eps|^annual_eps|^latest_quarter_eps|^pe$|^pe_annual$|^sales$|^dividend$|^yield$|^payout$)/.test(cell.id||'')||cell.status||cell.eps_basis||cell.revenue_basis||cell.revenue_note;
     const base=dynamic?[cell.label,cell.reason?'자료 사유: '+cell.reason:'산식: '+(cell.formula||'공시 원값'),'기간: '+(cell.start||'시점')+' ~ '+(cell.end||result.financial_as_of||'미확인'),'공시: '+(cell.filed||'미확인'),'값을 클릭하면 원자료와 계산 입력을 확인할 수 있습니다.'].filter(Boolean).join('\n'):WorkbenchHelp.financial({...cell,id:cell.id||''},result);
     return [base,...metadata(cell)].filter(Boolean).join('\n');
   }
@@ -85,22 +90,24 @@ window.WorkbenchFinancials = (() => {
     const error=payload.attempt?.error;
     status.textContent=running?'공식 자료 수집 중 · '+(payload.attempt.stage||'요청 준비'):
       error?'최근 갱신 '+(payload.state==='interrupted'?'중단':'실패')+' · '+(errors[error]||error)+(r?' · 아래는 이전 성공 자료입니다.':''):
-      r?'저장 결과 · 수집 '+new Date(r.collected_at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'})+(r.recalculated_at?' · 재계산 '+new Date(r.recalculated_at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}):'')+' · 재무기간 '+r.financial_as_of+' · 시세 '+(r.price_as_of||'결측'):
+      r?'저장 결과 · 수집 '+new Date(r.collected_at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'})+(r.supplemented_at?' · 자료 보완 '+new Date(r.supplemented_at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}):'')+(r.recalculated_at?' · 재계산 '+new Date(r.recalculated_at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}):'')+' · 재무기간 '+r.financial_as_of+' · 시세 '+(r.price_as_of||'결측'):
       '이 종목의 저장된 재무자료가 없습니다. 만들기 버튼을 누르면 공식 공시를 요청합니다.';
     status.className=error?'financial-status error':'financial-status';
     if(!r){el.querySelector('#financial-content').innerHTML='<div class="empty">SEC / DART 공식 실적에서 요약표와 매출·이익·EPS 추이를 준비합니다.<br>전 종목을 자동으로 수집하지 않습니다.</div>';return;}
     if(ctx.snapshot===r.snapshot_id)return;
     ctx.snapshot=r.snapshot_id;ctx.result=r;clearCharts(ctx);
     const summary=actualSummary(r.summary),columns=columnsFor(summary);
+    const comparisonNotes=[...new Set(summary.filter(cell=>cell.status==='comparison_warning').map(cell=>cell.comparison_note).filter(Boolean))];
     el.querySelector('#financial-content').innerHTML=`
       <div class="financial-meta"><span class="tag">${esc(r.standard)}</span><span>${esc(r.currency)} · 공시 실적 · 기말 주식수 / 기간 실적 구분</span><a href="${'/api/financials/'+encodeURIComponent(ctx.key)}" target="_blank" rel="noreferrer">동일 계산 결과 JSON ↗</a></div>
-      <div class="financial-summary">${columns.map(column=>`<div class="financial-group"><h3>${esc(column.title)}</h3><table><tbody>${column.cells.map(cell=>`<tr><th scope="row">${WorkbenchHelp.term(cell.label,help(cell,r))}</th><td><button class="financial-value ${cell.value==null&&!cell.display_text?'missing':''}" data-metric="${esc(cell.id)}" data-help="${esc(help(cell,r))}">${esc(value(cell,r.currency,cell.kind==='money'&&!cell.unit?.includes('/share')&&!['price','previous_close','high52','low52','atr'].includes(cell.id)))}</button></td></tr>`).join('')}</tbody></table></div>`).join('')}</div>
+      <div class="financial-summary">${columns.map(column=>`<div class="financial-group"><h3>${esc(column.title)}</h3><table><tbody>${column.cells.map(cell=>`<tr><th scope="row">${WorkbenchHelp.term(cell.label,help(cell,r))}</th><td><button class="financial-value ${valueClass(cell)}" data-metric="${esc(cell.id)}" data-help="${esc(help(cell,r))}">${esc(value(cell,r.currency,cell.kind==='money'&&!cell.unit?.includes('/share')&&!['price','previous_close','high52','low52','atr'].includes(cell.id)))}${comparisonMark(cell)}</button></td></tr>`).join('')}</tbody></table></div>`).join('')}</div>
+      ${comparisonNotes.length?'<div class="financial-coverage-note">'+comparisonNotes.map(note=>'<p>'+esc(note)+'</p>').join('')+'</div>':''}
       <details class="financial-evidence" id="financial-evidence"><summary>값을 누르면 계산 근거·기준일·결측 사유를 확인할 수 있습니다</summary><div id="financial-evidence-body"></div></details>
       <div class="financial-chart-head"><div><h3>공시 실적과 성장률</h3><p class="chart-caption">연간 최근 3년 · 분기 최근 8개 · 전년 동기 대비 · ${esc(r.provider)}</p></div><div class="chart-toolbar" aria-label="실적 기간"><button data-financial-frame="annual" aria-pressed="true">연간</button><button data-financial-frame="quarterly" aria-pressed="false">분기</button></div></div>
       <details class="financial-periods" open><summary>기간별 실적 · 전년 대비 성장률 · 공시 출처</summary><div id="financial-period-table" class="scroll"></div></details>
       <div class="financial-charts">${['sales','earnings','eps'].map(key=>`<article class="financial-chart-card"><h3 id="financial-title-${key}">${key==='sales'?'매출 / 영업수익':key==='earnings'?'영업이익 · 지배주주 순이익':'공시 EPS'}</h3><div id="financial-latest-${key}" class="financial-latest"></div><div id="financial-chart-${key}" class="financial-chart" role="img" aria-label="${key==='sales'?'매출':key==='earnings'?'영업이익과 순이익':'EPS'} 재무 그래프"></div><p id="financial-legend-${key}" class="chart-caption"></p></article>`).join('')}</div>
       ${r.guidance?.length?'<div class="financial-guidance"><h3>회사 공식 가이던스 · 실적과 별도</h3>'+r.guidance.map(g=>`<p>${esc(g.period)} · ${esc(g.standard)} · 발표 ${esc(g.published)}<br>${esc(g.text)} <a href="${esc(g.url)}" target="_blank" rel="noreferrer">공식 발표 ↗</a></p>`).join('')+'</div>':''}
-      <details class="financial-limits"><summary>자료 범위와 한계</summary><ul>${(r.limitations||[]).map(x=>`<li>${esc(x)}</li>`).join('')}<li>가치배수는 저장 시세와 최근 공시 실적의 조합이며 실시간 지표가 아닙니다.</li><li>성장률은 같은 실적·EPS 기준의 전년 기간과 비교합니다. 음수·0 기저는 흑자전환·적자축소 등의 상태로 표시합니다.</li><li>매출은 업종별 공시 계정에 따라 영업수익 등을 사용하며, 채택 계정과 산식은 값을 눌러 확인할 수 있습니다.</li><li>기관·내부자·공매도 자료 미연결 항목은 사유와 함께 결측으로 표시합니다.</li></ul></details>`;
+      <details class="financial-limits"><summary>자료 범위와 한계</summary><ul>${[...(r.coverage_metadata?.notes||[]),...(r.limitations||[])].map(x=>`<li>${esc(x)}</li>`).join('')}<li>가치배수는 저장 시세와 최근 공시 실적의 조합이며 실시간 지표가 아닙니다.</li><li>성장률은 같은 실적·EPS 기준의 전년 기간과 비교합니다. 음수·0 기저는 흑자전환·적자축소 등의 상태로 표시합니다.</li><li>매출은 업종별 공시 계정에 따라 영업수익 등을 사용하며, 채택 계정과 산식은 값을 눌러 확인할 수 있습니다.</li><li>기관·내부자·공매도 자료 미연결 항목은 사유와 함께 결측으로 표시합니다.</li></ul></details>`;
     el.querySelectorAll('[data-metric]').forEach(b=>b.onclick=()=>showEvidence(ctx,summary.find(cell=>cell.id===b.dataset.metric)));
     el.querySelectorAll('[data-financial-frame]').forEach(b=>b.onclick=()=>{ctx.frame=b.dataset.financialFrame;renderCharts(ctx);});renderCharts(ctx);
   }
@@ -122,7 +129,7 @@ window.WorkbenchFinancials = (() => {
     const salesTitle=periodCell(rows.at(-1)||{},'sales')?.account_label||'매출 / 영업수익';
     function button(cell,label,scaled=false,extraClass=''){
       const fact=cell?{...cell,label}:null, index=ctx.evidenceCells.push(fact)-1;
-      return `<button class="financial-value ${extraClass} ${cell?.value==null&&!cell?.display_text?'missing':''}" data-period-cell="${index}" data-help="${esc(help(fact,r))}">${esc(value(cell,r.currency,scaled))}</button>`;
+      return `<button class="financial-value ${extraClass} ${valueClass(cell)}" data-period-cell="${index}" data-help="${esc(help(fact,r))}">${esc(value(cell,r.currency,scaled))}${comparisonMark(cell)}</button>`;
     }
     ctx.el.querySelector('#financial-period-table').innerHTML=`<table class="financial-performance-table"><caption>${ctx.frame==='annual'?'최근 3개 회계연도':'최근 8개 분기'} · ${esc(r.standard)} · ${esc(epsName(r,ctx.frame))} · 금액 ${r.currency==='KRW'?'억원':'USD (K·M·B는 천·백만·십억)'}</caption><thead><tr><th scope="col">공시 실적</th>${rows.map(row=>`<th scope="col">${esc(row.label)}<small>${esc(row.date)}</small></th>`).join('')}</tr></thead><tbody>${periodMetrics.map(([key,title])=>`<tr><th scope="row">${esc(key==='eps'?epsName(r,ctx.frame)+' ('+r.currency+'/주)':key==='sales'?salesTitle:title)}</th>${rows.map(row=>{
       const cell=periodCell(row,key),growth=row.growth?.[key];
