@@ -101,12 +101,16 @@ class FinancialStore:
         started=now()
         def progress(stage):save(folder/'attempt.json',dict(state='running',started_at=started,stage=stage),atomic=True)
         try:
-            collector=Collector(base/'raw',progress)
+            inherited = None
             if seed:
                 import shutil
                 seed=Path(seed);shutil.copytree(seed/'raw',base/'raw',dirs_exist_ok=True)
-                source=json.loads((seed/'source.json').read_bytes());sources=json.loads((seed/'sources.json').read_bytes())
+                source=json.loads((seed/'source.json').read_bytes())
+                if (seed/'result.json').exists():
+                    inherited=json.loads((seed/'result.json').read_bytes())
+                sources=json.loads((seed/'sources.json').read_bytes()) if (seed/'sources.json').exists() else inherited['sources']
             else:
+                collector=Collector(base/'raw',progress)
                 source=collector.korea(stock['symbol'].split('.')[0]) if stock['market']=='KR' else collector.usa(stock['symbol'])
                 if stock['market']=='KR' and not stock.get('preferred_price'):
                     from financial_supplements import samsung_preferred_price
@@ -119,10 +123,12 @@ class FinancialStore:
             normal=dart_normalize(source) if source['provider']=='DART' else sec_normalize(source)
             result=summarize(normal,stock)
             result.update(key=key,snapshot_id=sid,collected_at=now(),sources=sources)
+            if inherited is not None:
+                result.update(collected_at=inherited['collected_at'],recalculated_at=now(),source_snapshot_id=inherited['snapshot_id'])
             save(base/'source.json',source);save(base/'normalized.json',normal);save(base/'saved-price.json',stock)
             save(base/'result.json',result)
             files={str(p.relative_to(base)).replace('\\','/'):hashlib.sha256(p.read_bytes()).hexdigest() for p in base.rglob('*') if p.is_file()}
-            code_files=['financial_sources.py','financial_model.py','financial_store.py','financial_supplements.py','financial_summary.py']
+            code_files=['financial_sources.py','financial_model.py','financial_revenue.py','financial_store.py','financial_supplements.py','financial_summary.py']
             save(base/'manifest.json',dict(schema=1,key=key,version=VERSION,files=files,
                                           code={name:hashlib.sha256((ROOT/'scripts'/name).read_bytes()).hexdigest() for name in code_files}))
             save(folder/'latest.json',dict(snapshot=sid,manifest_sha256=hashlib.sha256((base/'manifest.json').read_bytes()).hexdigest()),atomic=True)
@@ -137,5 +143,34 @@ class FinancialStore:
     def import_collected(self,key,stock,seed):
         folder=self.folder(key);lease=lock_file(folder/'request.lock')
         if lease is None:raise ValueError('busy')
+        self._work(key,stock,lease,seed=seed)
+        return self.read(key)
+
+    def recalculate_saved(self,key):
+        """Explicit local recalculation: verify the saved inputs and retain all originals."""
+        folder=self.folder(key);lease=lock_file(folder/'request.lock')
+        if lease is None:raise ValueError('busy')
+        try:
+            pointer=json.loads((folder/'latest.json').read_bytes());sid=pointer['snapshot']
+            if not re.fullmatch('[a-f0-9]{32}',sid):raise ValueError('invalid_snapshot')
+            seed=folder/'snapshots'/sid
+            manifest_raw=(seed/'manifest.json').read_bytes()
+            if hashlib.sha256(manifest_raw).hexdigest()!=pointer['manifest_sha256']:
+                raise ValueError('manifest_hash_mismatch')
+            manifest=json.loads(manifest_raw)
+            required={'source.json','saved-price.json','result.json'}
+            if not required.issubset(manifest['files']):raise ValueError('saved_inputs_missing')
+            for name,digest in manifest['files'].items():
+                path=(seed/name).resolve()
+                if not path.is_relative_to(seed.resolve()):raise ValueError('invalid_manifest_path')
+                if hashlib.sha256(path.read_bytes()).hexdigest()!=digest:
+                    raise ValueError('saved_input_hash_mismatch')
+            prior=json.loads((seed/'result.json').read_bytes())
+            if prior.get('key')!=key or prior.get('snapshot_id')!=sid:
+                raise ValueError('saved_identity_mismatch')
+            stock=json.loads((seed/'saved-price.json').read_bytes())
+        except Exception:
+            unlock(lease)
+            raise
         self._work(key,stock,lease,seed=seed)
         return self.read(key)

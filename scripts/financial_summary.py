@@ -27,12 +27,20 @@ def selected_stock(market,symbol,histories):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('market',choices=['KR','US']);parser.add_argument('symbol')
-    mode=parser.add_mutually_exclusive_group();mode.add_argument('--refresh',action='store_true');mode.add_argument('--saved',action='store_true')
-    args=parser.parse_args();histories=HistoryStore(ROOT/'runtime/chart-history.sqlite3')
-    key,stock=selected_stock(args.market,args.symbol,histories);store=FinancialStore()
+    mode=parser.add_mutually_exclusive_group();mode.add_argument('--refresh',action='store_true');mode.add_argument('--saved',action='store_true');mode.add_argument('--recalculate',action='store_true',help='저장 공시·시세를 검증하고 외부 조회 없이 새 계산본 저장')
+    args=parser.parse_args();store=FinancialStore()
+    if args.recalculate:
+        candidates=[args.market+':'+args.symbol]
+        if args.market=='KR' and '.' not in args.symbol:candidates += ['KR:'+args.symbol+'.KS','KR:'+args.symbol+'.KQ']
+        keys=[key for key in candidates if (store.folder(key)/'latest.json').exists()]
+        if len(keys)!=1:raise ValueError('저장 재무 종목을 유일하게 찾지 못했습니다')
+        key=keys[0];stock=None
+    else:
+        histories=HistoryStore(ROOT/'runtime/chart-history.sqlite3')
+        key,stock=selected_stock(args.market,args.symbol,histories)
     before=store.read(key).get('result')
     before_id=before.get('snapshot_id') if before else None
-    result=store.read(key) if args.saved else store.start(key,stock,refresh=args.refresh)
+    result=store.recalculate_saved(key) if args.recalculate else store.read(key) if args.saved else store.start(key,stock,refresh=args.refresh)
     stage=None
     while result['state']=='running':
         current=result.get('attempt',{}).get('stage')
