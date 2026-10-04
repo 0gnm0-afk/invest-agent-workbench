@@ -13,6 +13,8 @@ from urllib.parse import urlencode, quote
 from chart_workspace import Conflict, validate
 from analysis_geometry import geometry
 
+QUALITATIVE_SKILL = 'stock-qualitative-analysis'
+
 
 def packed(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False)
@@ -82,10 +84,28 @@ class AnalysisService:
     def links(self, case, origin):
         cid=case['id']; route='#stock/'+quote(case['stock_key'].split(':',1)[0])+'/'+quote(case['stock_key'].split(':',1)[1])+'?analysis='+cid
         dashboard=origin+'/'+route
-        prompt=f"투자 워크벤치 분석건 {cid} ({case['stock_key']})을 연결해줘. invest_analysis MCP의 analysis_read로 현재 저장 자료와 검토 이력을 읽고 대시보드 복귀 링크를 알려줘. 작도가 없어도 정상이다. 정성분석 스킬은 아직 미연결이므로 자동 분석 완료로 표시하거나 방법론을 대신 만들지 마. 이후 이 분석건의 현재 차트를 다시 봐 달라고 하면 같은 키로 재조회해줘. 대시보드: {dashboard}"
+        if case['test_record']:
+            prompt=(f"투자 워크벤치 연결 검증용 분석건 {cid} ({case['stock_key']})을 확인해줘. "
+                    "실제 투자 분석이 아니다. invest_analysis MCP의 analysis_read와 analysis_history로 저장 자료와 연결을 확인하고 "
+                    "입력 snapshot_id와 대시보드 복귀 링크를 알려줘. 정성분석 실행·외부 자료 갱신·리포트 저장은 하지 마. "
+                    f"작도가 없어도 정상이다. 대시보드: {dashboard}")
+        else:
+            prompt=(f"${QUALITATIVE_SKILL} 스킬을 사용해 투자 워크벤치 분석건 {cid} ({case['stock_key']})의 정성분석을 수행하고 "
+                    "같은 분석건에 리포트를 저장해줘.\n"
+                    "스킬의 goal·조사·최대 2회 자체 검증 절차를 따른다. invest_analysis MCP의 analysis_read(analysis_key)로 "
+                    "현재 저장 입력을 읽고 반환 snapshot_id를 고정해 필요한 재무 요약·연간/분기 실적·출처·가격 이력을 읽어줘. "
+                    "필요한 배열은 next_offset이 null이 될 때까지 같은 snapshot_id로 읽고, analysis_history의 기존 보고서·사용자 의견을 확인해줘. "
+                    "저장 자료의 기준일·회계기간·결측·실패와 이전 성공 자료 사용 여부를 보존하고, 스킬에 따라 추가 조사한 공식 공시·IR·뉴스는 "
+                    "출처와 공개일을 별도로 기록해줘. 저장 입력을 실시간 자료로 부르거나 과거 입력에 새 근거가 있었던 것처럼 쓰지 마.\n"
+                    f"완성한 보고서는 analysis_save_record(analysis_key='{cid}', snapshot_id=고정한_ID, kind='report', author='llm')로 "
+                    "본문·출처·LLM 의견을 명시 저장해줘. 사용자 발언을 만들지 말고 user_response에는 실제 확인된 발언만 넣어줘. "
+                    "저장 성공 응답의 기록 ID와 links.dashboard_url을 확인한 뒤 핵심 결과와 복귀 링크를 알려줘. "
+                    "저장 실패를 완료로 표시하지 마. 작도는 없어도 되며 이 정성분석에서 작도 제안·계좌 조회·주문·위험 기준 변경은 하지 마. "
+                    f"분석 키: {cid}\n대시보드: {dashboard}")
         return {'analysis_key':cid,'dashboard_url':dashboard,'reopen_command':f'.\\analysis.ps1 -AnalysisKey {cid}',
                 'copy_text':f'분석건 {cid}\n이 분석건의 현재 차트를 다시 봐줘.\n{dashboard}\n포트 변경/서버 종료 시 워크벤치에서 .\\analysis.ps1 -AnalysisKey {cid}',
-                'codex_url':'codex://new?'+urlencode({'path':str(self.root),'prompt':prompt}), 'prompt':prompt}
+                'codex_url':'codex://new?'+urlencode({'path':str(self.root),'prompt':prompt}), 'prompt':prompt,
+                'qualitative_skill':QUALITATIVE_SKILL}
 
     def capture(self, case):
         data,stocks=self.view(); stocks={**self.histories.saved.stocks,**stocks}; k=case['stock_key']; ctx=case['context']
@@ -107,7 +127,8 @@ class AnalysisService:
             snapshots=[dict(id=r[0],captured_at=r[1],component_hashes=json.loads(r[2])) for r in db.execute("SELECT id,json_extract(payload,'$.captured_at'),json_extract(payload,'$.component_hashes') FROM analysis_snapshots WHERE case_id=? ORDER BY rowid",(case_id,))]
         return {'case':case,'links':self.links(case,origin),'items':items,
                 'snapshots':[{k:s[k] for k in ('id','captured_at','component_hashes')} for s in snapshots],
-                'qualitative_state':'records_available' if any(i['kind']=='report' for i in items) else 'skill_not_connected'}
+                'qualitative_skill':QUALITATIVE_SKILL,
+                'qualitative_state':'records_available' if any(i['kind']=='report' for i in items) else 'ready'}
 
     def item(self, case_id, item_id):
         key(item_id,'it_')
@@ -235,7 +256,7 @@ class AnalysisService:
             if k not in stocks and k not in self.histories.saved.stocks: raise ValueError('unknown_stock')
             if type(a.get('test_record',False)) is not bool: raise ValueError('invalid_test_flag')
             case={'id':ident('an_'),'stock_key':k,'title':short(a.get('title',k),200),'context':context(a.get('context',{})),
-                  'created_at':now(),'test_record':a.get('test_record',False),'qualitative_skill':None}
+                  'created_at':now(),'test_record':a.get('test_record',False),'qualitative_skill':QUALITATIVE_SKILL}
             with closing(self.store.connect()) as db,db: db.execute('INSERT INTO analysis_cases VALUES (?,?,?)',(case['id'],k,packed(case)))
             self.capture(case)
             return self.detail(case['id'],origin)
@@ -255,7 +276,10 @@ class AnalysisService:
             base={'analysis_key':cid,'snapshot_id':snap['id'],'captured_at':snap['captured_at'],'context':snap['context'],'component_hashes':snap['component_hashes'],'links':self.links(case,origin),'mode':'historical' if a.get('snapshot_id') else 'current_saved'}
             if section=='summary':
                 base.update(workspace=snap['workspace'],geometry=snap['geometry'],financials={k:v for k,v in snap['financials'].items() if k!='result'},financial_snapshot_id=(snap['financials'].get('result') or {}).get('snapshot_id'),chart={k:v for k,v in snap['chart'].items() if k!='bars'},bar_count=len(snap['chart']['bars']),latest_bars=snap['chart']['bars'][-5:],accounts_as_of=snap['accounts'].get('as_of'))
-            elif section=='chart': base.update(chart={**snap['chart'],'bars':snap['chart']['bars'][offset:offset+limit]},total=len(snap['chart']['bars']))
+            elif section=='chart':
+                bars=snap['chart']['bars']; page=bars[offset:offset+limit]; end=offset+len(page)
+                base.update(chart={**snap['chart'],'bars':page},total=len(bars),offset=offset,
+                            next_offset=end if end<len(bars) else None)
             elif section == 'financials' or section in ('financial_annual','financial_quarterly','financial_sources'):
                 packet = snap['financials']; result = packet.get('result') or {}
                 field = {'financials':'summary','financial_annual':'annual','financial_quarterly':'quarterly','financial_sources':'sources'}[section]
@@ -291,7 +315,7 @@ class AnalysisService:
             raise ValueError('invalid_refresh_mode')
         if op=='propose': return self.proposal(case,a['snapshot_id'],a['drawings'],a['rationale'])
         if op=='decide': return self.decide(case,a['proposal_id'],a['action'],a.get('reason',''),a.get('drawings'))
-        if op=='record': return self.record(case,a)
+        if op=='record': return {**self.record(case,a),'links':self.links(case,origin)}
         if op=='holding': return self.holding(case,a)
         if op=='calculate': return self.calculate(case,a)
         raise ValueError('unknown_analysis_operation')
