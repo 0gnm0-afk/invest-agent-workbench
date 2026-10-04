@@ -39,6 +39,28 @@ class StoredData(unittest.TestCase):
         self.assertEqual((value['state'], value['quality']['state'], value['candidate_count'], value['entry_candidate_count']), ('failed','partial',0,0))
         self.assertEqual(value['errors'], [])
 
+    def test_missing_quality_details_are_unknown_not_zero(self):
+        self.assertEqual(d.saved_market(self.root)['quality_gaps'],
+                         dict(price_history=None, market_cap=None, classification=None))
+
+    def test_quality_details_preserve_partial_and_failure(self):
+        source = d.load(self.source)
+        source['universe'] = [dict(market='US', symbol='ABC', market_cap_quality='unavailable_shares'),
+                              dict(market='US', symbol='DEF', market_cap_quality='quoted_price')]
+        self.source.write_text(json.dumps(source), encoding='utf-8')
+        run = d.load(self.run/'run.json')
+        run['quality']['quality_issue_series'] = 4
+        run['sector_coverage'] = {'KR':{'unmatched':0}, 'US':{'unmatched':2}}
+        (self.run/'run.json').write_text(json.dumps(run), encoding='utf-8')
+        manifest = d.load(self.run/'manifest.json')
+        manifest['input_hashes'][str(self.source)] = d.sha(self.source)
+        manifest['output_hashes']['run.json'] = d.sha(self.run/'run.json')
+        (self.run/'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+        value = d.saved_market(self.root)
+        self.assertEqual(value['quality_gaps'], dict(price_history=4, market_cap=1, classification=2))
+        self.assertEqual(value['state'], 'failed')
+        self.assertEqual(value['quality']['state'], 'partial')
+
     def test_price_tampering_is_rejected(self):
         self.source.write_text('{}')
         with self.assertRaisesRegex(ValueError, 'hash_mismatch'):

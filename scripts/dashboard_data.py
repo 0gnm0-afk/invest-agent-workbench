@@ -95,6 +95,14 @@ def saved_market(root=ROOT, run_dir=None):
         result['focus'] = cached(root, run_dir, snapshot, groups, result['sectors'], sha(source), config.get('sector_focus'))
     except (OSError, ValueError, KeyError, TypeError, BusyError) as exc:
         result['focus'] = {'items': [], 'markets': {}, 'error': '자료 또는 캐시 확인 필요 ('+type(exc).__name__+')'}
+    # Describe incomplete inputs separately from successful calculation stages.
+    result['quality_gaps'] = {
+        'price_history': result['quality'].get('quality_issue_series'),
+        'market_cap': (sum(str(row.get('market_cap_quality', '')).startswith('unavailable')
+                           for row in snapshot['universe']) if 'universe' in snapshot else None),
+        'classification': (sum(c['unmatched'] for c in result['coverage'].values())
+                           if result.get('coverage') and all('unmatched' in c for c in result['coverage'].values()) else None),
+    }
     result['screen_groups'] = screen_groups(result['entries'], snapshot.get('universe', []))
     return result
 
@@ -144,7 +152,10 @@ def collect_balances(reader, pages, error_type):
 
 def account_view(config, output, refresh=True, risk_market=None):
     mother = Path(config['mother'])
-    sys.path.insert(0, str(mother / 'scripts'))
+    # Reuse account-only adapters without shadowing current market/chart modules.
+    mother_scripts = str(mother / 'scripts')
+    if mother_scripts not in sys.path:
+        sys.path.append(mother_scripts)
     from nh_snapshot import normalize
     from nh_collect import pages
     from nh_api import read, NHError

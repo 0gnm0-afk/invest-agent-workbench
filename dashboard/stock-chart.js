@@ -53,7 +53,7 @@ window.WorkbenchStockChart = (() => {
         if(pending&&value.history.state==='not_requested')value.history.state='pending';
         await render(value);
       }catch {
-        if(isCurrent()){status.textContent='장기 차트를 열지 못했습니다. 재시도할 수 있습니다.';retry.hidden=false;}
+        if(isCurrent()){status.textContent='장기 차트를 열지 못했습니다. 대시보드를 다시 실행하거나 재시도하세요.';document.querySelector('.history-info').open=true;retry.hidden=false;}
       }finally{busy=false;if(isCurrent()){controls(false);window.dispatchEvent(new Event('workbench-context'));}}
     }
     frames.forEach(b=>b.onclick=()=>change(b.dataset.frame));
