@@ -113,6 +113,10 @@ window.DrawingTools = (() => {
       const n=document.createElementNS(NS,tag);for(const [k,v] of Object.entries(attrs))n.setAttribute(k,v);parent.append(n);return n;
     }
     function xy(p) {const i=index(p.time,bars,timeframe);return i==null?null:{x:coordinate(chart.timeScale(),i),y:series.priceToCoordinate(p.price)};}
+    function channelAbove(points) {
+      const p=points.map(xy);
+      return p.length===3&&p.every(v=>v&&v.x!=null&&v.y!=null)&&p[0].x!==p[1].x&&channel(p)[3].y<p[0].y;
+    }
     function point(event) {
       const r=svg.getBoundingClientRect(),x=event.clientX-r.left,y=event.clientY-r.top;
       const logical=chart.timeScale().coordinateToLogical(x), price=series.coordinateToPrice(y);
@@ -128,7 +132,11 @@ window.DrawingTools = (() => {
       const all=getDrawings().concat(getOverlays()).map(d=>({d,p:d.points.map(xy)})).sort((a,b)=>Number(a.d.id===selected)-Number(b.d.id===selected));
       if(draft.length) {
         const ps=[...draft];if(hover&&ps.length<count[mode])ps.push(hover);
-        if(ps.length===count[mode])all.push({d:{kind:mode,points:ps,color:'#218775',width:2,extend:false},p:ps.map(xy)});
+        // Keep the lower baseline visible while the upper anchor is being chosen.
+        if(mode==='channel'&&ps.length>=2&&!channelAbove(ps)) {
+          const base=ps.slice(0,2);
+          all.push({d:{kind:'trend',points:base,color:'#218775',width:2,extend:false},p:base.map(xy)});
+        } else if(ps.length===count[mode])all.push({d:{kind:mode,points:ps,color:'#218775',width:2,extend:false},p:ps.map(xy)});
       }
       const sig=JSON.stringify([w,h,all,mode,selected,draft,hover,snapped,reference]);
       if(signature!==sig) {
@@ -214,7 +222,7 @@ window.DrawingTools = (() => {
     function select(id) {mode='select';draft=[];hover=null;snapped=null;reference=null;selected=id;onSelect(id);signature='';}
     function setMode(next) {
       mode=next;draft=[];hover=null;snapped=null;reference=null;drag=null;signature='';
-      onHint(mode==='riskreward'?'손익비: 진입가 → 손절가 → 목표가 순서로 클릭하세요. 가로 폭은 세 점의 날짜 범위입니다.':count[mode]?`${labels[mode]}: ${count[mode]}개 지점을 차례로 클릭하세요. Esc로 취소.`:'선택한 도형의 원형 점은 끝점 수정, 선·영역은 전체 이동입니다. 빈 영역은 차트 이동·확대에 사용합니다.');
+      onHint(mode==='channel'?'평행 채널: 시작 하단점 → 끝 하단점 → 상단점 순서로 클릭하세요. Esc로 취소.':mode==='riskreward'?'손익비: 진입가 → 손절가 → 목표가 순서로 클릭하세요. 가로 폭은 세 점의 날짜 범위입니다.':count[mode]?`${labels[mode]}: ${count[mode]}개 지점을 차례로 클릭하세요. Esc로 취소.`:'선택한 도형의 원형 점은 끝점 수정, 선·영역은 전체 이동입니다. 빈 영역은 차트 이동·확대에 사용합니다.');
     }
     function down(e) {
       if(e.button!==0)return;
@@ -223,6 +231,7 @@ window.DrawingTools = (() => {
         hover=p;
         e.preventDefault();e.stopPropagation();
         if((mode==='trend'||mode==='channel')&&draft.length===1&&draft[0].time===p.time){onHint('두 번째 점은 다른 날짜를 선택하세요.');return;}
+        if(mode==='channel'&&draft.length===2&&!channelAbove([...draft,p])){onHint('평행 채널: 하단 기준선 위쪽의 상단점을 클릭하세요.');return;}
         if(mode==='riskreward'&&draft.length===1&&draft[0].price===p.price){onHint('손절가는 진입가와 달라야 합니다.');return;}
         if(mode==='riskreward'&&draft.length===2&&!riskReward([...draft,p],currency)){onHint('목표가는 진입가를 기준으로 손절가의 반대편에 두고, 날짜 범위를 넓혀 주세요.');return;}
         draft.push(p);
@@ -230,7 +239,7 @@ window.DrawingTools = (() => {
           if(getDrawings().length>=drawingLimit){draft=[];onHint(`종목당 최대 ${drawingLimit}개입니다. 필요 없는 도형을 삭제하세요.`);return;}
           const drawing={id:crypto.randomUUID(),kind:mode,points:clone(draft),color:'#218775',width:2,extend:false};
           onChange([...getDrawings(),drawing]);setMode('select');select(drawing.id);
-        }else if(mode==='riskreward')onHint(draft.length===1?'손익비: 손절가를 클릭하세요.':'손익비: 진입가 반대편의 목표가를 클릭하세요.');else onHint(`${labels[mode]}: ${count[mode]-draft.length}개 지점을 더 클릭하세요.`);
+        }else if(mode==='channel')onHint(draft.length===1?'평행 채널: 끝 하단점을 클릭하세요.':'평행 채널: 하단 기준선 위쪽의 상단점을 클릭하세요.');else if(mode==='riskreward')onHint(draft.length===1?'손익비: 손절가를 클릭하세요.':'손익비: 진입가 반대편의 목표가를 클릭하세요.');else onHint(`${labels[mode]}: ${count[mode]-draft.length}개 지점을 더 클릭하세요.`);
       } else {
         const group=e.target.closest('[data-id]'),id=group?.getAttribute('data-id');
         if(!id||group.classList.contains('ai-proposal'))return;
