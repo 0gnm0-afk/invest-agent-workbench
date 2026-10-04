@@ -136,6 +136,8 @@ def run(root, config_path=None, prior_source=None, *, session_cutoff=None, evalu
             config = {'profile': source['profile'], 'markets': ['KR', 'US'],
                       'scope': 'market_only_toss_provided_universe', 'universe_mode': 'exchange_listings',
                       'limit_per_exchange': None}
+            if source.get('user_classification'):
+                config['user_classification'] = source['user_classification']
             if source.get('classification_refresh'):
                 config['classification_refresh'] = source['classification_refresh']
             if session_cutoff is not None:

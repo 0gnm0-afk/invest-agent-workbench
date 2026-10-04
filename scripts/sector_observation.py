@@ -479,6 +479,8 @@ def build(market_root, classification_root, evidence, nh_root, applied, *, allow
         groups, changes = align_groups(groups, universe, applied)
     from classification_refresh import apply as apply_refresh
     groups = apply_refresh(groups, snapshot, checked, inputs, applied, classification_age_issue, SECTORS)
+    from user_classification import apply as apply_user_classification
+    groups = apply_user_classification(groups, snapshot)
     wics = load_wics(evidence, checked, load, inputs)
     series = {}
     for row in snapshot['series']:
@@ -502,12 +504,13 @@ def build(market_root, classification_root, evidence, nh_root, applied, *, allow
                             'price_series_available': len(selected)-len(missing_prices),
                             'price_series_missing': missing_prices,
                             'matched_price_missing': sum((market,r['symbol']) not in series for r in matched),
-                            'classification_complete': len(matched)==len(selected)}
+                            'classification_complete': len(matched)==len(selected),
+                            'user_defined_other': sum(r.get('group_taxonomy')=='US_USER_OTHER' for r in matched)}
         reviewed = [r for r in selected if r['group_state'] != 'matched' and 'external_review' in r]
         if reviewed:
             coverage[market]['external_review_categories'] = dict(Counter(review_category(r) for r in reviewed))
             coverage[market]['external_reviewed_count'] = len(reviewed)
-            confirmed = len(matched)+sum(bool(r.get('external_finviz_sector')) for r in reviewed)
+            confirmed = sum(r.get('group_taxonomy')=='US_FINVIZ_SECTOR' for r in matched)+sum(bool(r.get('external_finviz_sector')) for r in reviewed)
             coverage[market]['finviz_sector_confirmed_total'] = confirmed
             coverage[market]['finviz_sector_unconfirmed_total'] = len(selected)-confirmed
         benchmark = snapshot['benchmarks'].get(BENCHMARKS[market])
@@ -539,7 +542,7 @@ def build(market_root, classification_root, evidence, nh_root, applied, *, allow
         for (code, name), members in sorted(grouped.items()):
             observations.append({'market':market, 'group_code':code, 'group_name':name,
                                  'as_of':sessions[-1], 'matched_members':len(members),
-                                 'classification_coverage':'verified_subset_not_complete_sector_universe',
+                                 'classification_coverage':('user_defined_other_not_official_sector' if code=='USER_OTHER_US' else 'verified_subset_not_complete_sector_universe'),
                                  **group_metrics(members,series,sessions,benchmark,
                                                  validate_basis=basis_contract is not None, reference=reference)})
     report = {'schema':2 if basis_contract else 1, 'applied_at':applied, 'network_calls':0,

@@ -331,6 +331,7 @@ def _collect(config, account, root, get, now, refresh, prior_series, prior_sourc
     result = {
         'scope_exclusions': scope_exclusions,
         'classification_refresh': config.get('classification_refresh'),
+        'user_classification': config.get('user_classification'),
         'schema_version': 1,
         'source': 'live_public',
         'fetched_at': now.isoformat(),

@@ -174,8 +174,9 @@ class AccountFallback(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         config = d.load(d.ROOT / 'config.json')
+        cls.addClassCleanup(setattr, sys, 'path', sys.path.copy())
         sys.path.insert(0, str(Path(config['engine']) / 'src'))
-        sys.path.insert(0, str(Path(config['mother']) / 'scripts'))
+        sys.path.append(str(Path(config['mother']) / 'scripts'))
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

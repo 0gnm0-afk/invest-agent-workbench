@@ -129,7 +129,10 @@ class SavedMarketHistories:
     def __init__(self, root):
         self.markets = {m: SavedHistory(Path(root) / (m.lower() + '-history/active.json'), m)
                         for m in ('US', 'KR')}
-        self.stocks = {k: v for history in self.markets.values() for k, v in history.stocks.items()}
+        from market_scope import load, match
+        policy = load()
+        self.stocks = {k: v for history in self.markets.values() for k, v in history.stocks.items()
+                       if not match(v, policy)}
 
     def packet(self, stock):
         history = self.markets.get(stock.get('market'))

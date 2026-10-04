@@ -40,6 +40,8 @@ def match(row, policy=None, *, completed_session=None):
     found = next((r for r in policy['records'] if (r['market'],r['symbol']) == (row['market'],row['symbol'])
                   and (not r.get('dual_provider_rule') or r.get('isin_code') == row.get('isin_code'))), None)
     if found:
+        if found.get('identity_bound') and row.get('isin_code') and found.get('isin_code') != row['isin_code']:
+            return None
         if found.get('dual_provider_rule') and (not row.get('isin_code') or found.get('isin_code') != row['isin_code']):
             return None
         if found.get('dual_provider_rule') and as_of < found.get('effective_session', ''):

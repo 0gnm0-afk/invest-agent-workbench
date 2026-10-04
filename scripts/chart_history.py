@@ -80,6 +80,11 @@ class HistoryStore:
 
     def view(self, stock, frame='1d'):
         timeframe(frame)
+        from market_scope import match
+        exclusion = match(stock)
+        if exclusion:
+            return {**stock, 'bars':[], 'timeframe':frame, 'history':{
+                'state':'excluded', 'reason':exclusion['reason'], 'approved_on':exclusion['approved_on']}}
         try:
             value = self.saved.packet(stock)
             if value is None:

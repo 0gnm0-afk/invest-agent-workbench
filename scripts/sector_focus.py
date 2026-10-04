@@ -146,7 +146,8 @@ def build(snapshot, groups, sectors, overrides=None):
             dates = [v['oldest_observed_at'] for v in values if v.get('oldest_observed_at')]
             ends = [v['latest_observed_at'] for v in values if v.get('latest_observed_at')]
             source_dates = [v['source_as_of'] for v in values if v.get('source_as_of')]
-            return dict(refresh_due=sum(v.get('state')=='refresh_due' for v in values),
+            return dict(user_defined=sum(v.get('state')=='user_defined' for v in values),
+                        refresh_due=sum(v.get('state')=='refresh_due' for v in values),
                         observed_from=min(dates) if dates else None, observed_until=max(ends) if ends else None,
                         source_as_of=min(source_dates) if source_dates else None)
         items = [dict(d,history=[],current={},leaders=[],classification=freshness([r for r in rows if r['symbol'] in d['members']]))

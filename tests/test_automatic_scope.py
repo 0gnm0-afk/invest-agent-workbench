@@ -38,10 +38,11 @@ class AutomaticScopeTests(unittest.TestCase):
             self.assertIsNone(m.match(row,policy))
         self.assertFalse(hasattr(a,'problem_exclusion'))
         self.assertFalse(hasattr(a,'derive'))
-    def test_live_policy_has_no_legacy_config_or_manual_records(self):
+    def test_live_policy_has_only_current_explicit_manual_records(self):
         policy=json.loads(m.POLICY.read_text(encoding='utf-8'))
         self.assertNotIn('automatic',policy)
-        self.assertEqual(policy['records'],[])
+        self.assertEqual(len(policy['records']),31)
+        self.assertTrue(all(x['approved_on']=='2026-10-04' and x.get('identity_bound') for x in policy['records']))
 
     def test_review_classification_refresh_changes_no_observations(self):
         from market_collect import write_json

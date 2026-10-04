@@ -79,7 +79,8 @@ function focusGuide() {
 const classificationDay = value => value ? new Date(value).toLocaleDateString('sv-SE',{timeZone:'Asia/Seoul'}) : '';
 function classificationNote(c) {
  if(!c)return '';
- return `분류 확인 ${esc(classificationDay(c.observed_from)||'미확인')}${classificationDay(c.observed_until)!==classificationDay(c.observed_from)?' ~ '+esc(classificationDay(c.observed_until)||''):''}${c.source_as_of?' · 분류 기준 '+esc(c.source_as_of):''}${c.refresh_due?' · 갱신 필요 '+num(c.refresh_due,0)+'종목 (기존 분류 사용)':''}`;
+ if(c.user_defined&&!c.observed_from)return `사용자 지정 기타 ${num(c.user_defined,0)}종목 · 공식 업종 미확인`;
+ return `${c.user_defined?'사용자 지정 기타 '+num(c.user_defined,0)+'종목 포함 · ':''}분류 확인 ${esc(classificationDay(c.observed_from)||'미확인')}${classificationDay(c.observed_until)!==classificationDay(c.observed_from)?' ~ '+esc(classificationDay(c.observed_until)||''):''}${c.source_as_of?' · 분류 기준 '+esc(c.source_as_of):''}${c.refresh_due?' · 갱신 필요 '+num(c.refresh_due,0)+'종목 (기존 분류 사용)':''}`;
 }
 function focusCoverage(market) {
  const m=DATA.market.focus?.markets?.[market];if(!m)return '계산 자료 미준비';

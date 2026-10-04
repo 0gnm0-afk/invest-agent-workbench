@@ -22,6 +22,7 @@ def derive(saved_run, config):
         so.checked(path,expected,{})
     policy=market_scope.load();snapshot=market_scope.apply_snapshot(so.load(source/'snapshot.json'),policy)
     snapshot['classification_refresh']=config.get('classification_refresh')
+    snapshot['user_classification']=config.get('user_classification')
     output=ROOT/'runtime/scope-repair'/(datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')+'-'+uuid4().hex[:8])
     output.mkdir(parents=True)
     if run.get('basis_rechecks'):
