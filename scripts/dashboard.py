@@ -10,7 +10,7 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from dashboard_data import ROOT, build
+from dashboard_data import ROOT, build, StockSearch
 from chart_history import HistoryStore, timeframe
 from financial_store import FinancialStore
 from financial_summary import selected_stock
@@ -22,6 +22,10 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
     initial_view = (data, stocks)
     store = WorkspaceStore(workspace_path or ROOT / "runtime/chart-workspaces.sqlite3")
     histories = HistoryStore((Path(workspace_path).parent if workspace_path else ROOT / 'runtime') / 'chart-history.sqlite3')
+    search_listings = {history.market + ':' + symbol: row
+                       for history in histories.saved.markets.values()
+                       for symbol, row in getattr(history, 'listings', {}).items()}
+    search_cache = [None, None]
     financials = FinancialStore((Path(workspace_path).parent if workspace_path else ROOT / 'runtime') / 'financials')
     analyses = AnalysisService(store, histories, financials, lambda: views['view'] if views is not None else initial_view, ROOT if workspace_path is None else Path(workspace_path).parent)
     class Handler(BaseHTTPRequestHandler):
@@ -40,8 +44,8 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
             self.wfile.write(body)
 
         def do_GET(self):
-            data, stocks = views['view'] if views is not None else initial_view
-            stocks = {**histories.saved.stocks, **stocks}
+            data, current_stocks = views['view'] if views is not None else initial_view
+            stocks = {**histories.saved.stocks, **current_stocks}
             expected = '127.0.0.1:' + str(self.server.server_port)
             if self.headers.get('Host') != expected or self.headers.get('Origin', 'http://' + expected) != 'http://' + expected:
                 return self.send(b'{"error":"local_origin_required"}', status=403)
@@ -57,6 +61,20 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                 return self.send(json.dumps(daily_status() if daily_status else {'enabled':False}, ensure_ascii=False).encode('utf-8'))
             if path == '/api/home':
                 return self.send(json.dumps(data, ensure_ascii=False, allow_nan=False).encode('utf-8'))
+            if path == '/api/stock-search':
+                if set(query) - {'q'} or len(query.get('q', [''])) != 1:
+                    return self.send(b'{"error":"invalid_search_query"}', status=400)
+                try:
+                    phrase = query.get('q', [''])[0]
+                    if len(phrase) > 100:
+                        raise ValueError('invalid_search_query')
+                    cached_source, index = search_cache
+                    if cached_source is not current_stocks:
+                        index = StockSearch(stocks, search_listings)
+                        search_cache[:] = [current_stocks, index]
+                    return self.send(json.dumps(index.search(phrase), ensure_ascii=False, allow_nan=False).encode('utf-8'))
+                except ValueError:
+                    return self.send(b'{"error":"invalid_search_query"}', status=400)
             if path.startswith('/api/financials/'):
                 key = urllib.parse.unquote(path[len('/api/financials/'):])
                 if key not in stocks:

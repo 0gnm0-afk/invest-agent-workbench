@@ -2,6 +2,7 @@
 import hashlib
 import json
 import sys
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -78,7 +79,7 @@ def saved_market(root=ROOT, run_dir=None):
     for s in snapshot['series']:
         result['stocks'][s['market'] + ':' + s['symbol']] = {
             k: s.get(k) for k in ('market', 'symbol', 'name', 'currency', 'provider', 'price_basis',
-                                  'collected_at', 'bars')}
+                                  'collected_at', 'bars', *SEARCH_METADATA_FIELDS)}
     from sector_focus import cached, screen_groups
     from invest_agent.trading.store import BusyError
     try:
@@ -105,6 +106,66 @@ def saved_market(root=ROOT, run_dir=None):
     }
     result['screen_groups'] = screen_groups(result['entries'], snapshot.get('universe', []))
     return result
+
+
+
+SEARCH_NAME_FIELDS = ('name', 'english_name', 'korean_name', 'name_en', 'name_ko')
+SEARCH_METADATA_FIELDS = (*SEARCH_NAME_FIELDS[1:], 'aliases', 'provider_symbol',
+                          'listing_exchange_family', 'listing_exchange', 'exchange', 'isin_code')
+
+
+def search_text(value):
+    """Match user spelling across case, spacing and Unicode composition."""
+    return ''.join(unicodedata.normalize('NFKC', value).casefold().split())
+
+
+class StockSearch:
+    """Compact in-memory index of stocks already addressable by the detail view."""
+    limit = 12
+
+    def __init__(self, stocks, listings=None, policy=None):
+        from market_scope import load as scope_policy, match
+        policy = scope_policy() if policy is None else policy
+        self.rows = []
+        for key, stock in stocks.items():
+            market, symbol = stock.get('market'), stock.get('symbol')
+            if market not in ('KR', 'US') or not isinstance(symbol, str) or key != market + ':' + symbol:
+                continue
+            listing = (listings or {}).get(key, {})
+            listed_isin = listing.get('isin_code') or listing.get('isinCode')
+            if stock.get('isin_code') and listed_isin and stock['isin_code'] != listed_isin:
+                listing = {}  # A reused ticker must not inherit a former company's names.
+            row = {**listing, **stock}
+            row['isin_code'] = stock.get('isin_code') or listing.get('isin_code') or listing.get('isinCode')
+            if match(row, policy):
+                continue
+            names = [row.get(field) for field in SEARCH_NAME_FIELDS]
+            names += row.get('aliases', []) if isinstance(row.get('aliases'), list) else []
+            terms = [symbol, row.get('provider_symbol'), *names]
+            if market == 'KR' and symbol.endswith(('.KS', '.KQ')):
+                terms.append(symbol.rsplit('.', 1)[0])
+            terms = tuple(dict.fromkeys(search_text(value) for value in terms if isinstance(value, str) and value.strip()))
+            name = next((value for value in names if isinstance(value, str) and value.strip()), symbol)
+            exchange = next((row.get(field) for field in ('listing_exchange_family', 'listing_exchange', 'exchange')
+                             if isinstance(row.get(field), str) and row[field]), None)
+            self.rows.append(({'key': key, 'market': market, 'symbol': symbol, 'name': name, 'exchange': exchange}, terms))
+
+    def search(self, query):
+        if not isinstance(query, str) or len(query) > 100:
+            raise ValueError('invalid_search_query')
+        needle = search_text(query)
+        result = {'query': query, 'items': [], 'total': 0, 'limit': self.limit}
+        if not needle:
+            return result
+        matches = []
+        for item, terms in self.rows:
+            rank = min((0 if term == needle else 1 if term.startswith(needle) else 2
+                        for term in terms if needle in term), default=None)
+            if rank is not None:
+                matches.append((rank, search_text(item['symbol']), item['market'], item['key'], item))
+        matches.sort(key=lambda row: row[:4])
+        result.update(items=[row[-1] for row in matches[:self.limit]], total=len(matches))
+        return result
 
 
 def collect_balances(reader, pages, error_type):

@@ -14,6 +14,100 @@ const explain = x => ({protection_uses_saved_completed_bars_check_each_price_dat
 const metric = (label, value) => `<div class="metric"><small>${WorkbenchHelp.text(label)}</small><strong>${esc(value)}</strong></div>`;
 let DATA, routeVersion = 0, lastRouteHash = location.hash;
 function heading(title, eyebrow, subtitle) { return `<div class="heading"><div><div class="eyebrow">${eyebrow}</div><h1>${esc(title)}</h1><p class="sub">${esc(subtitle)}</p></div><div class="date-box">자료 기준 · 완료 일봉<strong>KR ${esc(DATA.market.session_dates?.KR || '미확인')}<br>US ${esc(DATA.market.session_dates?.US || '미확인')}</strong></div></div>`; }
+// Global stock lookup stays mounted while the page route changes.
+function mountStockSearch() {
+ const host = document.getElementById('stock-search');
+ if (!host || host.dataset.mounted) return;
+ host.dataset.mounted = 'true';
+ const input = host.querySelector('input'), clear = host.querySelector('button');
+ const panel = host.querySelector('.stock-search-panel'), list = host.querySelector('[role="listbox"]');
+ const status = host.querySelector('[role="status"]'), note = host.querySelector('.stock-search-note');
+ let items = [], active = -1, sequence = 0, timer, controller, composing = false;
+ const query = () => input.value.trim();
+ function cancel() { clearTimeout(timer); controller?.abort(); sequence++; }
+ function close() {
+  cancel(); panel.hidden = true; input.setAttribute('aria-expanded', 'false');
+  input.removeAttribute('aria-activedescendant'); active = -1; items = []; list.replaceChildren();
+ }
+ function show(message) {
+  panel.hidden = false; input.setAttribute('aria-expanded', 'true');
+  status.textContent = message;
+ }
+ function select(index) {
+  const item = items[index]; if (!item) return;
+  close(); input.value = ''; clear.hidden = true; input.blur();
+  location.hash = '#stock/' + encodeURIComponent(item.market) + '/' + encodeURIComponent(item.symbol);
+ }
+ function highlight(value, needle) {
+  const text = String(value ?? ''), start = text.toLocaleLowerCase().indexOf(needle.toLocaleLowerCase());
+  return start < 0 ? esc(text) : esc(text.slice(0, start)) + '<mark>' + esc(text.slice(start, start + needle.length)) + '</mark>' + esc(text.slice(start + needle.length));
+ }
+ function activate(index, scroll = false) {
+  active = index;
+  Array.from(list.children).forEach((row, i) => row.setAttribute('aria-selected', String(i === active)));
+  const row = list.children[active];
+  if (row) { input.setAttribute('aria-activedescendant', row.id); if (scroll) row.scrollIntoView({block:'nearest'}); }
+  else input.removeAttribute('aria-activedescendant');
+ }
+ async function search(value, request) {
+  controller = new AbortController();
+  try {
+   const response = await fetch('/api/stock-search?q=' + encodeURIComponent(value), {signal:controller.signal});
+   if (!response.ok) throw Error('stock_search_failed');
+   const result = await response.json();
+   if (request !== sequence || value !== query() || document.activeElement !== input) return;
+   items = result.items; list.replaceChildren();
+   items.forEach((item, i) => {
+    const row = document.createElement('div');
+    row.id = 'stock-search-option-' + i; row.className = 'stock-search-option';
+    row.setAttribute('role', 'option'); row.setAttribute('aria-selected', 'false');
+    row.innerHTML = '<span class="stock-search-identity"><strong>' + highlight(item.name || item.symbol, value) + '</strong><span>' + highlight(item.symbol.replace(/\.(KS|KQ)$/, ''), value) + '</span></span><span class="stock-search-market">' + esc(item.exchange || item.market) + '<small>' + (item.market === 'KR' ? '한국' : '미국') + '</small></span>';
+    row.addEventListener('pointerdown', event => event.preventDefault());
+    row.addEventListener('click', () => select(i));
+    row.addEventListener('pointermove', () => activate(i));
+    list.append(row);
+   });
+   show(items.length ? '검색 결과 ' + result.total + '개' : '일치하는 종목이 없습니다. 종목명이나 티커를 확인해 주세요.');
+   status.classList.toggle('stock-search-sr', items.length > 0);
+   note.textContent = items.length ? '저장된 종목 · ' + items.length + (result.total > items.length ? ' / ' + result.total + '개 · 더 입력하면 좁혀집니다' : '개') + ' · ↑↓ 선택 · Enter 열기' : '저장된 한국·미국 종목에서 검색합니다';
+   activate(items.length ? 0 : -1);
+  } catch (error) {
+   if (request !== sequence || error.name === 'AbortError') return;
+   items = []; list.replaceChildren(); input.removeAttribute('aria-activedescendant');
+   status.classList.remove('stock-search-sr');
+   show('검색을 불러오지 못했습니다. 잠시 후 다시 입력해 주세요.');
+   note.textContent = '연결이 끊겼다면 대시보드를 다시 열어 주세요';
+  }
+ }
+ function schedule() {
+  cancel(); items = []; active = -1; list.replaceChildren(); input.removeAttribute('aria-activedescendant');
+  clear.hidden = !input.value;
+  if (!query()) { close(); return; }
+  status.classList.remove('stock-search-sr'); show('검색 중…'); note.textContent = '저장된 한국·미국 종목에서 검색합니다';
+  const request = sequence, value = query();
+  timer = setTimeout(() => search(value, request), 150);
+ }
+ input.disabled = false;
+ input.addEventListener('input', () => { clear.hidden = !input.value; if (!composing) schedule(); });
+ input.addEventListener('compositionstart', () => { composing = true; close(); });
+ input.addEventListener('compositionend', () => { composing = false; schedule(); });
+ input.addEventListener('focus', () => { if (query()) schedule(); });
+ input.addEventListener('keydown', event => {
+  if (composing || event.isComposing || event.keyCode === 229) return;
+  if (event.key === 'Escape') { event.preventDefault(); close(); return; }
+  if (event.key === 'Tab') { close(); return; }
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+   event.preventDefault();
+   if (panel.hidden) { if (query()) schedule(); return; }
+   if (items.length) activate((active + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length, true);
+  }
+  if (event.key === 'Enter') { event.preventDefault(); if (!panel.hidden && active >= 0) select(active); }
+ });
+ clear.addEventListener('click', () => { input.value = ''; clear.hidden = true; close(); input.focus(); });
+ host.addEventListener('focusout', event => { if (!host.contains(event.relatedTarget)) close(); });
+ document.addEventListener('pointerdown', event => { if (!host.contains(event.target)) close(); });
+ window.addEventListener('hashchange', close);
+}
 function marketStatus() {
  const m=DATA.market;
  const data=({succeeded:'확보 완료',complete:'확보 완료',partial:'일부 결측',failed:'수집 실패',unavailable:'미준비'})[m.quality?.state]||'미확인';
@@ -48,7 +142,7 @@ async function stockDetail(market, symbol, version) {
  const response=await fetch('/api/stock/'+encodeURIComponent(market+':'+symbol));if(!response.ok)throw Error('price_request_failed');const s=await response.json();if(version!==routeVersion)return;
  const currency=s.currency || ({KR:'KRW',US:'USD'})[market];
  const e=DATA.market.entries.find(e=>e.market===market&&e.symbol===symbol);const sig=e?.entry_signal;const bars=s.bars||[], last=bars.at(-1);
- $('#main').innerHTML=`<div class="stock-detail"><header class="stock-heading"><div class="stock-identity"><a class="back" href="#home">← 작업대</a><div class="stock-title"><h1>${esc(symbol.replace(/\.(KS|KQ)$/,''))}</h1><h2>${esc(s.name||symbol)}</h2></div><p class="sub">${esc(market)} / ${esc(symbol)} · ${esc(e?phase[e.phase]:'현재 스크리너 후보 아님')}</p></div><div class="stock-quote"><strong id="stock-quote-price">${money(last?.close,currency)}</strong><span>${esc(currency)} · <span id="stock-quote-date">스크리닝 가격 ${esc(last?.date||'미확인')}</span></span></div></header><nav class="stock-section-nav" aria-label="종목 상세 영역"><button data-section="stock-price" class="selected">차트</button><button data-section="financials">재무정보</button><button data-section="stock-evidence">선별 근거</button><button data-section="qualitative-report">정성 리포트</button><span>저장 자료 · ${esc(currency)}</span></nav><details class="stock-data-status"><summary>${esc(marketStatus())} · 기준일과 수집 내역</summary>${qualityNotice()}${e?.display_cap?`<p class="chart-caption">저장 시가총액 ${esc(capText(e))} · 기준 ${stamp(e.display_cap.as_of)} · 가격×발행주식수 파생값</p>`:''}</details><section class="stock-chart-panel" id="stock-price" aria-label="가격과 거래량"><div class="stock-chart-toolbar"><button id="stock-tools-toggle" aria-expanded="false" aria-controls="chart-workspace"><span aria-hidden="true">✎</span> 작도 · SMA</button><div class="chart-toolbar" id="timeframe-controls" aria-label="봉 주기"><button data-frame="1d" class="selected">일봉</button><button data-frame="1w">주봉</button><button data-frame="1mo">월봉</button></div><div class="chart-toolbar" id="history-range-controls" aria-label="차트 기간"><button data-range="3">3개월</button><button data-range="6" class="selected">6개월</button><button data-range="12">1년</button><button data-range="60">5년</button><button data-range="all">전체 이력</button></div><button id="stock-chart-expand" aria-pressed="false"><span aria-hidden="true">⛶</span> 차트 확대</button></div><div id="chart-workspace" hidden></div><div class="stock-plot-wrap"><div id="price-chart" class="chart large" role="img" aria-label="저장 OHLC 가격과 거래량 차트"></div><div id="price-legend" class="chart-legend stock-price-legend">차트 위에서 날짜별 수치를 확인하세요.</div></div><div class="stock-chart-foot"><p id="history-price" class="chart-caption"></p><details class="history-info"><summary>가격 이력 · 품질 · 기준일</summary><p id="history-status" role="status" class="chart-caption">장기 가격 이력 준비 중…</p><details id="history-quality" class="chart-caption" hidden><summary>자료 품질 상세</summary><p></p></details><p class="chart-caption">스크리닝 원본 ${bars.length}개 일봉 · 수집 ${stamp(s.collected_at)} · 거래량은 공급자 조정 기준. 피벗·무효화 가격은 저장 관찰값이며 주문 기준이 아닙니다.</p></details><button id="history-retry" class="history-retry" hidden>장기 이력 재시도</button></div><div class="metrics stock-reference-metrics">${metric('스크리닝 당시 종가',money(last?.close,currency)+' '+(currency||''))}${metric('관찰 피벗',money(sig?.pivot,currency))}${metric('피벗까지',pct(sig?.pivot_gap_pct))}${metric('구조 무효화 참고',money(sig?.structure_stop,currency))}</div></section>`+WorkbenchFinancials.shell()+`<div class="details-grid" id="stock-evidence">${block('선별 근거',`<div class="panel-body">${e?tag(phase[e.phase]):tag('후보 아님','neutral')}<h3 style="margin-top:13px">${esc(sig?.label||'현재 선별 근거 없음')}</h3><ul class="bullet">${(e?.reasons||['계좌 보유/섹터 연결에서 열린 종목입니다. 현재 후보로 자동 승격하지 않습니다.']).map(r=>`<li>${WorkbenchHelp.text(WorkbenchFormat.priceText(r,currency))}</li>`).join('')}</ul><p class="chart-caption">${e?'PDF·스페란데오·바닥/눌림 경로의 독립 선정 근거입니다. 바닥/눌림은 관찰 단계만 허용합니다.':''}</p></div>`)}${block('다음 확인과 주의',`<div class="panel-body"><ul class="bullet">${(sig?.pending||['현재 저장된 후속 확인 조건 없음']).concat(sig?.warnings||[]).map(r=>`<li>${WorkbenchHelp.text(WorkbenchFormat.priceText(r,currency))}</li>`).join('')}</ul>${e?`<p class="chart-caption">${WorkbenchHelp.text("구조 위험")} ${pct(sig?.structure_risk_pct)} · ${WorkbenchHelp.text("RS 백분위")} ${num(e.analysis?.rs_percentile)} · 원문 페이지 ${esc(e.analysis?.source_pages?.join(', ')||'해당 없음')}</p><details><summary>저장된 상세 근거 펼치기 · 금액 표시 형식 적용</summary><pre>${esc(JSON.stringify(WorkbenchFormat.analysis(e.analysis,currency),null,2))}</pre></details>`:''}</div>`)}</div><div class="placeholder-grid" id="qualitative-report">${block('정성 리포트',`<div class="empty">${tag('미준비','neutral')}<strong>연결된 검증 리포트가 없습니다.</strong>사업·촉매·위험·반증 근거<br>공시·IR 인용과 사용자 판단을 분리해 연결합니다.</div>`)}</div></div>`;
+ $('#main').innerHTML=`<div class="stock-detail"><header class="stock-heading"><div class="stock-identity"><a class="back" href="#home">← 작업대</a><div class="stock-title"><h1>${esc(symbol.replace(/\.(KS|KQ)$/,''))}</h1><h2>${esc(s.name||symbol)}</h2></div><p class="sub">${esc(market)} / ${esc(symbol)} · ${esc(e?phase[e.phase]:'현재 스크리너 후보 아님')}</p></div><div class="stock-quote"><strong id="stock-quote-price">${money(last?.close,currency)}</strong><span>${esc(currency)} · <span id="stock-quote-date">스크리닝 가격 ${esc(last?.date||'미확인')}</span></span></div></header><nav class="stock-section-nav" aria-label="종목 상세 영역"><button data-section="stock-price" class="selected">차트</button><button data-section="financials">재무정보</button><button data-section="stock-evidence">선별 근거</button><button data-section="qualitative-report">정성 리포트</button><span>저장 자료 · ${esc(currency)}</span></nav><details class="stock-data-status"><summary>${esc(marketStatus())} · 기준일과 수집 내역</summary>${qualityNotice()}${e?.display_cap?`<p class="chart-caption">저장 시가총액 ${esc(capText(e))} · 기준 ${stamp(e.display_cap.as_of)} · 가격×발행주식수 파생값</p>`:''}</details><section class="stock-chart-panel" id="stock-price" aria-label="가격과 거래량"><div class="stock-chart-toolbar"><button id="stock-tools-toggle" aria-expanded="false" aria-controls="chart-workspace"><span aria-hidden="true">✎</span> 작도 · SMA</button><div class="chart-toolbar" id="timeframe-controls" aria-label="봉 주기"><button data-frame="1d" class="selected">일봉</button><button data-frame="1w">주봉</button><button data-frame="1mo">월봉</button></div><div class="chart-toolbar" id="history-range-controls" aria-label="차트 기간"><button data-range="3">3개월</button><button data-range="6" class="selected">6개월</button><button data-range="12">1년</button><button data-range="60">5년</button><button data-range="all">전체 이력</button></div><button id="stock-chart-expand" aria-pressed="false"><span aria-hidden="true">⛶</span> 차트 확대</button></div><div id="chart-workspace" hidden></div><div class="stock-plot-wrap"><div id="price-chart" class="chart large" role="img" aria-label="저장 OHLC 가격과 거래량 차트"></div><div id="price-legend" class="chart-legend stock-price-legend">차트 위에서 날짜별 수치를 확인하세요.</div></div><div class="stock-chart-foot"><p id="history-price" class="chart-caption"></p><details class="history-info"><summary>가격 이력 · 품질 · 기준일</summary><p id="history-status" role="status" class="chart-caption">장기 가격 이력 준비 중…</p><details id="history-quality" class="chart-caption" hidden><summary>자료 품질 상세</summary><p></p></details><p class="chart-caption">스크리닝 원본 ${bars.length}개 일봉 · 수집 ${stamp(s.collected_at)} · 거래량은 공급자 조정 기준. 피벗·무효화 가격은 저장 관찰값이며 주문 기준이 아닙니다.</p></details><button id="history-retry" class="history-retry" hidden>장기 이력 재시도</button></div><div class="metrics stock-reference-metrics">${metric('스크리닝 당시 종가',money(last?.close,currency)+' '+(currency||''))}${metric('관찰 피벗',money(sig?.pivot,currency))}${metric('피벗까지',pct(sig?.pivot_gap_pct))}${metric('구조 무효화 참고',money(sig?.structure_stop,currency))}</div></section>`+WorkbenchFinancials.shell()+`<div class="details-grid" id="stock-evidence">${block('선별 근거',`<div class="panel-body">${e?tag(phase[e.phase]):tag('후보 아님','neutral')}<h3 style="margin-top:13px">${esc(sig?.label||'현재 선별 근거 없음')}</h3><ul class="bullet">${(e?.reasons||['직접 검색·계좌 보유·섹터 연결에서 열린 종목입니다. 현재 후보로 자동 승격하지 않습니다.']).map(r=>`<li>${WorkbenchHelp.text(WorkbenchFormat.priceText(r,currency))}</li>`).join('')}</ul><p class="chart-caption">${e?'PDF·스페란데오·바닥/눌림 경로의 독립 선정 근거입니다. 바닥/눌림은 관찰 단계만 허용합니다.':''}</p></div>`)}${block('다음 확인과 주의',`<div class="panel-body"><ul class="bullet">${(sig?.pending||['현재 저장된 후속 확인 조건 없음']).concat(sig?.warnings||[]).map(r=>`<li>${WorkbenchHelp.text(WorkbenchFormat.priceText(r,currency))}</li>`).join('')}</ul>${e?`<p class="chart-caption">${WorkbenchHelp.text("구조 위험")} ${pct(sig?.structure_risk_pct)} · ${WorkbenchHelp.text("RS 백분위")} ${num(e.analysis?.rs_percentile)} · 원문 페이지 ${esc(e.analysis?.source_pages?.join(', ')||'해당 없음')}</p><details><summary>저장된 상세 근거 펼치기 · 금액 표시 형식 적용</summary><pre>${esc(JSON.stringify(WorkbenchFormat.analysis(e.analysis,currency),null,2))}</pre></details>`:''}</div>`)}</div><div class="placeholder-grid" id="qualitative-report">${block('정성 리포트',`<div class="empty">${tag('미준비','neutral')}<strong>연결된 검증 리포트가 없습니다.</strong>사업·촉매·위험·반증 근거<br>공시·IR 인용과 사용자 판단을 분리해 연결합니다.</div>`)}</div></div>`;
  document.querySelectorAll('[data-section]').forEach(b=>b.onclick=()=>{document.getElementById(b.dataset.section)?.scrollIntoView({behavior:'smooth',block:'start'});document.querySelectorAll('[data-section]').forEach(x=>x.classList.toggle('selected',x===b));});
  $('#stock-tools-toggle').onclick=()=>{const host=$('#chart-workspace');host.hidden=!host.hidden;$('#stock-tools-toggle').setAttribute('aria-expanded',String(!host.hidden));};
  $('#stock-chart-expand').onclick=()=>{const panel=$('#stock-price'),expanded=panel.classList.toggle('expanded');$('#stock-chart-expand').setAttribute('aria-pressed',String(expanded));$('#stock-chart-expand').innerHTML=expanded?'⛶ 기본 크기':'⛶ 차트 확대';};
@@ -120,7 +214,7 @@ function focusDetail(market,code) {
  WorkbenchCharts.create($('#focus-delta'),[{label:'증가율 (%)',data:WorkbenchCharts.lineData(usable,'growth',100)},{label:'가속 (%p)',data:WorkbenchCharts.lineData(usable,'acceleration',100),color:'#c39345'}]);
 }
 
-fetch('/api/home').then(r=>{if(!r.ok)throw Error('dashboard_load_failed');return r.json();}).then(d=>{DATA=d;window.addEventListener('hashchange',route);route();pollDaily();}).catch(e=>{$('#main').textContent='저장 자료 불러오기 실패: '+e.message;});
+fetch('/api/home').then(r=>{if(!r.ok)throw Error('dashboard_load_failed');return r.json();}).then(d=>{DATA=d;mountStockSearch();window.addEventListener('hashchange',route);route();pollDaily();}).catch(e=>{$('#main').textContent='저장 자료 불러오기 실패: '+e.message;});
 
 $('.skip').onclick = event => { event.preventDefault(); $('#main').focus(); };
 
