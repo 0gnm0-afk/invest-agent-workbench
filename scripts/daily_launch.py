@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 from zoneinfo import ZoneInfo
+from uuid import uuid4
 
 from invest_agent.trading.market_provider import completed_sessions
 from invest_agent.trading.runner import atomic_write
@@ -34,6 +35,10 @@ def plan_for(now):
     cutoff = (day - timedelta(days=1)).isoformat()
     return {'day':day.isoformat(), 'cutoff':cutoff, 'evaluated_at':now.isoformat(),
             'targets':{m:capped_sessions(completed_sessions(m, now), cutoff)[-1] for m in ('KR','US')}}
+
+
+def attempt_id(record):
+    return record.get('attempt_id') or record.get('started_at') or record.get('day', '')
 
 
 class DailyLaunch:
@@ -101,13 +106,16 @@ class DailyLaunch:
                 continue
         return None
 
-    def once(self, now=None, retry=False):
+    def once(self, now=None, retry=False, expected_attempt=None):
         now = now or utc_now()
         day = now.astimezone(ZoneInfo('Asia/Seoul')).date().isoformat()
         try:
             # The OS releases this lock on crash; the durable receipt still prevents a rerun.
             with instance_lock(self.folder):
                 record = self.read(day)
+                if retry and expected_attempt is not None:
+                    if not record or attempt_id(record) != expected_attempt or record['state'] not in ('failed', 'interrupted', 'partial'):
+                        return {**(record or {'day':day,'state':'unavailable','targets':{}}), 'reused':True}
                 if record and not retry:
                     if record['state'] == 'running':
                         record.update(state='interrupted', error='previous_launch_interrupted', finished_at=utc_now().isoformat())
@@ -116,7 +124,7 @@ class DailyLaunch:
                 if record:
                     archive = self.folder/'attempts'/(day+'-'+datetime.now(timezone.utc).strftime('%H%M%S%f')+'.json')
                     atomic_write(archive,json.dumps(record,ensure_ascii=False))
-                record = {'day':day,'state':'running','stage':'calendar','started_at':now.isoformat(),
+                record = {'day':day,'attempt_id':uuid4().hex,'manual_retry':bool(retry),'state':'running','stage':'calendar','started_at':now.isoformat(),
                           'finished_at':None,'targets':{},'display_run':self.display_run(),'run':None,'error':None}
                 self.save(record)
                 def progress(update):
@@ -140,6 +148,8 @@ class DailyLaunch:
                                           'market_authentication_http_403',
                                           'market_authentication_http_401',
                                           'market_http_401',
+                                          'market_http_403',
+                                          'market_listing_unavailable',
                                           'market_authentication_unavailable',
                                           'basis_document_changed_review_required',
                                           'basis_document_refresh_unavailable',
@@ -149,8 +159,9 @@ class DailyLaunch:
                                                 if code in run.get('error','')), 'market_pipeline_failed')
                     if run['state'] in ('succeeded','partial') and not display:
                         record.update(state='failed',error='screening_result_missing')
-                except Exception:
-                    record.update(state='failed',error='daily_update_unavailable')
+                except Exception as exc:
+                    error = 'market_worker_failed' if str(exc) == 'market_worker_failed' else 'daily_update_unavailable'
+                    record.update(state='failed',error=error)
                 record['finished_at'] = utc_now().isoformat()
                 self.save(record)
                 return {**record, 'reused':False}
@@ -189,8 +200,16 @@ class DailyLaunch:
         return result
 
     def public(self, record):
-        result={k:record.get(k) for k in ('day','state','stage','targets','started_at','finished_at','error','reused')}
+        result={k:record.get(k) for k in ('day','state','stage','targets','started_at','finished_at','error','reused','manual_retry')}
+        result['attempt_id'] = attempt_id(record)
+        result['display_updated'] = False
         result['display_stale'] = bool(record.get('display_run') and record.get('display_run') != record.get('run'))
+        if result['display_stale'] and record.get('finished_at'):
+            try:
+                display = self.checked_run(record['display_run'])
+                result['display_updated'] = datetime.fromisoformat(display['finished_at']) > datetime.fromisoformat(record['finished_at'])
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
         if record.get('run') and record.get('state') == 'running':
             try:
                 path=Path(record['run']).resolve()

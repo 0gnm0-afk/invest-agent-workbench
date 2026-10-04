@@ -1,5 +1,6 @@
 """Private Toss-only KR/US observations with per-series checkpoints and no orders."""
 import json
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -108,13 +109,24 @@ def _collect(config, account, root, get, now, refresh, prior_series, prior_sourc
                 )
     universe, scope_exclusions = market_scope.partition(list(unique.values()), scope_policy)
     scope_exclusions.extend(r for meta in (listings or {}).values() for r in meta.get('approved_exclusions',[]))
+    # Discovery keeps provider failures in metadata. Preserve their cause before
+    # an empty result can be mistaken for a user exclusion of the entire market.
+    if not universe and listings:
+        failures = [row for row in listings.values() if row.get('state') != 'available']
+        if failures:
+            code = next((row['error_code'] for row in failures
+                         if isinstance(row.get('error_code'), str)
+                         and re.fullmatch(r'market_[a-z0-9_]{1,80}', row['error_code'])),
+                        'market_listing_unavailable')
+            raise ValueError(code)
     if not universe and not listings:
         raise ValueError('Explicit universe must not be empty')
     if any(row['market'] not in ('KR', 'US') for row in universe):
         raise ValueError('Unsupported market')
     scope_errors = [
         {'scope': exchange, 'stage': 'listing', 'reason': row.get('reason', 'listing_unavailable'),
-         'state': row.get('state'), 'batch_failures': row.get('batch_failures', [])}
+         'state': row.get('state'), 'error_code': row.get('error_code'),
+         'batch_failures': row.get('batch_failures', [])}
         for exchange, row in (listings or {}).items() if row.get('state') != 'available'
     ]
     sessions = {}

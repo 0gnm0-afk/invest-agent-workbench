@@ -125,24 +125,100 @@ fetch('/api/home').then(r=>{if(!r.ok)throw Error('dashboard_load_failed');return
 $('.skip').onclick = event => { event.preventDefault(); $('#main').focus(); };
 
 async function pollDaily() {
- const host=$('#daily-update');let published=false;
+ if(pollDaily.controller)return pollDaily.controller;
+ const host=$('#daily-update');
+ let latest=null,timer=null,checking=null,submitting=false,applying=false,stopped=false;
+ let publishedKey='',offeredKey='',rendered='',statusNote='',statusFailed=false;
  const stages={starting:'저장 자료 준비',calendar:'완료 거래일 확인',inputs:'입력 확인',collection:'종가 자료 수집',nh_fallback:'실패 종목 보완',quality:'자료 검사',stock_screen:'스크리닝 계산',sector_screen:'섹터 계산',priority_review:'후보 선별',charts:'차트 저장',sector_states:'섹터 상태 계산',report:'보고서 저장',finished:'화면 준비',waiting:'다른 실행을 기다리는 중'};
- async function apply(){const r=await fetch('/api/home');if(!r.ok)throw Error();const next=await r.json();if(!await WorkbenchWorkspace.closeActive())return;DATA=next;published=true;await route();}
- async function check(){
-  try{
-   const response=await fetch('/api/daily-update');if(!response.ok)throw Error();const u=await response.json();
-   if(!u.enabled){host.hidden=true;return;}
-   host.hidden=false;const busy=!u.view_ready;const bad=['failed','interrupted'].includes(u.state);
-   const label=busy?'오늘의 종가·스크리닝 갱신 중':({succeeded:'오늘의 갱신 완료',partial:'오늘의 갱신 완료 · 일부 자료 결측',failed:'오늘의 갱신에 오류가 있습니다',interrupted:'오늘의 갱신이 중단됐습니다'})[u.state]||'오늘의 저장 결과';
-   host.classList.toggle('error',bad);const p=u.progress;
-   const ipDenied=['market_authentication_http_403_ip_not_allowed','market_http_403_ip_not_allowed'].includes(u.error);
-   host.innerHTML=`<details ${busy?'open':''}><summary><strong>${esc(label)}</strong> · ${u.reused?'오늘 기록 재사용':'하루 첫 실행'}${ipDenied?' · Toss 허용 IP 거절403':u.error==='market_authentication_http_403'?' · Toss 인증403':''}${u.display_stale?' · 이전 저장 자료 표시':''} · 상세</summary><span>${esc(u.day)} · 목표 종가 KR ${esc(u.targets?.KR||'확인 중')} / US ${esc(u.targets?.US||'확인 중')}<br>${busy?esc(stages[u.stage]||'갱신 중')+(p?.requested?' · '+num(p.completed,0)+' / '+num(p.requested,0)+'종목':''):(u.reused?'오늘 실행 기록 재사용 · 수집·스크리닝 재실행 없음':'하루 첫 실행 처리')} ${u.finished_at?'· '+stamp(u.finished_at):''}${u.error?'<br>'+esc(ipDenied?'Toss가 현재 접속 IP를 허용하지 않았습니다(403). Toss API 허용 IP 설정 확인이 필요합니다.':u.error==='market_authentication_http_403'?'Toss 인증 거절(403). API 접근 확인이 필요합니다.':u.error==='previous_launch_interrupted'?'이전 실행이 끝나기 전에 중단됐습니다.':'갱신 결과를 확인하지 못했습니다.'):''}${u.display_stale?'<br>갱신 전 저장 결과를 표시합니다. 아래 실제 자료 기준일을 확인하세요.':''}${bad?'<br>같은 날에는 자동으로 재시도하지 않습니다.':''}</span></details>`;
-   if(u.view_ready&&!published){
-    if(!location.hash||location.hash==='#home')await apply();
-    else{const button=document.createElement('button');button.textContent='갱신 결과 열기';button.onclick=async()=>{await apply();if(published)button.remove();};host.append(button);}
-   }
-   if(!u.view_ready)setTimeout(check,2000);
-  }catch{host.hidden=false;host.textContent='갱신 상태를 확인하지 못했습니다. 현재 화면의 자료 기준일을 확인하세요.';}
+ const errors={market_authentication_http_403_ip_not_allowed:'Toss가 현재 접속 IP를 허용하지 않았습니다(403). Toss Open API 설정에서 허용 IP를 확인해주세요.',market_http_403_ip_not_allowed:'Toss가 현재 접속 IP를 허용하지 않았습니다(403). Toss Open API 설정에서 허용 IP를 확인해주세요.',market_authentication_http_403:'Toss 인증 거절(403). API 접근 확인이 필요합니다.',market_http_403:'Toss가 시장 자료 접근을 거절했습니다(403). Toss Open API 설정에서 허용 IP와 API 접근을 확인해주세요.',market_listing_unavailable:'거래 대상 종목 목록을 받지 못했습니다. 연결 상태를 확인한 뒤 다시 시도해주세요.',previous_launch_interrupted:'이전 실행이 끝나기 전에 중단됐습니다.',market_worker_failed:'시장 자료 수집 작업이 오류로 종료됐습니다. 아래 버튼으로 다시 시도할 수 있습니다.',daily_update_unavailable:'현재 서버에서 갱신을 시작할 수 없습니다. 바탕화면의 투자 대시보드를 다시 열어주세요.',dashboard_preparation_failed:'시장 처리 후 화면 자료를 준비하지 못했습니다. 아래 버튼으로 다시 시도할 수 있습니다.'};
+ const busy=u=>!!u&&(!u.view_ready||u.state==='running');
+ const key=u=>JSON.stringify([u.attempt_id||u.started_at||u.day,u.revision,u.finished_at,u.display_updated]);
+ function schedule(){
+  clearTimeout(timer);
+  if(!stopped&&!submitting)timer=setTimeout(check,busy(latest)?3000:10000);
  }
+ function button(parent,id,label,action,disabled=false){
+  const b=document.createElement('button');b.id=id;b.type='button';b.textContent=label;b.disabled=disabled;b.onclick=action;parent.append(b);
+ }
+ function render(){
+  const u=latest,signature=JSON.stringify([u,submitting,applying,publishedKey,statusNote,statusFailed]);
+  if(signature===rendered)return;rendered=signature;
+  if(u&&!u.enabled&&!statusNote){host.hidden=true;return;}
+  const open=host.querySelector?.('details')?.open;
+  host.hidden=false;
+  const running=busy(u),bad=u&&['failed','interrupted'].includes(u.state);
+  host.classList.toggle('error',!!bad||statusFailed);
+  if(u?.enabled){
+   const label=running?'오늘의 종가·스크리닝 갱신 중':({succeeded:'오늘의 갱신 완료',partial:'오늘의 갱신 완료 · 일부 자료 결측',failed:'오늘의 갱신에 오류가 있습니다',interrupted:'오늘의 갱신이 중단됐습니다'})[u.state]||'오늘의 저장 결과';
+   const reason=u.manual_retry?'수동 재시도':u.reused?'오늘 기록 재사용':'하루 첫 실행';
+   const ipDenied=['market_authentication_http_403_ip_not_allowed','market_http_403_ip_not_allowed'].includes(u.error);
+   const display=u.display_updated?'이후 저장 결과 표시':u.display_stale?'이전 저장 자료 표시':'';
+   const p=u.progress;
+   host.innerHTML='<details '+((open??(running||bad))?'open':'')+'><summary><strong>'+esc(label)+'</strong> · '+reason+(ipDenied?' · Toss 허용 IP 거절403':u.error==='market_authentication_http_403'?' · Toss 인증403':'')+(display?' · '+display:'')+' · 상세</summary><span>'+esc(u.day)+' · 목표 종가 KR '+esc(u.targets?.KR||'확인 중')+' / US '+esc(u.targets?.US||'확인 중')+'<br>'+(running?esc(stages[u.stage]||'갱신 중')+(p?.requested?' · '+num(p.completed,0)+' / '+num(p.requested,0)+'종목':''):(u.manual_retry?'수동 재시도 처리':u.reused?'오늘 실행 기록 재사용 · 수집·스크리닝 재실행 없음':'하루 첫 실행 처리'))+(u.finished_at?' · '+stamp(u.finished_at):'')+(u.error?'<br>'+esc(errors[u.error]||'갱신 중 오류가 발생했습니다. 아래 재시도 버튼과 실제 자료 기준일을 확인하세요.'):'')+(u.display_updated?'<br>갱신 오류 이후에 저장된 결과를 표시합니다. 위 오류는 당시 실행 기록이며 아래 실제 자료 기준일을 확인하세요.':u.display_stale?'<br>갱신 전 저장 결과를 표시합니다. 아래 실제 자료 기준일을 확인하세요.':'')+(bad||u.state==='partial'?'<br>같은 날에는 자동으로 재시도하지 않습니다.':'')+'</span></details>';
+  }else host.innerHTML='<strong>갱신 상태 확인 필요</strong>';
+  const actions=document.createElement('div');actions.className='daily-actions';
+  if(u?.enabled&&(u.retry_available||running||submitting))button(actions,'daily-retry',submitting?'재시도 요청 중…':running?'갱신 진행 중…':'오늘의 갱신 재시도',retry,running||submitting||statusFailed);
+  if(u?.enabled&&u.view_ready&&!running&&key(u)!==publishedKey)button(actions,'daily-result',applying?'결과 여는 중…':'갱신 결과 열기',()=>apply(key(latest)),applying||submitting);
+  if(statusNote){const note=document.createElement('span');note.className='daily-message';note.setAttribute?.('role','status');note.textContent=statusNote;actions.append(note);}
+  if(statusFailed)button(actions,'daily-status-retry','상태 다시 확인',check,submitting);
+  host.append(actions);
+ }
+ async function apply(expected){
+  if(applying||busy(latest)||!latest?.view_ready||key(latest)!==expected)return;
+  applying=true;offeredKey=expected;render();
+  try{
+   const r=await fetch('/api/home');if(!r.ok)throw Error();
+   const next=await r.json();
+   if(busy(latest)||key(latest)!==expected||!await WorkbenchWorkspace.closeActive())return;
+   DATA=next;publishedKey=expected;await route();
+  }catch{statusNote='갱신 결과를 열지 못했습니다. 현재 화면은 유지됩니다. 결과 열기를 다시 눌러주세요.';}
+  finally{applying=false;render();}
+ }
+ async function accept(u){
+  latest=u;render();
+  if(u.enabled&&u.view_ready&&!busy(u)&&key(u)!==publishedKey&&key(u)!==offeredKey&&(!location.hash||location.hash==='#home'))await apply(key(u));
+ }
+ async function check(){
+  if(stopped||submitting)return;
+  if(checking)return checking;
+  clearTimeout(timer);
+  checking=(async()=>{
+   try{
+    const response=await fetch('/api/daily-update');if(!response.ok)throw Error();
+    const u=await response.json();
+    if(statusFailed){if(statusNote==='갱신 상태를 확인하지 못했습니다. 현재 화면과 마지막 확인 상태를 유지합니다.')statusNote='';statusFailed=false;}
+    await accept(u);
+   }catch{
+    statusFailed=true;statusNote='갱신 상태를 확인하지 못했습니다. 현재 화면과 마지막 확인 상태를 유지합니다.';render();
+   }
+  })();
+  try{await checking;}finally{checking=null;schedule();}
+ }
+ async function retry(){
+  if(submitting||busy(latest)||!latest?.retry_available||statusFailed)return;
+  const attempt=latest.attempt_id||latest.started_at;
+  submitting=true;statusNote='';clearTimeout(timer);render();
+  let refresh=false;
+  try{
+   // Let an already-running status read finish before accepting the new attempt.
+   if(checking)await checking;
+   clearTimeout(timer);
+   const health=await fetch('/health');if(!health.ok)throw Error('daily_update_unavailable');
+   const {token}=await health.json();if(!token)throw Error('daily_update_unavailable');
+   const response=await fetch('/api/daily-update',{method:'POST',headers:{'Content-Type':'application/json','X-Workbench-Token':token},body:JSON.stringify({retry:true,attempt_id:attempt})});
+   const u=await response.json();
+   if(response.status===409){statusNote='다른 창에서 갱신 상태가 바뀌었습니다. 최신 상태를 확인합니다.';refresh=true;}
+   else if(!response.ok)throw Error(u.error||'daily_update_unavailable');
+   else{statusFailed=false;await accept(u);}
+  }catch(e){
+   statusNote=errors[e.message==='daily_retry_unavailable'?'daily_update_unavailable':e.message]||'재시도 요청 결과를 확인하지 못했습니다. 상태를 확인한 뒤 다시 시도하세요.';
+   statusFailed=true;refresh=true;
+  }finally{
+   submitting=false;render();
+   if(refresh)await check();else schedule();
+  }
+ }
+ pollDaily.controller={refresh:check,stop(){stopped=true;clearTimeout(timer);}};
  await check();
+ return pollDaily.controller;
 }

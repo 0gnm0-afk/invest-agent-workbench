@@ -4,11 +4,8 @@ import json
 import mimetypes
 import secrets
 import sqlite3
-import threading
-import time
-from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
 from daily_launch import DailyLaunch
+from dashboard_daily import DashboardDaily, RetryConflict
 import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -21,7 +18,7 @@ from chart_workspace import WorkspaceStore, Conflict, moving_averages
 from analysis_service import AnalysisService
 
 
-def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None, daily_status=None):
+def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None, daily_status=None, daily_retry=None):
     initial_view = (data, stocks)
     store = WorkspaceStore(workspace_path or ROOT / "runtime/chart-workspaces.sqlite3")
     histories = HistoryStore((Path(workspace_path).parent if workspace_path else ROOT / 'runtime') / 'chart-history.sqlite3')
@@ -122,7 +119,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                 frame = timeframe(query.get('timeframe', ['1d'])[0])
             except ValueError:
                 return self.send(b'{"error":"invalid_timeframe"}', status=400)
-            if not path.startswith(('/api/chart-state/', '/api/chart-history/', '/api/financials/', '/api/analysis-rpc')):
+            if path != '/api/daily-update' and not path.startswith(('/api/chart-state/', '/api/chart-history/', '/api/financials/', '/api/analysis-rpc')):
                 return self.send(b'{"error":"read_only"}', status=405)
             expected = '127.0.0.1:' + str(self.server.server_port)
             if (self.headers.get('Host') != expected or self.headers.get('Origin') != 'http://' + expected
@@ -131,14 +128,32 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
             if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
                 return self.send(b'{"error":"json_required"}', status=415)
             key = urllib.parse.unquote(path.rsplit('/', 1)[-1])
-            if path != '/api/analysis-rpc' and key not in stocks:
+            if path not in ('/api/analysis-rpc', '/api/daily-update') and key not in stocks:
                 return self.send(b'{"error":"unknown_stock"}', status=404)
             try:
                 length = int(self.headers.get('Content-Length', '0'))
                 if not 0 < length <= 131072:
                     return self.send(b'{"error":"invalid_body_size"}', status=413)
                 self.connection.settimeout(5)
-                body = json.loads(self.rfile.read(length))
+                raw = self.rfile.read(length)
+                try:
+                    body = json.loads(raw)
+                except ValueError:
+                    if path == '/api/daily-update':
+                        return self.send(b'{"error":"invalid_daily_request"}', status=400)
+                    raise
+                if path == '/api/daily-update':
+                    if (query or not isinstance(body, dict) or set(body) != {'retry', 'attempt_id'}
+                            or body['retry'] is not True or not isinstance(body['attempt_id'], str)
+                            or not 0 < len(body['attempt_id']) <= 128):
+                        return self.send(b'{"error":"invalid_daily_request"}', status=400)
+                    if not daily_retry:
+                        return self.send(b'{"error":"daily_retry_unavailable"}', status=503)
+                    try:
+                        result = daily_retry(body['attempt_id'])
+                    except RetryConflict:
+                        return self.send(b'{"error":"daily_attempt_changed"}', status=409)
+                    return self.send(json.dumps(result, ensure_ascii=False, allow_nan=False).encode('utf-8'), status=202)
                 if path == '/api/analysis-rpc':
                     if not isinstance(body, dict) or set(body) != {'op', 'arguments'}:
                         raise ValueError('invalid_analysis_request')
@@ -192,8 +207,6 @@ def main():
     if args.build_only and args.daily_refresh:
         parser.error('--build-only is saved-market only')
     daily = DailyLaunch(ROOT) if args.daily_refresh else None
-    started = datetime.now(timezone.utc)
-    day = started.astimezone(ZoneInfo('Asia/Seoul')).date().isoformat()
     base_run = (daily or DailyLaunch(ROOT)).display_run()
     saved_notice = None
     if not daily and base_run:
@@ -203,45 +216,15 @@ def main():
                                 display_stale=Path(latest['output']).resolve() != Path(base_run).resolve())
         except (OSError, ValueError, KeyError, TypeError):
             saved_notice = dict(saved_only=True, latest_state='unavailable', display_stale=True)
-    live = {'record':{'day':day,'state':'running','stage':'starting','targets':{}},'ready':False}
     output, data, stocks = build(refresh=not args.saved_accounts and not daily, market_run=base_run, daily_update=saved_notice)
     views = {'view':(data, stocks)}
-    def daily_status():
-        if not daily:
-            return {'enabled':False}
-        try:
-            record = live['record'] if live['ready'] else daily.read(day) or live['record']
-        except (OSError, ValueError):
-            record = live['record']
-        return {**daily.public(record), 'enabled':True,'view_ready':live['ready'],
-                'reused':live['record'].get('reused',False)}
-    def prepare():
-        try:
-            record = daily.once(started, retry=args.retry_market)
-            while record.get('following'):
-                live['record'] = record
-                time.sleep(.5)
-                record = daily.once(started)
-            live['record'] = record
-            update = daily.public(record)
-            refresh_accounts = not args.saved_accounts and not record.get('reused')
-            if record.get('display_run') == base_run and not refresh_accounts:
-                # Same immutable market/account view: no second adapter/risk calculation.
-                views['view'] = ({**data, 'daily_update':update}, stocks)
-            else:
-                result_output, result_data, result_stocks = build(
-                    refresh=refresh_accounts, market_run=record.get('display_run'), daily_update=update)
-                views['view'] = (result_data, result_stocks)
-        except Exception:
-            live['record'] = {**live['record'],'state':'failed','error':'dashboard_preparation_failed'}
-        finally:
-            live['ready'] = True
+    controller = DashboardDaily(daily, views, build, base_run, saved_accounts=args.saved_accounts) if daily else None
     if args.build_only:
         print(json.dumps({'output': str(output), 'market_state': data['market']['state'],
                           'account_query_state': data['accounts']['query_state']}))
         return
     token = secrets.token_urlsafe(18)
-    server = ThreadingHTTPServer(('127.0.0.1', args.port), handler_for(data, stocks, ROOT / 'dashboard', token, views=views, daily_status=daily_status))
+    server = ThreadingHTTPServer(('127.0.0.1', args.port), handler_for(data, stocks, ROOT / 'dashboard', token, views=views, daily_status=controller.status if controller else None, daily_retry=controller.retry if controller else None))
     server.daemon_threads = True
     ready = {'url': 'http://127.0.0.1:' + str(server.server_port), 'output': str(output), 'token': token}
     if args.ready_file:
@@ -252,7 +235,7 @@ def main():
     if args.open_browser:
         webbrowser.open(ready['url'])
     if daily:
-        threading.Thread(target=prepare, daemon=True).start()
+        controller.start(retry=args.retry_market)
     server.serve_forever()
 
 
