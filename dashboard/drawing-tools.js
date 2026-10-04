@@ -70,22 +70,37 @@ window.DrawingTools = (() => {
       loss:'손실 '+WorkbenchFormat.money(risk,currency)+' '+currency+' ('+(risk/entry*100).toFixed(2)+'%)',
       profit:'수익 '+WorkbenchFormat.money(reward,currency)+' '+currency+' ('+(reward/entry*100).toFixed(2)+'%)'};
   }
-  // Screen-pixel thresholds keep the same feel at every price/zoom level.
-  function closeSnap(bars,scale,series,logical,y,previous=null) {
+  const priceLabels = {open:'시가',high:'고가',low:'저가',close:'종가'};
+  // Only the candle under the pointer can supply a drawing anchor.
+  function candleSnap(bars,scale,series,logical,y,previous=null) {
+    if(!Number.isFinite(logical)||!Number.isFinite(y))return null;
+    const i=Math.round(logical),b=bars[i],x=scale.logicalToCoordinate(i);
+    if(!b||b.projected||x==null||x<0||x>scale.width())return null;
+    let best=null;
+    for(const field of Object.keys(priceLabels)){
+      const price=b[field];if(!Number.isFinite(price)||price<=0)continue;
+      const cy=series.priceToCoordinate(price);if(cy==null||!Number.isFinite(cy))continue;
+      const c={i,time:b.date,field,price,distance:Math.abs(y-cy)};
+      if(!best||c.distance<best.distance)best=c;
+    }
+    // Release on date/nearest-price changes; pixels are zoom independent.
+    const held=best&&previous?.i===i&&previous.field===best.field;
+    return best&&best.distance<=(held?10:6)?best:null;
+  }
+  // A nearby past close is only a visual reference, never an anchor price.
+  function closeReference(bars,scale,series,logical,y) {
+    if(!Number.isFinite(logical)||!Number.isFinite(y))return null;
     const visible=scale.getVisibleLogicalRange?.();
     const first=Math.max(0,Math.ceil(visible?.from??0));
-    const last=Math.min(bars.length-1,Math.round(logical),Math.floor(visible?.to??bars.length-1));
-    function candidate(i) {
-      const b=bars[i];
-      if(i<first||i>last||!b||b.projected||!Number.isFinite(b.close)||b.close<=0)return null;
-      const x=scale.logicalToCoordinate(i),cy=series.priceToCoordinate(b.close);
-      if(x==null||cy==null||x<0||x>scale.width()||!Number.isFinite(cy))return null;
-      return {i,time:b.date,price:b.close,distance:Math.abs(y-cy)};
-    }
-    const held=previous&&candidate(previous.i);
-    if(held&&held.distance<=10)return held;
+    const last=Math.min(bars.length-1,Math.round(logical)-1,Math.floor(visible?.to??bars.length-1));
     let best=null;
-    for(let i=last;i>=first;i--){const c=candidate(i);if(c&&c.distance<=6&&(!best||c.distance<best.distance))best=c;}
+    for(let i=last;i>=first;i--){
+      const b=bars[i];if(!b||b.projected||!Number.isFinite(b.close)||b.close<=0)continue;
+      const x=scale.logicalToCoordinate(i),cy=series.priceToCoordinate(b.close);
+      if(x==null||cy==null||x<0||x>scale.width()||!Number.isFinite(cy))continue;
+      const distance=Math.abs(y-cy);
+      if(distance<=6&&(!best||distance<best.distance))best={i,time:b.date,price:b.close,distance};
+    }
     return best;
   }
   function attach({element, chart, series, bars, currency, timeframe='1d', drawingLimit=300, snapEnabled=true, getDrawings, getOverlays=()=>[], onChange, onSelect, onHint}) {
@@ -93,7 +108,7 @@ window.DrawingTools = (() => {
     const svg=document.createElementNS(NS,'svg');
     svg.classList.add('drawing-layer');svg.setAttribute('aria-label','가격 차트 작도 영역');
     element.append(svg);
-    let mode='select', selected=null, draft=[], hover=null, drag=null, frame=0, removed=false, signature='', snapped=null;
+    let mode='select', selected=null, draft=[], hover=null, drag=null, frame=0, removed=false, signature='', snapped=null, reference=null;
     function node(tag,attrs,parent=svg) {
       const n=document.createElementNS(NS,tag);for(const [k,v] of Object.entries(attrs))n.setAttribute(k,v);parent.append(n);return n;
     }
@@ -101,8 +116,10 @@ window.DrawingTools = (() => {
     function point(event) {
       const r=svg.getBoundingClientRect(),x=event.clientX-r.left,y=event.clientY-r.top;
       const logical=chart.timeScale().coordinateToLogical(x), price=series.coordinateToPrice(y);
-      if(logical==null||price==null||price<=0||x<0||y<0||x>r.width||y>r.height){snapped=null;return null;}
-      snapped=snapEnabled&&!event.altKey&&(count[mode]||drag?.handle!=null)?closeSnap(bars,chart.timeScale(),series,logical,y,snapped):null;
+      if(logical==null||price==null||price<=0||x<0||y<0||x>r.width||y>r.height){snapped=null;reference=null;return null;}
+      const editing=count[mode]||drag?.handle!=null;
+      snapped=snapEnabled&&!event.altKey&&editing?candleSnap(bars,chart.timeScale(),series,logical,y,snapped):null;
+      reference=editing?closeReference(bars,chart.timeScale(),series,logical,y):null;
       return {time:timeAt(logical,bars,timeframe),price:snapped?snapped.price:price};
     }
     function render() {
@@ -113,7 +130,7 @@ window.DrawingTools = (() => {
         const ps=[...draft];if(hover&&ps.length<count[mode])ps.push(hover);
         if(ps.length===count[mode])all.push({d:{kind:mode,points:ps,color:'#218775',width:2,extend:false},p:ps.map(xy)});
       }
-      const sig=JSON.stringify([w,h,all,mode,selected,draft,hover,snapped]);
+      const sig=JSON.stringify([w,h,all,mode,selected,draft,hover,snapped,reference]);
       if(signature!==sig) {
         signature=sig;svg.replaceChildren();svg.setAttribute('width',w);svg.setAttribute('height',h);
         svg.style.pointerEvents=count[mode]?'auto':'none';
@@ -169,27 +186,34 @@ window.DrawingTools = (() => {
         if(hover&&(count[mode]||drag?.handle!=null)){
           const v=xy(hover);
           if(v&&v.x!=null&&v.y!=null){
+            const crosshair=node('g',{class:'drawing-crosshair','pointer-events':'none'});
+            node('line',{x1:0,y1:v.y,x2:w,y2:v.y,stroke:'#8795a9','stroke-width':1,'stroke-dasharray':'4 4'},crosshair);
+            node('line',{x1:v.x,y1:0,x2:v.x,y2:h,stroke:'#8795a9','stroke-width':1,'stroke-dasharray':'4 4'},crosshair);
+            if(reference){
+              const sx=chart.timeScale().logicalToCoordinate(reference.i),sy=series.priceToCoordinate(reference.price);
+              if(sx!=null&&sy!=null){
+                const g=node('g',{class:'close-reference-guide','data-source-date':reference.time,'data-price':reference.price,'pointer-events':'none','aria-label':'과거 종가 참고 · '+reference.time});
+                node('line',{x1:sx,y1:sy,x2:w,y2:sy,stroke:'#83d8ff','stroke-width':1,'stroke-dasharray':'3 4',opacity:.65},g);
+              }
+            }
             if(snapped){
-              const sx=chart.timeScale().logicalToCoordinate(snapped.i);
-              const g=node('g',{class:'close-snap-guide','data-source-date':snapped.time,'data-price':snapped.price,'pointer-events':'none'});
-              node('line',{x1:sx,y1:v.y,x2:v.x,y2:v.y,stroke:'#83d8ff','stroke-width':1.5,'stroke-dasharray':'3 4'},g);
-              node('circle',{cx:sx,cy:v.y,r:4,fill:'#202630',stroke:'#83d8ff','stroke-width':2},g);
-              const label='종가 '+WorkbenchFormat.money(snapped.price,currency)+' '+currency+' · '+snapped.time;
+              const g=node('g',{class:'candle-snap-guide','data-source-date':snapped.time,'data-price':snapped.price,'data-field':snapped.field,'pointer-events':'none'});
+              const label=priceLabels[snapped.field]+' '+WorkbenchFormat.money(snapped.price,currency)+' '+currency+' · '+snapped.time;
               const width=Math.min(w-8,label.length*7+12),x=Math.max(4,Math.min(v.x-width/2,w-width-4));
               const top=v.y<35?v.y+12:v.y-30;
               node('rect',{x,y:top,width,height:22,rx:3,fill:'#172b3a',stroke:'#83d8ff','stroke-width':.5},g);
               node('text',{x:x+6,y:top+15,fill:'#b9eaff','font-size':11},g).textContent=label;
             }
-            node('circle',{cx:v.x,cy:v.y,r:5,fill:snapped?'#83d8ff':'#202630',stroke:snapped?'#e4f7ff':'#83d8ff','stroke-width':2,'pointer-events':'none'});
+            node('circle',{class:'drawing-hover-point',cx:v.x,cy:v.y,r:5,fill:snapped?'#83d8ff':'#202630',stroke:snapped?'#e4f7ff':'#83d8ff','stroke-width':2,'pointer-events':'none'});
           }
         }
 
       }
       frame=requestAnimationFrame(render);
     }
-    function select(id) {mode='select';draft=[];hover=null;snapped=null;selected=id;onSelect(id);signature='';}
+    function select(id) {mode='select';draft=[];hover=null;snapped=null;reference=null;selected=id;onSelect(id);signature='';}
     function setMode(next) {
-      mode=next;draft=[];hover=null;snapped=null;drag=null;signature='';
+      mode=next;draft=[];hover=null;snapped=null;reference=null;drag=null;signature='';
       onHint(mode==='riskreward'?'손익비: 진입가 → 손절가 → 목표가 순서로 클릭하세요. 가로 폭은 세 점의 날짜 범위입니다.':count[mode]?`${labels[mode]}: ${count[mode]}개 지점을 차례로 클릭하세요. Esc로 취소.`:'선택한 도형의 원형 점은 끝점 수정, 선·영역은 전체 이동입니다. 빈 영역은 차트 이동·확대에 사용합니다.');
     }
     function down(e) {
@@ -237,18 +261,18 @@ window.DrawingTools = (() => {
     function up(e) {
       if(!drag)return;
       if(svg.hasPointerCapture(e.pointerId))svg.releasePointerCapture(e.pointerId);
-      const before=drag.all,moved=drag.moved;drag=null;snapped=null;hover=null;
+      const before=drag.all,moved=drag.moved;drag=null;snapped=null;reference=null;hover=null;
       if(moved)onChange(getDrawings(),{before});
     }
     function cancel() {
       if(drag){const old=drag.all;drag=null;onChange(old,{preview:true});}
-      draft=[];hover=null;snapped=null;signature='';
+      draft=[];hover=null;snapped=null;reference=null;signature='';
     }
     svg.addEventListener('pointerdown',down);svg.addEventListener('pointermove',move);svg.addEventListener('pointerup',up);
     svg.addEventListener('pointercancel',cancel);
-    svg.addEventListener('pointerleave',()=>{if(!drag){hover=null;snapped=null;}});
+    svg.addEventListener('pointerleave',()=>{if(!drag){hover=null;snapped=null;reference=null;}});
     setMode('select');frame=requestAnimationFrame(render);
-    return {setMode,select,cancel,setSnapEnabled(value){snapEnabled=!!value;snapped=null;hover=null;signature='';},destroy(){removed=true;cancelAnimationFrame(frame);svg.remove();}};
+    return {setMode,select,cancel,setSnapEnabled(value){snapEnabled=!!value;snapped=null;reference=null;hover=null;signature='';},destroy(){removed=true;cancelAnimationFrame(frame);svg.remove();}};
   }
-  return {attach,measure,riskReward,channel,labels,count,index,timeAt,coordinate,timeline,closeSnap};
+  return {attach,measure,riskReward,channel,labels,count,index,timeAt,coordinate,timeline,candleSnap,closeReference};
 })();

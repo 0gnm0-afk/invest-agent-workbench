@@ -26,11 +26,11 @@ for(const kind of ['trend','channel','horizontal','box','measure','riskreward'])
 }
 assert.equal(commits,6);
 const id=shapes[0].id,original=JSON.parse(JSON.stringify(shapes[0]));drawing.select(id);
-const handle={closest:()=>({getAttribute:()=>id}),hasAttribute:()=>true,getAttribute:()=> '1'};
+const handle={closest:()=>({getAttribute:()=>id,classList:{contains:()=>false}}),hasAttribute:()=>true,getAttribute:()=> '1'};
 svg.events.pointerdown(event(30,80,handle));svg.events.pointermove(event(40,70));svg.events.pointerup(event(40,70));
 assert.deepEqual(shapes[0].points,[original.points[0],{time:bars[4].date,price:130}]);assert.deepEqual(lastBefore[0],original);
 // Whole-object translation keeps both anchors' distances; cancellation restores it.
-const body={closest:()=>({getAttribute:()=>id}),hasAttribute:()=>false};
+const body={closest:()=>({getAttribute:()=>id,classList:{contains:()=>false}}),hasAttribute:()=>false};
 const before=JSON.parse(JSON.stringify(shapes));
 svg.events.pointerdown(event(20,90,body));svg.events.pointermove(event(30,80));svg.events.pointerup(event(30,80));
 assert.equal(shapes[0].points[0].price,before[0].points[0].price+10);
@@ -40,8 +40,8 @@ svg.events.pointerdown(event(20,90,body));svg.events.pointermove(event(30,80));d
 drawing.setMode('box');svg.events.pointerdown(event(20,100));drawing.cancel();assert.equal(shapes.length,6);
 // Risk/reward handle editing, invalid crossing, translation and cancellation.
 const ri=shapes.findIndex(s=>s.kind==='riskreward'),rid=shapes[ri].id;
-const rrHandle={closest:()=>({getAttribute:()=>rid}),hasAttribute:()=>true,getAttribute:()=> '2'};
-const rrBody={closest:()=>({getAttribute:()=>rid}),hasAttribute:()=>false};
+const rrHandle={closest:()=>({getAttribute:()=>rid,classList:{contains:()=>false}}),hasAttribute:()=>true,getAttribute:()=> '2'};
+const rrBody={closest:()=>({getAttribute:()=>rid,classList:{contains:()=>false}}),hasAttribute:()=>false};
 drawing.select(rid);
 svg.events.pointerdown(event(50,60,rrHandle));svg.events.pointermove(event(60,40));svg.events.pointerup(event(60,40));
 assert.equal(DrawingTools.riskReward(shapes[ri].points,'USD').ratio,3);
@@ -75,13 +75,13 @@ for(const kind of Object.keys(DrawingTools.count)){
  assert.equal(futureShapes.at(-1).kind,kind);
  if(kind!=='horizontal')assert.ok(futureShapes.at(-1).points.some(p=>p.time>bars.at(-1).date));
 }
-const fid=futureShapes[0].id, fbody={closest:()=>({getAttribute:()=>fid}),hasAttribute:()=>false};
+const fid=futureShapes[0].id, fbody={closest:()=>({getAttribute:()=>fid,classList:{contains:()=>false}}),hasAttribute:()=>false};
 futureTool.select(fid);const old=structuredClone(futureShapes[0]);
 futureEl.child.events.pointerdown(event(20,90,fbody));futureEl.child.events.pointermove(event(50,80));futureEl.child.events.pointerup(event(50,80));
 assert.ok(futureShapes[0].points.every(p=>p.time>bars.at(-1).date));
 assert.equal(DrawingTools.index(futureShapes[0].points[1].time,axis)-DrawingTools.index(old.points[1].time,axis),15);
 assert.match(DrawingTools.measure(futureShapes[0].points,axis,'USD'),/미래 달력/);
-const fh={closest:()=>({getAttribute:()=>fid}),hasAttribute:()=>true,getAttribute:()=> '1'};
+const fh={closest:()=>({getAttribute:()=>fid,classList:{contains:()=>false}}),hasAttribute:()=>true,getAttribute:()=> '1'};
 futureEl.child.events.pointerdown(event(70,70,fh));futureEl.child.events.pointermove(event(80,60));futureEl.child.events.pointerup(event(80,60));
 assert.equal(futureShapes[0].points[1].time,axis[40].date);
 futureTool.destroy();console.log('Future tool creation, whole-object/handle movement and measurement: PASS');

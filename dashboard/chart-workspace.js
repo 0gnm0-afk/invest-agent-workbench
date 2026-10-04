@@ -1,7 +1,7 @@
 window.WorkbenchWorkspace = (() => {
   const clone=x=>JSON.parse(JSON.stringify(x));
   const safe=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  let active=null,closeSnapEnabled=true;
+  let active=null,candleSnapEnabled=true;
   async function closeActive() {
     if(!active)return true;
     const current=active;
@@ -30,7 +30,7 @@ window.WorkbenchWorkspace = (() => {
     host.innerHTML=`<div class="chart-tools" role="toolbar" aria-label="차트 작도 도구">
       <button data-tool="select" class="selected" title="선택·이동" aria-label="선택·이동"><span aria-hidden="true">↖</span><span>선택·이동</span></button><button data-tool="trend" title="추세선" aria-label="추세선"><span aria-hidden="true">╱</span><span>추세선</span></button><button data-tool="channel" title="평행 채널" aria-label="평행 채널"><span aria-hidden="true">∥</span><span>평행 채널</span></button><button data-tool="horizontal" title="수평선" aria-label="수평선"><span aria-hidden="true">―</span><span>수평선</span></button><button data-tool="box" title="박스" aria-label="박스"><span aria-hidden="true">▱</span><span>박스</span></button><button data-tool="measure" title="구간 측정" aria-label="구간 측정"><span aria-hidden="true">↔</span><span>구간 측정</span></button>
       <button data-tool="riskreward" title="손익비: 진입·손절·목표 3점" aria-label="손익비"><span aria-hidden="true">▥</span><span>손익비</span></button>
-      <span class="tool-divider"></span><button data-action="snap" aria-pressed="${closeSnapEnabled}" class="${closeSnapEnabled?'selected':''}" title="화면 왼쪽 종가에 근접하면 붙습니다. Alt를 누른 채 움직이면 자유 선택.">종가 스냅</button><button data-action="undo" title="Ctrl+Z">실행 취소</button><button data-action="redo" title="Ctrl+Shift+Z">다시 실행</button><button data-action="delete">선택 삭제</button><button data-action="save" class="primary">저장</button>
+      <span class="tool-divider"></span><button data-action="snap" aria-pressed="${candleSnapEnabled}" class="${candleSnapEnabled?'selected':''}" title="마우스 날짜 봉의 시가·고가·저가·종가 중 가까운 가격에 붙습니다. Alt로 자유 선택.">봉 스냅</button><button data-action="undo" title="Ctrl+Z">실행 취소</button><button data-action="redo" title="Ctrl+Shift+Z">다시 실행</button><button data-action="delete">선택 삭제</button><button data-action="save" class="primary">저장</button>
       <span class="save-state" role="status" aria-live="polite"></span></div>
       <p class="drawing-hint"></p><div class="chart-controls"><details class="averages-control"><summary>이동평균선 · ${frameName} SMA</summary><div class="average-list"></div><form class="average-add"><label>추가 기간 <input name="period" type="number" min="1" max="500" value="30" required aria-label="추가 SMA 기간"></label><button>추가</button><small>1~500봉 · 최대 6개 · 종가 기준</small></form><p class="average-status" role="status"></p></details><details class="drawing-control"><summary>작도 목록·정밀 편집 <span class="drawing-count"></span></summary><div class="drawing-list"></div><div class="drawing-editor"></div></details></div>`;
     const q=s=>host.querySelector(s),qa=s=>host.querySelectorAll(s);
@@ -125,7 +125,7 @@ window.WorkbenchWorkspace = (() => {
     }
     function remove() {if(!selected)return;const id=selected;selected=null;drawings.select(null);commit({...state,drawings:state.drawings.filter(x=>x.id!==id)});}
     qa('[data-tool]').forEach(b=>b.onclick=()=>{qa('[data-tool]').forEach(x=>x.classList.toggle('selected',x===b));drawings.setMode(b.dataset.tool);});
-    q('[data-action="snap"]').onclick=()=>{closeSnapEnabled=!closeSnapEnabled;const b=q('[data-action="snap"]');b.setAttribute('aria-pressed',String(closeSnapEnabled));b.classList.toggle('selected',closeSnapEnabled);drawings.setSnapEnabled(closeSnapEnabled);};
+    q('[data-action="snap"]').onclick=()=>{candleSnapEnabled=!candleSnapEnabled;const b=q('[data-action="snap"]');b.setAttribute('aria-pressed',String(candleSnapEnabled));b.classList.toggle('selected',candleSnapEnabled);drawings.setSnapEnabled(candleSnapEnabled);};
     q('[data-action="save"]').onclick=save;q('[data-action="undo"]').onclick=()=>undo();q('[data-action="redo"]').onclick=()=>undo(true);q('[data-action="delete"]').onclick=remove;
     function keyboard(e) {
       if(e.target.closest('input,select,textarea'))return;
@@ -151,8 +151,8 @@ window.WorkbenchWorkspace = (() => {
       hoverTime=p.time?(typeof p.time==='string'?p.time:`${p.time.year}-${String(p.time.month).padStart(2,'0')}-${String(p.time.day).padStart(2,'0')}`):null;
       renderSmaLegend();renderPriceLegend(hoverTime);
     });
-    drawings=DrawingTools.attach({element:plot,chart,series:price,bars:drawingBars,currency,timeframe:frame,snapEnabled:closeSnapEnabled,drawingLimit:packet.drawing_limit||300,getDrawings:()=>previewDrawings||state.drawings,getOverlays:()=>proposals,
-      onHint:text=>{q('.drawing-hint').textContent=text+' · 종가 스냅: 왼쪽 종가에 점선·가격 붙임, Alt로 자유 선택 · 마지막 봉 오른쪽도 작도 가능 · 미래 5년 달력 공간(일봉: 평일, 휴장일 미반영)';},
+    drawings=DrawingTools.attach({element:plot,chart,series:price,bars:drawingBars,currency,timeframe:frame,snapEnabled:candleSnapEnabled,drawingLimit:packet.drawing_limit||300,getDrawings:()=>previewDrawings||state.drawings,getOverlays:()=>proposals,
+      onHint:text=>{q('.drawing-hint').textContent=text+' · 봉 스냅: 마우스 날짜의 시가·고가·저가·종가에 근접 붙임 · 과거 종가는 점선 참고만 · Alt로 자유 선택 · 마지막 봉 오른쪽도 작도 가능 · 미래 5년 달력 공간(일봉: 평일, 휴장일 미반영)';},
       onSelect:id=>{if(id){host.hidden=false;document.querySelector('#stock-tools-toggle')?.setAttribute('aria-expanded','true');}selected=id;window.dispatchEvent(new Event('workbench-context'));qa('[data-tool]').forEach(b=>b.classList.toggle('selected',b.dataset.tool==='select'));refresh();},
       onChange:(next,options={})=>{
         if(options.preview){previewDrawings=next;return;}
