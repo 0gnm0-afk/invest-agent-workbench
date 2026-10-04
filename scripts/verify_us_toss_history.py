@@ -10,6 +10,7 @@ from pathlib import Path
 import exchange_calendars as xcals
 from invest_agent.trading.market_provider import KR_CLOSURES
 from us_toss_history import read_checked, packed, parse_page, write
+from toss_listing import listing_requests, validate_listing_rows
 
 
 def verify(root, require_finished=False):
@@ -22,6 +23,14 @@ def verify(root, require_finished=False):
     calendar_name='XKRX' if market=='KR' else 'XNYS'
     universe=read_checked(root/'universe.json')
     targets={r['symbol']:r for r in universe['rows']}
+    assert len(targets)==len(universe['rows']), 'duplicate_universe_symbol'
+    schema=config.get('schema',1)
+    assert schema in (1,2), 'unsupported_collection_schema'
+    include_adr=market=='US' and schema==2
+    expected_types=['STOCK','DEPOSITARY_RECEIPT'] if include_adr else ['STOCK']
+    assert universe.get('security_types',['STOCK'])==expected_types, 'listing_scope_mismatch'
+    if include_adr:
+        assert config.get('security_types')==expected_types and universe.get('exchanges'), 'collection_scope_mismatch'
     packets={}
     first_dates=[]
     for f in (root/'series').glob('*.json'):
@@ -45,20 +54,26 @@ def verify(root, require_finished=False):
         expected_exchanges=['KOSPI','KOSDAQ'] if market=='KR' else ['NASDAQ','NYSE']
         assert sorted(universe['exchanges'])==sorted(expected_exchanges), 'listing_exchanges_mismatch'
         for exchange,meta in universe['exchanges'].items():
-            key=meta['response'];p=root/'responses'/(key+'.json.gz')
-            raw=p.read_bytes();packet=json.loads(gzip.decompress(raw))
-            request=['/api/v1/stocks/all',dict(market=exchange,status='ACTIVE',securityType='STOCK',commonShare='true')]
-            assert packet['request']==request and hashlib.sha256(packed(request)).hexdigest()==key, 'listing_request_mismatch'
-            assert hashlib.sha256(packed(packet['payload'])).hexdigest()==packet['sha256'], 'listing_payload_mismatch'
-            listings=packet['payload']['result']
-            assert len(listings)==meta['count'], 'listing_count_mismatch'
-            for item in listings:
-                symbol=item['symbol'];row={**item,'market':market,'listing_exchange':exchange}
-                if market=='KR':
-                    row.update(symbol=symbol+('.KS' if exchange=='KOSPI' else '.KQ'),provider_symbol=symbol)
-                assert row['symbol'] not in expected, 'duplicate_listing'
-                expected[row['symbol']]=row
-            manifest[str(p.relative_to(root))]=hashlib.sha256(raw).hexdigest()
+            metadata = meta['requests'] if include_adr else {'STOCK':meta}
+            assert set(metadata)==set(expected_types), 'listing_request_types_mismatch'
+            if include_adr:
+                assert meta['count']==sum(m['count'] for m in metadata.values()), 'listing_exchange_count_mismatch'
+            for params in listing_requests(exchange, include_adr=include_adr):
+                request_meta=metadata[params['securityType']]
+                key=request_meta['response'];p=root/'responses'/(key+'.json.gz')
+                raw=p.read_bytes();packet=json.loads(gzip.decompress(raw))
+                request=['/api/v1/stocks/all',params]
+                assert packet['request']==request and hashlib.sha256(packed(request)).hexdigest()==key, 'listing_request_mismatch'
+                assert hashlib.sha256(packed(packet['payload'])).hexdigest()==packet['sha256'], 'listing_payload_mismatch'
+                listings=validate_listing_rows(packet['payload'].get('result'),params)
+                assert len(listings)==request_meta['count'], 'listing_count_mismatch'
+                for item in listings:
+                    symbol=item['symbol'];row={**item,'market':market,'listing_exchange':exchange}
+                    if market=='KR':
+                        row.update(symbol=symbol+('.KS' if exchange=='KOSPI' else '.KQ'),provider_symbol=symbol)
+                    assert row['symbol'] not in expected, 'duplicate_listing'
+                    expected[row['symbol']]=row
+                manifest[str(p.relative_to(root))]=hashlib.sha256(raw).hexdigest()
         assert targets==expected and len(universe['rows'])==len(expected), 'listing_union_mismatch'
     for symbol,saved_path in sorted(packets.items()):
         d=read_checked(saved_path)

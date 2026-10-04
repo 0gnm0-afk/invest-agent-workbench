@@ -17,6 +17,16 @@ START = '2016-01-01'
 FRAMES = {'1d', '1w', '1mo'}
 
 
+def _allows_selected_history(packet):
+    if packet is None:
+        return True
+    info = packet.get('history', {})
+    # Only an audited absence may use the selected cache/provider path.
+    # An invalid or empty pinned series must keep its original result.
+    return info.get('state') == 'unavailable' and info.get('reason') in {
+        'saved_us_symbol_unavailable', 'saved_kr_symbol_unavailable'}
+
+
 def timeframe(value):
     if value not in FRAMES:
         raise ValueError('invalid_timeframe')
@@ -87,8 +97,8 @@ class HistoryStore:
                 'state':'excluded', 'reason':exclusion['reason'], 'approved_on':exclusion['approved_on']}}
         try:
             value = self.saved.packet(stock)
-            if value is None:
-                value = self.cached(stock)
+            if _allows_selected_history(value):
+                value = self.cached(stock) or value
         except (ValueError, sqlite3.Error, OSError):
             value = {'history': {'state':'failed','reason':'history_cache_unavailable'}}
         value = value or {'history': {'state':'not_requested','reason':'history_not_requested'}}
@@ -105,7 +115,7 @@ class HistoryStore:
         exclusion = match(stock)
         if exclusion:
             return {**self.view(stock), 'history': {'state':'excluded','reason':exclusion['reason'], 'approved_on':exclusion['approved_on']}}
-        if self.saved.packet(stock) is not None:
+        if not _allows_selected_history(self.saved.packet(stock)):
             return self.view(stock)
         # Cross-process file lock prevents two dashboard launchers fetching the same cache.
         from invest_agent.trading.store import instance_lock, BusyError

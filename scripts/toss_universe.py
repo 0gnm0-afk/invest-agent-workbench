@@ -1,20 +1,20 @@
 """Private Toss stock-universe discovery with explicit derived market caps."""
 import json
 import math
-import re
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from invest_agent.trading.contracts import digest
 from invest_agent.trading.runner import atomic_write
-from market_quality import quote_time_state
+from market_quality import quote_time_state, adr_cap_unavailable
+from toss_listing import listing_requests, validate_listing_rows
 from market_scope import match as excluded_record
 
 EXCHANGES = {'KR': ('KOSPI',), 'US': ('NASDAQ', 'NYSE')}
 BATCH_SIZE = 200
 CACHE_MAX_AGE_SECONDS = 36 * 60 * 60
-CACHE_SCHEMA = 2
+CACHE_SCHEMA = 3
 
 
 def _batches(values):
@@ -62,22 +62,20 @@ def _cache_write(path, rows, meta, observed_at):
 
 
 def _live_exchange(get, exchange, observed_at, exclusions=None):
-    base = _result(get, '/api/v1/stocks/all', {
-        'market': exchange, 'status': 'ACTIVE', 'securityType': 'STOCK', 'commonShare': 'true',
-    })
-    if not base:
-        raise ValueError('Empty Toss exchange listing')
+    base = []
+    listing_counts = {}
+    for params in listing_requests(exchange):
+        rows = validate_listing_rows(_result(get, '/api/v1/stocks/all', params), params)
+        listing_counts[params['securityType']] = len(rows)
+        base.extend(rows)
+    # A conflicting/repeated identity must never be silently overwritten or counted twice.
+    if len({row['symbol'] for row in base}) != len(base):
+        raise ValueError('Duplicate Toss listing symbol')
     symbols = []
     excluded = []
     by_symbol = {}
     for item in base:
-        symbol = item.get('symbol') if isinstance(item, dict) else None
-        if not isinstance(symbol, str) or not re.fullmatch(r'[A-Za-z0-9.\-]+', symbol):
-            raise ValueError('Invalid Toss listing symbol')
-        if item.get('securityType') not in (None, 'STOCK') or item.get('isCommonShare') is False:
-            raise ValueError('Toss listing filter contract changed')
-        if symbol in by_symbol:
-            raise ValueError('Duplicate Toss listing symbol')
+        symbol = item['symbol']
         market = 'KR' if exchange == 'KOSPI' else 'US'
         record = excluded_record({'market':market,'symbol':symbol+'.KS' if market=='KR' else symbol,
                                   'isin_code':item.get('isinCode'),'exchange':exchange,
@@ -118,15 +116,16 @@ def _live_exchange(get, exchange, observed_at, exclusions=None):
         shares = _number(detail.get('sharesOutstanding'))
         last_price = _number(price.get('lastPrice'))
         currency = detail.get('currency') or price.get('currency') or expected_currency
+        cap_guard = adr_cap_unavailable(listed)
         cap = None
-        if shares is not None and last_price is not None and currency == expected_currency:
+        if not cap_guard and shares is not None and last_price is not None and currency == expected_currency:
             raw_cap = shares * last_price
             cap = float(raw_cap)
             if not math.isfinite(cap):
                 cap = None
         time_state = quote_time_state(price.get('timestamp'))
         missing_price_time += time_state == 'not_provided'
-        if not detail or not price or cap is None or time_state == 'invalid':
+        if not detail or not price or (cap is None and not cap_guard) or time_state == 'invalid':
             missing_enrichment += 1
         market = 'KR' if exchange == 'KOSPI' else 'US'
         engine_symbol = provider_symbol + '.KS' if market == 'KR' else provider_symbol
@@ -142,6 +141,8 @@ def _live_exchange(get, exchange, observed_at, exclusions=None):
             'raw_exchange_code': detail.get('market') or exchange,
             'listing_exchange_family': exchange,
             'instrument_type': 'EQUITY',
+            'security_type': listed.get('securityType') or 'STOCK',
+            'is_common_share': listed.get('isCommonShare'),
             'currency': currency,
             'tradable': detail.get('status', 'ACTIVE') == 'ACTIVE' and korean.get('krxTradingSuspended') is not True,
             'shares_outstanding': int(shares) if shares is not None and shares == shares.to_integral_value() else None,
@@ -159,6 +160,7 @@ def _live_exchange(get, exchange, observed_at, exclusions=None):
             'market_cap_as_of': price.get('timestamp'),
             'market_cap_basis': 'toss_last_price_times_shares_outstanding_derived',
             'listing_observed_at': observed_at,
+            **cap_guard,
         })
     rows.sort(key=lambda row: (row['market_cap'] is None, -(row['market_cap'] or 0), row['symbol']))
     state = 'available' if not failures and not missing_enrichment else 'partial' if rows else 'unavailable'
@@ -166,11 +168,13 @@ def _live_exchange(get, exchange, observed_at, exclusions=None):
         'state': state,
         'reason': None if state == 'available' else 'listing_enrichment_partial',
         'listed': len(base),
+        'listing_types': listing_counts,
         'eligible_by_listing_heuristic': len(symbols),
         'approved_exclusions': excluded,
         'enriched': len(symbols) - missing_enrichment,
         'missing_enrichment': missing_enrichment,
         'missing_price_time': missing_price_time,
+        'unverified_adr_caps': sum(r['market_cap_quality'] == 'unavailable_adr_share_basis' for r in rows),
         'batch_failures': failures,
         'ordering': 'derived_market_cap_descending',
         'market_cap_basis': 'Toss /prices lastPrice × /stocks sharesOutstanding',
@@ -217,5 +221,11 @@ def discover(get, markets, limit_per_exchange=None, *, cache_root=None, now=None
             universe.extend(selected)
     unique = {}
     for row in universe:
-        unique.setdefault((row['market'], row['symbol']), row)
+        key = (row['market'], row['symbol'])
+        previous = unique.get(key)
+        if previous and any(previous.get(field) != row.get(field)
+                            for field in ('isin_code', 'security_type', 'currency')):
+            raise ValueError('cross_exchange_listing_identity_conflict')
+        # Preserve legacy deduplication only for the same security identity.
+        unique.setdefault(key, row)
     return list(unique.values()), metadata

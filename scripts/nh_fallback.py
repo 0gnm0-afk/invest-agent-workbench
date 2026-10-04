@@ -9,6 +9,7 @@ from invest_agent.trading.market import check_bars
 from invest_agent.trading.universe_gate import evaluate as gate
 
 from market_collect import audit, write_json
+from market_quality import adr_cap_unavailable, is_depositary_receipt
 from nh_market_auth import NHMarketError
 from nh_market_client import MarketClient, PERIOD, KR_PERIOD, CURRENT, us_period_inputs, kr_period_inputs
 
@@ -33,7 +34,8 @@ def fallback_targets(snapshot):
         sessions = snapshot.get('sessions', {}).get(row['market'], [])
         if bars and any(bars[0]['date'] <= d <= bars[-1]['date'] and d not in dates for d in sessions):
             code = 'historical_price_gaps'
-        elif cap_missing(row):
+        elif cap_missing(row) and not (is_depositary_receipt(row)
+                and row.get('market_cap_quality') == 'unavailable_adr_share_basis'):
             code = 'unavailable_market_cap'
         if code:
             targets.setdefault((row['market'],row['symbol']),{'market':row['market'],'symbol':row['symbol'],'error_code':code})
@@ -176,6 +178,9 @@ def cap_missing(row):
 
 def completed_cap(listing, bar, payload, exchange):
     """Dated regular-session NH quote anchors raw price × observed shares."""
+    unavailable = adr_cap_unavailable(listing)
+    if unavailable:
+        return unavailable
     q = payload.get('Output_0') or {}
     shares = listing.get('shares_outstanding')
     if type(shares) is not int or shares <= 0:

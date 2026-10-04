@@ -8,6 +8,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import Mock, patch
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from chart_history import HistoryStore, aggregate, validate_bars
@@ -82,6 +83,62 @@ class History(unittest.TestCase):
         self.assertEqual(s.view(self.stock)['history']['state'],'failed')
         with self.assertRaises(ValueError):validate_bars([bar('2026-10-01')],'2026-09-24')
         with self.assertRaises(ValueError):validate_bars([dict(bar('2026-09-24'),low=100)],'2026-09-24')
+    def test_pinned_failure_or_empty_never_reads_selected_cache_or_fetches(self):
+        packets = [
+            {'history': {'state': 'failed', 'reason': 'saved_us_history_verification_failed'}},
+            {'history': {'state': 'failed', 'reason': 'saved_kr_history_verification_failed'}},
+            {'series': dict(self.stock, bars=[]), 'history': {
+                'state': 'unavailable', 'reason': 'saved_history_empty_before_cutoff'}},
+            {'history': {'state': 'failed', 'reason': 'saved_us_symbol_unavailable'}},
+            {'history': {'state': 'unavailable', 'reason': 'saved_history_unknown'}},
+        ]
+        for packet in packets:
+            with self.subTest(reason=packet['history']['reason'], state=packet['history']['state']):
+                factory = Mock(side_effect=AssertionError('unexpected provider access'))
+                store = HistoryStore(self.path, factory)
+                store.saved.packet = Mock(return_value=packet)
+                store.cached = Mock(side_effect=AssertionError('unexpected selected cache access'))
+                result = store.ensure(self.stock, retry=True)
+                self.assertEqual(result['history']['state'], packet['history']['state'])
+                self.assertEqual(result['history']['reason'], packet['history']['reason'])
+                self.assertEqual(result['bars'], packet.get('series', self.stock)['bars'])
+                self.assertEqual(store.view(self.stock)['bars'], result['bars'])
+                factory.assert_not_called()
+                store.cached.assert_not_called()
+
+    def test_absent_symbol_still_requires_saved_cutoff_and_explicit_retry(self):
+        absent = {'history': {'state': 'unavailable', 'reason': 'saved_us_symbol_unavailable'}}
+        for rows in ([], [bar('2015-12-31')]):
+            with self.subTest(rows=rows):
+                factory = Mock(side_effect=AssertionError('unexpected provider access'))
+                store = HistoryStore(self.path, factory)
+                store.saved.packet = Mock(return_value=absent)
+                stock = dict(self.stock, bars=rows)
+                result = store.ensure(stock)
+                self.assertEqual(result['history']['reason'], 'saved_cutoff_missing')
+                factory.assert_not_called()
+        store = HistoryStore(self.path, lambda: self.fail)
+        store.saved.packet = Mock(return_value=absent)
+        self.assertEqual(store.ensure(self.stock)['history']['state'], 'failed')
+        store.client_factory = lambda: self.client
+        self.assertEqual(store.ensure(self.stock)['history']['state'], 'failed')
+        self.assertEqual(self.calls, [])
+        self.assertEqual(store.ensure(self.stock, retry=True)['history']['state'], 'complete')
+        self.assertEqual(len(self.calls), 1)
+
+    def test_absent_symbol_exclusion_blocks_cache_and_provider(self):
+        factory = Mock(side_effect=AssertionError('unexpected provider access'))
+        store = HistoryStore(self.path, factory)
+        store.saved.packet = Mock(return_value={'history': {
+            'state': 'unavailable', 'reason': 'saved_us_symbol_unavailable'}})
+        store.cached = Mock(side_effect=AssertionError('unexpected selected cache access'))
+        with patch('market_scope.match', return_value={'reason': 'user_approved', 'approved_on': '2026-10-04'}):
+            self.assertEqual(store.ensure(self.stock, retry=True)['history']['state'], 'excluded')
+            self.assertEqual(store.view(self.stock)['bars'], [])
+        store.saved.packet.assert_not_called()
+        store.cached.assert_not_called()
+        factory.assert_not_called()
+
     def test_sma_uses_weekly_closes(self):
         bars=aggregate([bar('2026-09-04',10),bar('2026-09-07',20),bar('2026-09-08',30)],'1w')
         values=moving_averages({'bars':bars},[2])['2'];self.assertNotIn('value',values[0]);self.assertEqual(values[1]['value'],21)

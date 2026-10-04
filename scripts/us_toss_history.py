@@ -1,4 +1,4 @@
-"""Resumable common-stock history collection, isolated from dashboard runs."""
+"""Resumable stock/US ADR history collection, isolated from dashboard runs."""
 import argparse
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -13,6 +13,7 @@ import threading
 from zoneinfo import ZoneInfo
 
 from toss_market_client import TossMarketClient, MarketReadError
+from toss_listing import listing_requests, validate_listing_rows
 from invest_agent.trading.market_provider import completed_sessions
 from invest_agent.trading.store import instance_lock
 
@@ -82,6 +83,11 @@ class Collector:
         self.exchanges = ("KOSPI", "KOSDAQ") if market == "KR" else ("NASDAQ", "NYSE")
         self.offset = "+09:00" if market == "KR" else "-04:00"
         self.root = Path(root)
+        config_path = self.root/'collection.json'
+        # A saved collection is immutable in scope: schema 1 remains STOCK-only.
+        schema = read_checked(config_path).get('schema', 1) if config_path.exists() else 2
+        if schema not in (1, 2): raise ValueError('unsupported_collection_schema')
+        self.include_adr = market == 'US' and schema == 2
         self.log_lock = threading.Lock()
         self.client = client
         self.client_lock = threading.Lock()
@@ -115,36 +121,37 @@ class Collector:
 
     def universe(self):
         saved = self.root/'universe.json'
+        security_types = ['STOCK', 'DEPOSITARY_RECEIPT'] if self.include_adr else ['STOCK']
         if saved.exists():
-            return read_checked(saved)
+            value = read_checked(saved)
+            if value.get('security_types', ['STOCK']) != security_types:
+                raise ValueError('saved_listing_scope_mismatch')
+            return value
         by_symbol = {}
         provider_symbols = set()
         exchanges = {}
         for exchange in self.exchanges:
-            params = dict(market=exchange,status='ACTIVE',securityType='STOCK',commonShare='true')
-            payload,key = self.get('/api/v1/stocks/all',params)
-            rows = payload.get('result')
-            if not isinstance(rows,list) or not rows:
-                raise ValueError('listing_unavailable')
-            exchanges[exchange] = dict(count=len(rows),response=key)
-            seen = set()
-            for r in rows:
-                symbol = r.get('symbol')
-                if not isinstance(symbol,str) or not re.fullmatch(r'[A-Za-z0-9.\-]+',symbol) or symbol in seen:
-                    raise ValueError('invalid_listing_symbol')
-                if r.get('securityType') not in (None,'STOCK') or r.get('isCommonShare') is False:
-                    raise ValueError('listing_filter_mismatch')
-                seen.add(symbol)
-                if symbol in provider_symbols:
-                    raise ValueError('cross_exchange_symbol_collision')
-                provider_symbols.add(symbol)
-                if self.market == 'KR':
-                    if not re.fullmatch(r'[0-9A-Z]{6}', symbol): raise ValueError('invalid_kr_symbol')
-                    normalized = symbol + ('.KS' if exchange == 'KOSPI' else '.KQ')
-                    by_symbol[normalized] = {**r, 'symbol': normalized, 'provider_symbol': symbol, 'market': self.market, 'listing_exchange': exchange}
-                else:
-                    by_symbol[symbol] = {**r,'market':self.market,'listing_exchange':exchange}
+            requests = {}
+            for params in listing_requests(exchange, include_adr=self.include_adr):
+                payload,key = self.get('/api/v1/stocks/all',params)
+                rows = validate_listing_rows(payload.get('result'), params)
+                requests[params['securityType']] = dict(count=len(rows),response=key)
+                for r in rows:
+                    symbol = r['symbol']
+                    if symbol in provider_symbols:
+                        raise ValueError('cross_exchange_symbol_collision')
+                    provider_symbols.add(symbol)
+                    if self.market == 'KR':
+                        if not re.fullmatch(r'[0-9A-Z]{6}', symbol): raise ValueError('invalid_kr_symbol')
+                        normalized = symbol + ('.KS' if exchange == 'KOSPI' else '.KQ')
+                        by_symbol[normalized] = {**r, 'symbol': normalized, 'provider_symbol': symbol, 'market': self.market, 'listing_exchange': exchange}
+                    else:
+                        by_symbol[symbol] = {**r,'market':self.market,'listing_exchange':exchange}
+            exchanges[exchange] = (dict(count=sum(m['count'] for m in requests.values()), requests=requests)
+                                   if self.include_adr else requests['STOCK'])
         value = dict(rows=[by_symbol[s] for s in sorted(by_symbol)],exchanges=exchanges,observed_at=datetime.now(timezone.utc).isoformat())
+        if self.include_adr:
+            value['security_types'] = security_types
         save_checked(saved,value)
         return value
 
@@ -207,7 +214,12 @@ def run(root,workers=6,retry=False,market="US"):
             now=datetime.now(timezone.utc)
             cap=(now.astimezone(ZoneInfo('Asia/Seoul')).date()-timedelta(days=1)).isoformat()
             end=max(s for s in completed_sessions(market,now) if s<=cap)
-            config=dict(schema=1,started_at=now.isoformat(),end=end,start='provider_earliest_available',markets=[market],exchanges=list(collector.exchanges),scope='ACTIVE STOCK commonShare=true; current provider listing, not historical delisted universe',adjusted=True)
+            scope = 'ACTIVE STOCK commonShare=true'
+            if collector.include_adr:
+                scope += ' plus ACTIVE DEPOSITARY_RECEIPT (no commonShare filter)'
+            config=dict(schema=2 if collector.include_adr else 1,started_at=now.isoformat(),end=end,start='provider_earliest_available',markets=[market],exchanges=list(collector.exchanges),scope=scope+'; current provider listing, not historical delisted universe',adjusted=True)
+            if collector.include_adr:
+                config['security_types'] = ['STOCK', 'DEPOSITARY_RECEIPT']
             save_checked(config_path,config)
         universe=collector.universe();items=universe['rows']
         counts=Counter();total_bars=0

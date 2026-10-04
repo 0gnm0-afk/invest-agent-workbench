@@ -19,8 +19,29 @@ def quote_time_state(stamp):
         return 'invalid'
 
 
+def is_depositary_receipt(row):
+    """Provider security type, kept separate from the generic EQUITY instrument."""
+    return any(row.get(field) == 'DEPOSITARY_RECEIPT'
+               for field in ('security_type', 'securityType'))
+
+
+def adr_cap_unavailable(row):
+    """An ADR quote cannot value unverified underlying-share or receipt units."""
+    if not is_depositary_receipt(row):
+        return {}
+    return {'market_cap': None, 'undated_quote_market_cap': None,
+            'market_cap_as_of': None, 'market_cap_currency': None,
+            'market_cap_quality': 'unavailable_adr_share_basis',
+            'market_cap_basis': 'unverified_depositary_receipt_share_units',
+            'market_cap_reason': 'adr_ratio_or_share_units_unverified',
+            'market_cap_error': None}
+
+
 def complete_cap(get, row, sessions):
     """Only a dated, unadjusted completed close can replace an undated quote."""
+    unavailable = adr_cap_unavailable(row)
+    if unavailable:
+        return unavailable
     if row.get('quote_time_state') != 'not_provided':
         return {}
     if row.get('tradable') is False:

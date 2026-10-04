@@ -16,6 +16,8 @@ class FakeToss:
     def __call__(self, path, params):
         self.calls.append((path, params))
         if path == '/api/v1/stocks/all':
+            if params['securityType'] == 'DEPOSITARY_RECEIPT':
+                return {'result': []}
             market = params['market']
             prefix = '0' if market == 'KOSPI' else ''
             return {'result': [

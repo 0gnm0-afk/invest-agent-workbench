@@ -72,7 +72,11 @@ def audit(snapshot):
     return {'state': 'succeeded' if complete else 'partial', 'exchanges': exchanges,
             'processing_state': 'failed' if unexpected else 'completed_with_exceptions' if exceptions else 'completed',
             'data_complete': complete,
-            'scope_basis': 'user_approved_active_market_scope' if snapshot.get('scope_exclusions') else 'toss_provided_active_common_stock',
+            'scope_basis': 'user_approved_active_market_scope' if snapshot.get('scope_exclusions') else (
+                'toss_provided_active_common_stock_and_us_depositary_receipts'
+                if any('DEPOSITARY_RECEIPT' in m.get('listing_types', {})
+                       for m in snapshot['coverage']['listings'].values())
+                else 'toss_provided_active_common_stock'),
             'approved_exclusions': snapshot.get('scope_exclusions', []),
             'exceptions': dispositions, 'market_cap_issues': cap_issues,
             'unexpected_failures': unexpected,

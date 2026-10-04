@@ -6,6 +6,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import Mock
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from saved_us_history import packed
@@ -97,11 +98,53 @@ class SavedHistoryTests(unittest.TestCase):
 
     def test_manifest_tampering_and_unknown_symbol(self):
         self.fixture();store=HistoryStore(self.path,self.no_network)
-        value=store.ensure(dict(self.stock,symbol='UNKNOWN'))
+        value=store.view(dict(self.stock,symbol='UNKNOWN'))
         self.assertEqual(value['history']['state'],'unavailable')
         self.assertIsNone(store.saved.packet(dict(self.stock,market='KR')))
         (self.folder/'manifest.json').write_text('{}')
         self.assertEqual(HistoryStore(self.path,self.no_network).ensure(self.stock)['history']['state'],'failed')
+
+    def test_verified_absence_uses_selected_history_with_daily_cutoff_and_cache(self):
+        for market, symbol in (('US', 'NVO'), ('KR', '999999.KS')):
+            with self.subTest(market=market):
+                self.fixture(market=market)
+                stock = dict(self.stock, symbol=symbol)
+                original = {str(p): p.read_bytes() for p in self.folder.parent.rglob('*') if p.is_file()}
+                calls = []
+                def client(path, params):
+                    calls.append((path, params))
+                    rows = [bar('2026-09-24'), bar('2016-01-04')]
+                    return {'result': {'nextBefore': None, 'candles': [dict(
+                        timestamp=b['date'] + ('T00:00:00+09:00' if market == 'KR' else 'T00:00:00-04:00'),
+                        currency=stock['currency'], openPrice=b['open'], highPrice=b['high'],
+                        lowPrice=b['low'], closePrice=b['close'], volume=b['volume']) for b in rows]}}
+                store = HistoryStore(self.path, lambda: client)
+                missing = store.view(stock)
+                self.assertEqual(missing['history']['reason'], 'saved_' + market.lower() + '_symbol_unavailable')
+                self.assertEqual(missing['history']['state'], 'unavailable')
+                value = store.ensure(stock)
+                self.assertEqual(value['history']['state'], 'complete')
+                self.assertEqual(value['history']['first'], '2016-01-04')
+                self.assertEqual(value['history']['last'], '2026-09-24')
+                self.assertEqual(value['history']['requested_end'], '2026-09-24')
+                self.assertEqual(calls[0][1]['before'], '2026-09-25T00:00:00' + ('+09:00' if market == 'KR' else '-04:00'))
+                self.assertEqual(len(calls), 1)
+                factory = Mock(side_effect=AssertionError('cached history must not refetch'))
+                reopened = HistoryStore(self.path, factory)
+                self.assertEqual(reopened.view(stock)['bars'], value['bars'])
+                self.assertEqual(reopened.ensure(stock, retry=True)['bars'], value['bars'])
+                factory.assert_not_called()
+                self.assertEqual(original, {str(p): p.read_bytes() for p in self.folder.parent.rglob('*') if p.is_file()})
+
+    def test_integrity_failure_does_not_become_absent_symbol_fetch(self):
+        self.fixture()
+        (self.folder/'manifest.json').write_text('{}')
+        factory = Mock(side_effect=AssertionError('invalid pinned history must not refetch'))
+        store = HistoryStore(self.path, factory)
+        value = store.ensure(dict(self.stock, symbol='NVO'), retry=True)
+        self.assertEqual(value['history']['reason'], 'saved_us_history_verification_failed')
+        factory.assert_not_called()
+        self.assertFalse(self.path.exists())
 
     def test_newer_screen_is_explicit(self):
         self.fixture()
