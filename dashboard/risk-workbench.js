@@ -19,14 +19,15 @@ window.WorkbenchRisk = (() => {
  const iso=x=>x?x+':00+09:00':null;
  const stats=(result,c)=>['baseline','no_response','response'].map((key,i)=>{const r=result?.[key];return `<div class="risk-stat"><span>${['현재 저장 자산','가정: 대응하지 않을 때','가정: 계획대로 대응할 때'][i]}</span><strong>${money(r?.total,c)} <small>${esc(c||'')}</small></strong><span>${esc(labels[r?.state]||'계산 전')}${r?.total==null&&r?.known_subtotal!=null&&r?.included?.length?' · 확인된 부분 '+money(r.known_subtotal,c):''}</span>${i&&r?.change!=null?`<span>변화 ${money(r.change,c)} ${esc(c)}</span>`:''}</div>`;}).join('');
  function reviewHTML(item) {const r=item.record,c=r.calculation;return `<article class="risk-review"><strong>${esc(r.title)}</strong><p>${esc(r.created_at)} · ${esc(r.id)}</p><div class="risk-stats">${stats(c.result,c.result.base_currency)}</div><p>저장 검토 · 계좌 기준 ${esc(c.assumptions.account_snapshot?.as_of)} · 평가 ${esc(c.result.horizon)} · 현재 잔고와 다를 수 있습니다.</p><details><summary>계획 버전·입력 근거</summary><pre>${esc(JSON.stringify({plan_refs:c.result.plan_refs,account_hash:c.result.snapshot_hash,scenario_hash:c.result.scenario_hash,code_version:c.code_version,code_sha256:c.result.code_sha256,limitations:c.result.limitations,external_inputs:c.assumptions.external_inputs},null,2))}</pre></details><p>${esc(r.body)}</p><a href="${esc(item.links.dashboard_url)}">종목의 공통 기록 보기 →</a></article>`;}
- async function mount(host,{accountAlias=null}={}) {
+ async function mount(host,{accountAlias=null,title='나의 계좌',accountHTML='',showAccountLink=true}={}) {
   if(!host)return;
-  host.classList.add('risk-workbench');host.innerHTML='<section class="panel"><div class="panel-body">저장 계좌와 계획을 읽는 중…</div></section>';
+  host.classList.add('risk-workbench');host.innerHTML=`<section class="panel"><div class="panel-head"><h2>${esc(title)}</h2></div><div class="panel-body"><div class="risk-account-info">${accountHTML}</div>저장 계좌와 계획을 읽는 중…</div></section>`;
   try {
    const data=await rpc('risk_overview',{account_alias:accountAlias});if(!host.isConnected)return;
    const s=data.snapshot, currency=s?.base_currency, holdings=s?.positions||[];
-   host.innerHTML=`<section class="panel"><div class="panel-head"><h2>나의 계좌 · 계획 시나리오</h2><a href="#accounts">계좌별 보기 →</a></div><div class="panel-body">
-    ${data.test_mode?'<p class="risk-note">격리 검증 · 합성 계좌와 합성 계획</p>':''}<p>저장 잔고 기준 ${esc(s?.as_of||'미확인')} · 새 조회 없이 계산합니다.</p>
+   host.innerHTML=`<section class="panel"><div class="panel-head"><h2>${esc(title)}</h2>${showAccountLink?'<a href="#accounts">계좌 상세 보기 →</a>':''}</div><div class="panel-body">
+    <div class="risk-account-info">${accountHTML}</div>
+    ${data.test_mode?'<p class="risk-note">격리 검증 · 합성 계좌와 합성 계획</p>':''}${accountHTML?'':`<p>저장 잔고 기준 ${esc(s?.as_of||'미확인')} · 새 조회 없이 계산합니다.</p>`}
     <div class="risk-stats"><div class="risk-stat"><span>현재 저장 자산</span><strong>${money(data.baseline?.total,currency)} <small>${esc(currency||'')}</small></strong><span>${esc(labels[data.baseline?.state]||'계산 보류')}${data.baseline?.total==null&&data.baseline?.known_subtotal!=null?' · 확인된 부분 '+money(data.baseline.known_subtotal,currency):''}</span></div><div class="risk-stat"><span>보유 주식</span><strong>${holdings.length}<small> 개 항목</small></strong><span>현금·CMA·부채는 별도 대조</span></div><div class="risk-stat"><span>저장된 매매 계획</span><strong>${data.plans.filter(p=>p.adopted).length}<small> 개 채택 버전</small></strong><span>초안 ${data.plans.filter(p=>!p.adopted).length}개 · 위험 검토 <span data-review-count>${data.reviews.length}</span>개</span></div></div>
     <div class="risk-issues">${data.issues.map(x=>`<p>${esc(message(x))}</p>`).join('')}${data.baseline?.missing?.length?'<p>미확인 자산이 있어 전체 합계를 확정하지 않습니다.</p>':''}</div>
     <details><summary>보유 종목과 계산 가능 범위 · ${holdings.length}개</summary><div class="scroll"><table><thead><tr><th>계좌 · 종목</th><th>수량</th><th>저장 가격</th><th>계획 연결</th></tr></thead><tbody>${holdings.map(p=>`<tr><td>${esc(p.account)} · ${esc(p.symbol)}</td><td>${esc(p.quantity)}</td><td>${money(p.price,p.currency)} ${esc(p.currency)}</td><td>${p.stable_id?'식별자 있음':'고유 식별자 미확인'}</td></tr>`).join('')}</tbody></table></div><p>현금·CMA·부채는 대조된 항목만 합산합니다. 결측은 0으로 바꾸지 않습니다.</p><ul>${(data.baseline?.missing||[]).map(x=>`<li>${esc(message(x))}</li>`).join('')}</ul></details>
@@ -70,7 +71,7 @@ window.WorkbenchRisk = (() => {
    q('[data-save-button]').onclick=async()=>{if(!calculated)return;const value=calculated;calculated=null;q('[data-save-button]').disabled=true;
     try{await rpc('risk_save',{ticket:value.ticket,analysis_key:q('[data-target]').value,title:val('review_title').value,body:q('[data-body]').value});const fresh=await rpc('risk_overview',{account_alias:accountAlias});if(!host.isConnected)return;data.reviews=fresh.reviews;q('[data-review-count]').textContent=fresh.reviews.length;q('[data-reviews]').innerHTML=fresh.reviews.map(reviewHTML).join('');q('.risk-history summary').textContent='저장된 위험 검토 · '+fresh.reviews.length+'개';q('.risk-history').open=true;q('[data-save]').hidden=true;q('[data-status]').textContent='위험 검토 저장 후 DB 재조회를 확인했습니다.';
     }catch(e){q('[data-status]').textContent=e.message+' 저장 이력을 재조회한 후 다시 계산해 주세요.';}finally{q('[data-save-button]').disabled=false;}};
-  } catch(e) {if(host.isConnected)host.innerHTML='<section class="panel"><div class="panel-body"><h2>계좌 시나리오</h2><p>'+esc(e.message)+'</p><p>기존 계좌 화면에서 저장 잔고를 확인할 수 있습니다.</p><a href="#accounts">나의 계좌 →</a></div></section>';}
+  } catch(e) {if(host.isConnected)host.innerHTML=`<section class="panel"><div class="panel-head"><h2>${esc(title)}</h2></div><div class="panel-body"><div class="risk-account-info">${accountHTML}</div><p>계획 시나리오를 불러오지 못했습니다. ${esc(e.message)}</p><a href="#accounts">계좌 정보 보기 →</a></div></section>`;}
  }
  return {mount};
 })();
