@@ -106,13 +106,40 @@ class DailyLaunch:
                 continue
         return None
 
-    def once(self, now=None, retry=False, expected_attempt=None):
+    def target_complete(self, record, plan):
+        """Only a verified successful screen for both target sessions can be reused."""
+        if record.get('state') != 'succeeded' or record.get('targets') != plan['targets']:
+            return False
+        run_path = self.usable_run(record.get('run'))
+        if not run_path:
+            return False
+        run = self.checked_run(run_path)
+        review = json.loads((Path(run_path)/'priority-review.json').read_text(encoding='utf-8'))
+        return run.get('state') == 'succeeded' and review.get('session_dates') == plan['targets']
+
+    def once(self, now=None, retry=False, expected_attempt=None, *, scheduled=False):
         now = now or utc_now()
-        day = now.astimezone(ZoneInfo('Asia/Seoul')).date().isoformat()
+        local = now.astimezone(ZoneInfo('Asia/Seoul'))
+        day = local.date().isoformat()
+        if scheduled and (local.hour, local.minute) < (6, 40):
+            return {'day':day, 'state':'not_due', 'targets':{}, 'reused':True}
         try:
             # The OS releases this lock on crash; the durable receipt still prevents a rerun.
             with instance_lock(self.folder):
                 record = self.read(day)
+                scheduled_plan = None
+                if scheduled:
+                    scheduled_plan = self.planner(now)
+                    if record and record.get('scheduled_day') == day:
+                        retry = False
+                    elif record and self.target_complete(record, scheduled_plan):
+                        record['scheduled_day'] = day
+                        self.save(record)
+                        retry = False
+                    else:
+                        # User-authorized daily schedule gets one attempt after 06:40,
+                        # even when an earlier dashboard launch failed or used older US bars.
+                        retry = True
                 if retry and expected_attempt is not None:
                     if not record or attempt_id(record) != expected_attempt or record['state'] not in ('failed', 'interrupted', 'partial'):
                         return {**(record or {'day':day,'state':'unavailable','targets':{}}), 'reused':True}
@@ -124,14 +151,15 @@ class DailyLaunch:
                 if record:
                     archive = self.folder/'attempts'/(day+'-'+datetime.now(timezone.utc).strftime('%H%M%S%f')+'.json')
                     atomic_write(archive,json.dumps(record,ensure_ascii=False))
-                record = {'day':day,'attempt_id':uuid4().hex,'manual_retry':bool(retry),'state':'running','stage':'calendar','started_at':now.isoformat(),
+                scheduled_day = day if scheduled else (record or {}).get('scheduled_day')
+                record = {'scheduled_day':scheduled_day,'scheduled':bool(scheduled),'day':day,'attempt_id':uuid4().hex,'manual_retry':bool(retry and not scheduled),'state':'running','stage':'calendar','started_at':now.isoformat(),
                           'finished_at':None,'targets':{},'display_run':self.display_run(),'run':None,'error':None}
                 self.save(record)
                 def progress(update):
                     record.update({k:v for k,v in update.items() if k in ('stage','run')})
                     self.save(record)
                 try:
-                    plan = self.planner(now)
+                    plan = scheduled_plan or self.planner(now)
                     record.update(plan)
                     self.save(record)
                     run = self.runner({**plan,'prior_run':record['display_run']}, progress)
