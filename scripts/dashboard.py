@@ -18,10 +18,11 @@ from financial_summary import selected_stock
 from chart_workspace import WorkspaceStore, Conflict, moving_averages
 from analysis_service import AnalysisService
 from analysis_collaboration import Forbidden
+from risk_service import RiskService, OPS as RISK_OPS
 
 
 def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None, daily_status=None, daily_retry=None,
-                analysis_capabilities=None, analysis_dependencies=None):
+                analysis_capabilities=None, analysis_dependencies=None, risk_options=None, offline=False):
     initial_view = (data, stocks)
     store = WorkspaceStore(workspace_path or ROOT / "runtime/chart-workspaces.sqlite3")
     histories = (analysis_dependencies['histories'] if analysis_dependencies else
@@ -33,6 +34,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
     financials = (analysis_dependencies['financials'] if analysis_dependencies else
                   FinancialStore((Path(workspace_path).parent if workspace_path else ROOT / 'runtime') / 'financials'))
     analyses = AnalysisService(store, histories, financials, lambda: views['view'] if views is not None else initial_view, ROOT if workspace_path is None else Path(workspace_path).parent)
+    risks = RiskService(analyses, lambda: views['view'] if views is not None else initial_view, **(risk_options or {}))
     capabilities = dict(analysis_capabilities or {})
     if set(capabilities) - {'collaboration', 'risk'} or any(not isinstance(v,str) or not v or v == token for v in capabilities.values()) or len(set(capabilities.values())) != len(capabilities):
         raise ValueError('invalid_analysis_capabilities')
@@ -67,7 +69,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
             except ValueError:
                 return self.send(b'{"error":"invalid_timeframe"}', status=400)
             if path == '/health':
-                return self.send(json.dumps({'app': 'invest-workbench', 'token': token, 'analysis_protocol': 1, 'collaboration_protocol': 1, 'workspace': str(ROOT)}).encode(), cookie=self.headers.get('Sec-Fetch-Site') == 'same-origin')
+                return self.send(json.dumps({'app': 'invest-workbench', 'token': token, 'analysis_protocol': 1, 'collaboration_protocol': 1, 'offline': offline, 'workspace': str(ROOT)}).encode(), cookie=self.headers.get('Sec-Fetch-Site') == 'same-origin')
             if path == '/api/daily-update':
                 return self.send(json.dumps(daily_status() if daily_status else {'enabled':False}, ensure_ascii=False).encode('utf-8'))
             if path == '/api/home':
@@ -125,7 +127,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                 if value is None:
                     value = {'state': 'unavailable', 'reason': 'saved_price_series_missing', 'bars': []}
                 return self.send(json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8'))
-            names = {'/collaboration.js': 'collaboration.js', '/analysis.js': 'analysis.js', '/': 'index.html', '/app.js': 'app.js', '/tooltips.js': 'tooltips.js', '/financials.js': 'financials.js', '/financials.css': 'financials.css', '/style.css': 'style.css',
+            names = {'/risk-workbench.js': 'risk-workbench.js', '/risk-workbench.css': 'risk-workbench.css', '/collaboration.js': 'collaboration.js', '/analysis.js': 'analysis.js', '/': 'index.html', '/app.js': 'app.js', '/tooltips.js': 'tooltips.js', '/financials.js': 'financials.js', '/financials.css': 'financials.css', '/style.css': 'style.css',
                      '/stock-chart.js': 'stock-chart.js', '/drawing-tools.js': 'drawing-tools.js', '/chart-workspace.js': 'chart-workspace.js', '/chart-tools.css': 'chart-tools.css', '/format.js': 'format.js', '/charts.js': 'charts.js', '/workbench.png': 'workbench.png',
                      '/vendor/lightweight-charts.js': 'vendor/lightweight-charts.js',
                      '/vendor/NOTICE': 'vendor/NOTICE', '/vendor/LICENSE': 'vendor/LICENSE'}
@@ -189,6 +191,8 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                     if not isinstance(body, dict) or set(body) != {'op', 'arguments'}:
                         raise ValueError('invalid_analysis_request')
                     try:
+                        if offline and body['op'] == 'refresh':
+                            return self.send(b'{"error":"saved_only_session_refresh_disabled"}', status=403)
                         principal = role or 'legacy'
                         if role is None and self.headers.get('Sec-Fetch-Site') == 'same-origin':
                             cookies = SimpleCookie(self.headers.get('Cookie', ''))
@@ -196,8 +200,9 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                             if candidate and secrets.compare_digest(candidate.value, browser_session): principal = 'browser'
                         if body['op'] in ('decide', 'holding') and principal != 'browser':
                             raise Forbidden('local_browser_confirmation_required')
-                        result = analyses.dispatch(body['op'], body['arguments'], 'http://' + expected,
-                                                   principal=principal, session=browser_session if principal == 'browser' else None)
+                        service = risks if body['op'] in RISK_OPS else analyses
+                        result = service.dispatch(body['op'], body['arguments'], 'http://' + expected,
+                                                   principal=principal, session=browser_session if principal == 'browser' else role)
                         return self.send(json.dumps(result, ensure_ascii=False, allow_nan=False).encode('utf-8'))
                     except Forbidden as exc:
                         return self.send(json.dumps({'error':str(exc)}).encode(), status=403)
@@ -208,6 +213,8 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                         message = str(exc) if isinstance(exc, ValueError) and str(exc).replace('_','').isalnum() else 'invalid_analysis_request'
                         return self.send(json.dumps({'error':message}).encode(), status=400)
                 if path.startswith('/api/financials/'):
+                    if offline:
+                        return self.send(b'{"error":"saved_only_session_refresh_disabled"}', status=403)
                     if not isinstance(body, dict) or set(body) != {'refresh'} or type(body['refresh']) is not bool:
                         raise ValueError('invalid_financial_request')
                     stock = {**stocks[key], **histories.view(stocks[key], '1d')}
@@ -218,7 +225,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                 if path.startswith('/api/chart-history/'):
                     if not isinstance(body, dict) or set(body) != {'retry'} or type(body['retry']) is not bool:
                         raise ValueError('invalid_history_request')
-                    result = histories.ensure(stocks[key], retry=body['retry'])
+                    result = histories.view(stocks[key], frame) if offline else histories.ensure(stocks[key], retry=body['retry'])
                     return self.send(json.dumps(result, ensure_ascii=False, allow_nan=False).encode('utf-8'))
                 if not isinstance(body, dict) or set(body) != {'revision', 'state'}:
                     raise ValueError('invalid_body')
@@ -237,12 +244,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--open-browser', action='store_true')
     parser.add_argument('--saved-accounts', action='store_true')
+    parser.add_argument('--offline', action='store_true', help='Saved inputs only; disable selected-stock refresh as well as startup collection')
     parser.add_argument('--build-only', action='store_true')
     parser.add_argument('--ready-file', type=Path)
     parser.add_argument('--port', type=int, default=0)
     parser.add_argument('--daily-refresh', action='store_true', help='One market update per KST launch day')
     parser.add_argument('--retry-market', action='store_true', help='Explicitly request another market attempt today')
     args = parser.parse_args()
+    if args.offline:
+        if args.daily_refresh or args.retry_market:
+            parser.error('--offline cannot be combined with market refresh')
+        args.saved_accounts = True
     if args.retry_market and not args.daily_refresh:
         parser.error('--retry-market requires --daily-refresh')
     if args.build_only and args.daily_refresh:
@@ -266,7 +278,7 @@ def main():
         return
     token = secrets.token_urlsafe(18)
     capabilities = {role: secrets.token_urlsafe(32) for role in ('collaboration','risk')}
-    server = ThreadingHTTPServer(('127.0.0.1', args.port), handler_for(data, stocks, ROOT / 'dashboard', token, views=views, daily_status=controller.status if controller else None, daily_retry=controller.retry if controller else None, analysis_capabilities=capabilities))
+    server = ThreadingHTTPServer(('127.0.0.1', args.port), handler_for(data, stocks, ROOT / 'dashboard', token, views=views, daily_status=controller.status if controller else None, daily_retry=controller.retry if controller else None, analysis_capabilities=capabilities, offline=args.offline))
     server.daemon_threads = True
     ready = {'url': 'http://127.0.0.1:' + str(server.server_port), 'output': str(output), 'token': token}
     if args.ready_file:

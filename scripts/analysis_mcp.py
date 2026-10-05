@@ -81,4 +81,19 @@ def analysis_save_risk_review(analysis_key: str, snapshot_id: str, expected_revi
     return call('risk_review_save', dict(analysis_key=analysis_key, snapshot_id=snapshot_id, expected_revision=expected_revision,
         title=title, body=body, plan_record_ids=plan_record_ids, calculation=calculation, references=references, contract_version=contract_version))
 
+@mcp.tool()
+def risk_overview(account_alias: str | None = None) -> dict:
+    """Risk role only. Read stored account valuation, exact drafts/adopted plans and saved reviews. No refresh; stale/missing facts remain blockers."""
+    return call('risk_overview', dict(account_alias=account_alias))
+
+@mcp.tool()
+def risk_calculate(selections: list[dict], assumptions: dict, account_alias: str | None = None) -> dict:
+    """Risk role only. Calculate through B's Python engine from exact selected plan versions and explicit assumptions. Read docs/risk-integration-2026-10-05.md and risk_adapter.py for schema. No invented user assumptions. Returns a server-held single-use ticket and results including blockers, never adoption or orders."""
+    return call('risk_calculate', dict(selections=selections, assumptions=assumptions, account_alias=account_alias))
+
+@mcp.tool()
+def risk_save(ticket: str, analysis_key: str, title: str, body: str) -> dict:
+    """Risk role only. Save the exact server-calculated result using its unexpired single-use ticket. Reread after uncertain delivery, never blindly retry. Does not change the current discussion or adopt a plan."""
+    return call('risk_save', dict(ticket=ticket, analysis_key=analysis_key, title=title, body=body))
+
 if __name__=='__main__': mcp.run(transport='stdio')
