@@ -70,6 +70,8 @@ class CollaborationTests(unittest.TestCase):
         self.assertEqual(self.s.snapshot(self.cid,self.sid),before)
         self.assertEqual(result['active_plans'],[])
         self.assertIn('analysis_collaboration_read',result['links']['resume_prompt'])
+        self.assertIn('risk_calculate',result['links']['resume_prompt'])
+        self.assertIn('계산용 시나리오는 확인된 조건에서 네가 만들어',result['links']['resume_prompt'])
 
     def test_additive_migration_keeps_legacy_records_snapshots_and_drawings(self):
         self.call('record',dict(snapshot_id=self.sid,kind='report',title='legacy',body='original',author='llm'))

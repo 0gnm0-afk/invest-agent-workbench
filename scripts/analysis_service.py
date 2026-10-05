@@ -110,6 +110,10 @@ class AnalysisService:
                   "기존 보고서는 기업 조사 근거다. 7항목을 한꺼번에 묻지 말고 차트·보유 이유·반증·대응에서 이번 판단을 바꾸는 모호함만 자연스럽게 논의해줘. "
                   "새 조사 필요 때만 stock-qualitative-analysis를 사용하고 미정 판단을 대신 채택하지 마. "
                   "확보한 발언 원문과 합의·미정을 analysis_save_discussion으로 저장하고 계획은 analysis_save_plan으로 초안 버전을 남겨줘. "
+                  "계산용 시나리오는 확인된 조건에서 네가 만들어 저장해줘. 사용자가 평가일·가격·경로·환율·비용 폼을 일일이 채우게 하지 말고, "
+                  "아직 정하지 않은 값은 null로 유지하며 계산을 막는 핵심 미정만 하나씩 물어줘. 조건 가격을 미래 평가가나 체결가로 바꾸지 마. "
+                  "저장 후 invest_risk의 risk_overview로 같은 버전을 확인하고 가능한 시나리오는 risk_calculate로 hypothetical 계산해줘. "
+                  "결과의 누락·해시를 확인해 필요하면 risk_save로 검토를 기록하고 재조회해줘. 전체 금액이 보류되면 그 이유를 말해줘. "
                   "snapshot_id와 expected_revision을 고정하며 충돌은 재조회해 조정한다. 저장 뒤 ID·버전·재조회 일치와 복귀 링크를 확인해줘. "
                   f"계획 채택은 사용자가 화면에서 정확한 버전을 확인한다. 대시보드: {dashboard}")
         return {'analysis_key':cid,'dashboard_url':dashboard,'reopen_command':f'.\\analysis.ps1 -AnalysisKey {cid}',
