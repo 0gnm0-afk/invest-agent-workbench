@@ -110,14 +110,14 @@ for(const [timeframe,start,next,end,day] of [
  ['1w','2026-09-07','2026-09-14','2026-09-11','2026-09-10'],
  ['1mo','2026-09-01','2026-10-01','2026-09-30','2026-09-20']
 ]){
- const frameBars=[{date:start,first_session:start,last_session:end,open:110,high:140,low:80,close:120},{date:next,projected:true}];
+ const frameBars=[{date:start,first_session:start,last_session:end,anchorTimes:{high:end},open:110,high:140,low:80,close:120},{date:next,projected:true}];
  const frameScale={...scale,logicalToCoordinate:i=>80+i*40,coordinateToLogical:x=>(x-80)/40};
  const logical=D.index(day,frameBars,timeframe),x=frameScale.logicalToCoordinate(logical);
  assert.equal(D.timeAt(logical,frameBars,timeframe),day,'aggregate candle internal date round-trips');
  const frameEl=new Element();let saved=[];
  const frameTool=D.attach({element:frameEl,chart:{...chart,timeScale:()=>frameScale},series,bars:frameBars,currency:'USD',timeframe,getDrawings:()=>saved,onChange:n=>{saved=n;},onSelect(){},onHint(){}});
  frameTool.setMode('horizontal');frameEl.children[0].events.pointerdown(event(x,62));
- assert.deepEqual(saved[0].points,[{time:day,price:140}],timeframe+' snap preserves internal date projection');
+ assert.deepEqual(saved[0].points,[{time:end,price:140}],timeframe+' snap stores actual OHLC date instead of mouse date');
  frameTool.destroy();
 }
 console.log('Candle OHLC snap: nearest date/field, thresholds, exact prices, passive past reference, future space, Alt/toggle, editing, cancellation and week/month projection PASS');
