@@ -4,6 +4,7 @@ import json
 import mimetypes
 import secrets
 import sqlite3
+from http.cookies import SimpleCookie
 from daily_launch import DailyLaunch
 from dashboard_daily import DashboardDaily, RetryConflict
 import urllib.parse
@@ -16,29 +17,39 @@ from financial_store import FinancialStore
 from financial_summary import selected_stock
 from chart_workspace import WorkspaceStore, Conflict, moving_averages
 from analysis_service import AnalysisService
+from analysis_collaboration import Forbidden
 
 
-def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None, daily_status=None, daily_retry=None):
+def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None, daily_status=None, daily_retry=None,
+                analysis_capabilities=None, analysis_dependencies=None):
     initial_view = (data, stocks)
     store = WorkspaceStore(workspace_path or ROOT / "runtime/chart-workspaces.sqlite3")
-    histories = HistoryStore((Path(workspace_path).parent if workspace_path else ROOT / 'runtime') / 'chart-history.sqlite3')
+    histories = (analysis_dependencies['histories'] if analysis_dependencies else
+                 HistoryStore((Path(workspace_path).parent if workspace_path else ROOT / 'runtime') / 'chart-history.sqlite3'))
     search_listings = {history.market + ':' + symbol: row
                        for history in histories.saved.markets.values()
                        for symbol, row in getattr(history, 'listings', {}).items()}
     search_cache = [None, None]
-    financials = FinancialStore((Path(workspace_path).parent if workspace_path else ROOT / 'runtime') / 'financials')
+    financials = (analysis_dependencies['financials'] if analysis_dependencies else
+                  FinancialStore((Path(workspace_path).parent if workspace_path else ROOT / 'runtime') / 'financials'))
     analyses = AnalysisService(store, histories, financials, lambda: views['view'] if views is not None else initial_view, ROOT if workspace_path is None else Path(workspace_path).parent)
+    capabilities = dict(analysis_capabilities or {})
+    if set(capabilities) - {'collaboration', 'risk'} or any(not isinstance(v,str) or not v or v == token for v in capabilities.values()) or len(set(capabilities.values())) != len(capabilities):
+        raise ValueError('invalid_analysis_capabilities')
+    browser_session = secrets.token_urlsafe(32)
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass
 
-        def send(self, body, kind='application/json; charset=utf-8', status=200):
+        def send(self, body, kind='application/json; charset=utf-8', status=200, cookie=False):
             self.send_response(status)
             self.send_header('Content-Type', kind)
             self.send_header('Content-Length', str(len(body)))
             self.send_header('Cache-Control', 'no-store')
             self.send_header('X-Content-Type-Options', 'nosniff')
             self.send_header('Referrer-Policy', 'no-referrer')
+            if cookie:
+                self.send_header('Set-Cookie', 'workbench_confirm=' + browser_session + '; HttpOnly; SameSite=Strict; Path=/api/analysis-rpc')
             self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
             self.end_headers()
             self.wfile.write(body)
@@ -56,7 +67,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
             except ValueError:
                 return self.send(b'{"error":"invalid_timeframe"}', status=400)
             if path == '/health':
-                return self.send(json.dumps({'app': 'invest-workbench', 'token': token, 'analysis_protocol': 1, 'workspace': str(ROOT)}).encode())
+                return self.send(json.dumps({'app': 'invest-workbench', 'token': token, 'analysis_protocol': 1, 'collaboration_protocol': 1, 'workspace': str(ROOT)}).encode(), cookie=self.headers.get('Sec-Fetch-Site') == 'same-origin')
             if path == '/api/daily-update':
                 return self.send(json.dumps(daily_status() if daily_status else {'enabled':False}, ensure_ascii=False).encode('utf-8'))
             if path == '/api/home':
@@ -114,7 +125,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                 if value is None:
                     value = {'state': 'unavailable', 'reason': 'saved_price_series_missing', 'bars': []}
                 return self.send(json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8'))
-            names = {'/analysis.js': 'analysis.js', '/': 'index.html', '/app.js': 'app.js', '/tooltips.js': 'tooltips.js', '/financials.js': 'financials.js', '/financials.css': 'financials.css', '/style.css': 'style.css',
+            names = {'/collaboration.js': 'collaboration.js', '/analysis.js': 'analysis.js', '/': 'index.html', '/app.js': 'app.js', '/tooltips.js': 'tooltips.js', '/financials.js': 'financials.js', '/financials.css': 'financials.css', '/style.css': 'style.css',
                      '/stock-chart.js': 'stock-chart.js', '/drawing-tools.js': 'drawing-tools.js', '/chart-workspace.js': 'chart-workspace.js', '/chart-tools.css': 'chart-tools.css', '/format.js': 'format.js', '/charts.js': 'charts.js', '/workbench.png': 'workbench.png',
                      '/vendor/lightweight-charts.js': 'vendor/lightweight-charts.js',
                      '/vendor/NOTICE': 'vendor/NOTICE', '/vendor/LICENSE': 'vendor/LICENSE'}
@@ -140,8 +151,10 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
             if path != '/api/daily-update' and not path.startswith(('/api/chart-state/', '/api/chart-history/', '/api/financials/', '/api/analysis-rpc')):
                 return self.send(b'{"error":"read_only"}', status=405)
             expected = '127.0.0.1:' + str(self.server.server_port)
+            supplied_token = self.headers.get('X-Workbench-Token', '')
+            role = next((name for name, secret in capabilities.items() if secrets.compare_digest(supplied_token, secret)), None) if path == '/api/analysis-rpc' else None
             if (self.headers.get('Host') != expected or self.headers.get('Origin') != 'http://' + expected
-                    or not secrets.compare_digest(self.headers.get('X-Workbench-Token', ''), token)):
+                    or not (role or secrets.compare_digest(supplied_token, token))):
                 return self.send(b'{"error":"local_origin_required"}', status=403)
             if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
                 return self.send(b'{"error":"json_required"}', status=415)
@@ -176,8 +189,18 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                     if not isinstance(body, dict) or set(body) != {'op', 'arguments'}:
                         raise ValueError('invalid_analysis_request')
                     try:
-                        result = analyses.dispatch(body['op'], body['arguments'], 'http://' + expected)
+                        principal = role or 'legacy'
+                        if role is None and self.headers.get('Sec-Fetch-Site') == 'same-origin':
+                            cookies = SimpleCookie(self.headers.get('Cookie', ''))
+                            candidate = cookies.get('workbench_confirm')
+                            if candidate and secrets.compare_digest(candidate.value, browser_session): principal = 'browser'
+                        if body['op'] in ('decide', 'holding') and principal != 'browser':
+                            raise Forbidden('local_browser_confirmation_required')
+                        result = analyses.dispatch(body['op'], body['arguments'], 'http://' + expected,
+                                                   principal=principal, session=browser_session if principal == 'browser' else None)
                         return self.send(json.dumps(result, ensure_ascii=False, allow_nan=False).encode('utf-8'))
+                    except Forbidden as exc:
+                        return self.send(json.dumps({'error':str(exc)}).encode(), status=403)
                     except Conflict as exc:
                         return self.send(json.dumps({'error':str(exc)}).encode(), status=409)
                     except (ValueError, KeyError, TypeError) as exc:
@@ -242,13 +265,14 @@ def main():
                           'account_query_state': data['accounts']['query_state']}))
         return
     token = secrets.token_urlsafe(18)
-    server = ThreadingHTTPServer(('127.0.0.1', args.port), handler_for(data, stocks, ROOT / 'dashboard', token, views=views, daily_status=controller.status if controller else None, daily_retry=controller.retry if controller else None))
+    capabilities = {role: secrets.token_urlsafe(32) for role in ('collaboration','risk')}
+    server = ThreadingHTTPServer(('127.0.0.1', args.port), handler_for(data, stocks, ROOT / 'dashboard', token, views=views, daily_status=controller.status if controller else None, daily_retry=controller.retry if controller else None, analysis_capabilities=capabilities))
     server.daemon_threads = True
     ready = {'url': 'http://127.0.0.1:' + str(server.server_port), 'output': str(output), 'token': token}
     if args.ready_file:
         args.ready_file.write_text(json.dumps(ready), encoding='utf-8')
     from financial_store import save as save_endpoint
-    save_endpoint(ROOT / 'runtime/dashboard/analysis-endpoint.json', ready, atomic=True)
+    save_endpoint(ROOT / 'runtime/dashboard/analysis-endpoint.json', {**ready, 'analysis_capabilities':capabilities}, atomic=True)
     print(json.dumps(ready), flush=True)
     if args.open_browser:
         webbrowser.open(ready['url'])

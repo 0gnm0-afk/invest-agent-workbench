@@ -1,5 +1,6 @@
 """Discover/reopen the private loopback dashboard, never collect on startup."""
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -17,7 +18,8 @@ def endpoint():
     if url.scheme!='http' or url.hostname!='127.0.0.1' or not url.port or url.path or url.query or url.fragment or url.username: raise ValueError('invalid_local_endpoint')
     with urllib.request.urlopen(value['url']+'/health',timeout=3) as r: health=json.load(r)
     if health.get('analysis_protocol')!=1 or health.get('workspace')!=str(ROOT): raise ValueError('incompatible_dashboard')
-    return {'url':value['url'],'token':health['token']}
+    return {'url':value['url'],'token':health['token'], 'analysis_capabilities':value.get('analysis_capabilities', {}),
+            'collaboration_protocol':health.get('collaboration_protocol')}
 
 
 def ensure():
@@ -48,7 +50,18 @@ def ensure():
 
 def call(op, arguments):
     target=ensure()
-    req=urllib.request.Request(target['url']+'/api/analysis-rpc',data=json.dumps({'op':op,'arguments':arguments},allow_nan=False).encode(),headers={'Content-Type':'application/json','Origin':target['url'],'X-Workbench-Token':target['token']})
+    role = os.environ.get('INVEST_ANALYSIS_ROLE', 'collaboration')
+    if role not in ('collaboration', 'risk'): raise ValueError('invalid_analysis_role')
+    capability = target.get('analysis_capabilities', {}).get(role)
+    if not capability:
+        # Copying local code must not restart or break the currently running legacy server.
+        legacy = {'list','detail','read','record','propose','calculate','holding_links','refresh'}
+        readonly = {'list','detail','holding_links','calculate'}
+        permitted = op in legacy if role == 'collaboration' else op in readonly or (op == 'read' and bool(arguments.get('snapshot_id')))
+        if not permitted:
+            raise ValueError('collaboration_server_upgrade_required_no_automatic_restart')
+        capability = target['token']
+    req=urllib.request.Request(target['url']+'/api/analysis-rpc',data=json.dumps({'op':op,'arguments':arguments},allow_nan=False).encode(),headers={'Content-Type':'application/json','Origin':target['url'],'X-Workbench-Token':capability})
     try:
         with urllib.request.urlopen(req,timeout=60) as r: return json.load(r)
     except urllib.error.HTTPError as e:
