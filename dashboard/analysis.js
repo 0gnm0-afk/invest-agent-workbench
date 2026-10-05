@@ -1,6 +1,16 @@
 window.WorkbenchAnalysis=(()=>{
  const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  let generation=0;
+ let collaborationLoading=null;
+ async function loadCollaboration(){
+  if(window.WorkbenchCollaboration)return true;
+  if(!collaborationLoading)collaborationLoading=(async()=>{
+   const h=await fetch('/health');const health=await h.json();
+   if(health.collaboration_protocol!==1)return false;
+   await new Promise((resolve,reject)=>{const script=document.createElement('script');script.src='/collaboration.js';script.onload=resolve;script.onerror=()=>reject(Error('후속 협업 화면을 불러오지 못했습니다.'));document.head.append(script);});return true;
+  })();
+  return collaborationLoading;
+ }
  async function rpc(op,args){const h=await fetch('/health');const {token}=await h.json();const r=await fetch('/api/analysis-rpc',{method:'POST',headers:{'Content-Type':'application/json','X-Workbench-Token':token},body:JSON.stringify({op,arguments:args})});const v=await r.json();if(!r.ok)throw Error(v.error||'분석 연결 실패');return v;}
  function requested(){return new URLSearchParams(location.hash.split('?')[1]||'').get('analysis');}
  async function initial(){const id=requested();return id?rpc('detail',{analysis_key:id}):null;}
@@ -17,6 +27,7 @@ window.WorkbenchAnalysis=(()=>{
   function routeKey(){history.replaceState(null,'','#stock/'+encodeURIComponent(market)+'/'+encodeURIComponent(symbol)+(current?'?analysis='+current:''));}
   function render(){
    if(!detail||!valid())return;
+   if(window.WorkbenchCollaboration)WorkbenchCollaboration.show(container,current,rpc,detail.links);
    q('#analysis-test').checked=Boolean(detail.case.test_record);q('#analysis-test').disabled=true;q('#analysis-start').textContent=detail.case.test_record?'연결 검증 하기':'정성분석 하기';
    q('#analysis-copy').disabled=false;const link=q('#analysis-open');link.hidden=false;link.href=detail.links.codex_url;
    const decisions=new Set(detail.items.filter(i=>i.kind==='decision').map(i=>i.proposal_id));
@@ -50,8 +61,9 @@ window.WorkbenchAnalysis=(()=>{
   }catch(e){status(e.message);}finally{if(valid())q('#analysis-start').disabled=false;}};
   q('#analysis-copy').onclick=async()=>{try{await sync();await navigator.clipboard.writeText(detail.links.copy_text);status('차트 재검토 연결 복사됨 · Codex 대화에 붙여 넣어 전송하세요.');}catch(e){status(e.message);}};
   q('#analysis-open').onclick=async e=>{if(e.isTrusted){e.preventDefault();try{await sync();render();location.href=detail.links.codex_url;}catch(err){status(err.message);}}};
-  q('#analysis-select').onchange=async()=>{try{await sync();current=q('#analysis-select').value||null;routeKey();signature='';WorkbenchWorkspace.current()?.setProposals([]);if(current){detail=await rpc('detail',{analysis_key:current});await controller.restore(detail.case.context);render();status(startHint(detail.case.test_record));}else{detail=null;document.querySelector('#qualitative-report').innerHTML='<section class="panel"><div class="panel-body"><h2>정성 리포트</h2><p>새 분석건 · 아직 저장된 리포트가 없습니다. Codex에서 분석 후 저장하면 여기에 표시됩니다.</p></div></section>';q('#analysis-open').hidden=true;q('#analysis-copy').disabled=true;q('#analysis-test').disabled=false;q('#analysis-test').checked=false;q('#analysis-start').textContent='정성분석 하기';q('#analysis-proposals').replaceChildren();status(startHint(false));}}catch(e){status(e.message);}};
+  q('#analysis-select').onchange=async()=>{try{await sync();current=q('#analysis-select').value||null;routeKey();signature='';WorkbenchWorkspace.current()?.setProposals([]);if(current){detail=await rpc('detail',{analysis_key:current});await controller.restore(detail.case.context);render();status(startHint(detail.case.test_record));}else{detail=null;window.WorkbenchCollaboration?.clear();document.querySelector('#qualitative-report').innerHTML='<section class="panel"><div class="panel-body"><h2>정성 리포트</h2><p>새 분석건 · 아직 저장된 리포트가 없습니다. Codex에서 분석 후 저장하면 여기에 표시됩니다.</p></div></section>';q('#analysis-open').hidden=true;q('#analysis-copy').disabled=true;q('#analysis-test').disabled=false;q('#analysis-test').checked=false;q('#analysis-start').textContent='정성분석 하기';q('#analysis-proposals').replaceChildren();status(startHint(false));}}catch(e){status(e.message);}};
   q('#analysis-test').onchange=()=>{q('#analysis-start').textContent=q('#analysis-test').checked?'연결 검증 하기':'정성분석 하기';status(startHint(q('#analysis-test').checked));};
+  loadCollaboration().then(()=>{if(valid()&&detail)render();}).catch(e=>status(e.message));
   await list();if(detail){render();status(startHint(detail.case.test_record));}
   async function tick(){if(!valid())return;await poll();if(valid())setTimeout(tick,2000);}setTimeout(tick,2000);
   // Context follows actual chart gestures, but does not trigger financial collection.

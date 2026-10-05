@@ -12,6 +12,7 @@ from urllib.parse import urlencode, quote
 
 from chart_workspace import Conflict, validate
 from analysis_geometry import geometry
+from analysis_collaboration import Collaboration, OPS as COLLABORATION_OPS, Forbidden
 
 QUALITATIVE_SKILL = 'stock-qualitative-analysis'
 
@@ -57,6 +58,8 @@ class AnalysisService:
             CREATE TABLE IF NOT EXISTS analysis_snapshots (id TEXT PRIMARY KEY, case_id TEXT NOT NULL, payload TEXT NOT NULL, sha256 TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS analysis_items (id TEXT PRIMARY KEY, case_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL);
             ''')
+        self.collaboration = Collaboration(self)
+        self.collaboration.migrate()
 
     def rows(self, table, case_id=None):
         if table not in ('analysis_cases','analysis_snapshots','analysis_items'): raise ValueError('table')
@@ -102,7 +105,15 @@ class AnalysisService:
                     "저장 성공 응답의 기록 ID와 links.dashboard_url을 확인한 뒤 핵심 결과와 복귀 링크를 알려줘. "
                     "저장 실패를 완료로 표시하지 마. 작도는 없어도 되며 이 정성분석에서 작도 제안·계좌 조회·주문·위험 기준 변경은 하지 마. "
                     f"분석 키: {cid}\n대시보드: {dashboard}")
+        resume = (f"투자 워크벤치 {cid} ({case['stock_key']})의 후속 논의를 이어가줘. "
+                  "프로젝트 AGENTS의 후속 협업 규칙을 읽고 analysis_collaboration_read로 현재 판단·채택한 정확한 계획 버전·미정 질문·원문 참조를 먼저 확인해줘. "
+                  "기존 보고서는 기업 조사 근거다. 7항목을 한꺼번에 묻지 말고 차트·보유 이유·반증·대응에서 이번 판단을 바꾸는 모호함만 자연스럽게 논의해줘. "
+                  "새 조사 필요 때만 stock-qualitative-analysis를 사용하고 미정 판단을 대신 채택하지 마. "
+                  "확보한 발언 원문과 합의·미정을 analysis_save_discussion으로 저장하고 계획은 analysis_save_plan으로 초안 버전을 남겨줘. "
+                  "snapshot_id와 expected_revision을 고정하며 충돌은 재조회해 조정한다. 저장 뒤 ID·버전·재조회 일치와 복귀 링크를 확인해줘. "
+                  f"계획 채택은 사용자가 화면에서 정확한 버전을 확인한다. 대시보드: {dashboard}")
         return {'analysis_key':cid,'dashboard_url':dashboard,'reopen_command':f'.\\analysis.ps1 -AnalysisKey {cid}',
+                'resume_prompt':resume, 'resume_codex_url':'codex://new?'+urlencode({'path':str(self.root),'prompt':resume}),
                 'copy_text':f'분석건 {cid}\n이 분석건의 현재 차트를 다시 봐줘.\n{dashboard}\n포트 변경/서버 종료 시 워크벤치에서 .\\analysis.ps1 -AnalysisKey {cid}',
                 'codex_url':'codex://new?'+urlencode({'path':str(self.root),'prompt':prompt}), 'prompt':prompt,
                 'qualitative_skill':QUALITATIVE_SKILL}
@@ -113,6 +124,7 @@ class AnalysisService:
         chart=self.histories.view(stocks[k],ctx['timeframe'])
         workspace=self.store.shared(k,ctx['timeframe']); financial=self.financials.read(k)
         value={'id':ident('sn_'),'case_id':case['id'],'captured_at':now(),'stock_key':k,'context':ctx,
+               'instrument':{field:stocks[k].get(field) for field in ('name','symbol','market','currency','isin_code','isin','exchange') if stocks[k].get(field) is not None},
                'workspace':workspace,'chart':chart,'financials':financial,'accounts':data['accounts'],
                'market':{k:v for k,v in data['market'].items() if k in ('state','session_dates','source','errors')},
                'geometry':geometry(workspace,chart,ctx),'authority':'saved_input_not_trade_confirmation',
@@ -177,6 +189,8 @@ class AnalysisService:
                 'adopted_drawings':added,'original_workspace':before,'edited_proposal':drawings,'authority':'drawing_only_not_trade_or_risk_adoption'},db)
 
     def record(self, case, a):
+        if set(a)-{'analysis_key','snapshot_id','kind','title','body','author','llm_opinion','user_response','sources'}:
+            raise ValueError('invalid_record_fields')
         snap=self.snapshot(case['id'],a['snapshot_id']); kind=a['kind']
         if kind not in ('report','review'): raise ValueError('invalid_record_kind')
         title=short(a['title'],200); body=short(a['body'],50000)
@@ -194,10 +208,15 @@ class AnalysisService:
         text=f"---\nanalysis_key: {case['id']}\nrecord_id: {iid}\nsnapshot_id: {snap['id']}\ntest_record: {str(case['test_record']).lower()}\n---\n\n# {title}\n\n{'[연결 검증용 — 실제 투자 분석 아님]' if case['test_record'] else '[명시 저장 기록]'}\n\n{body}\n\n## LLM 의견\n{opinion}\n\n## 사용자 응답\n"+'\n'.join(f'- {k}: {v}' for k,v in user.items())+'\n\n## 출처\n'+ '\n'.join(f"- {s.get('label','')}: {s.get('url','')} (기준 {s.get('as_of','미확인')})" for s in sources)+f"\n\n입력 SHA-256: {digest(snap)}\n작도 revision: {snap['workspace']['revision']}\n"
         value={'id':iid,'case_id':case['id'],'kind':kind,'snapshot_id':snap['id'],'created_at':now(),'title':title,'body':body,'author':a['author'],
                'llm_opinion':opinion,'user_response':user,'sources':sources,'test_record':case['test_record'],
+               'authority':'narrative_only_not_verified_identity_or_plan_adoption',
                'markdown_path':str(path.relative_to(self.root)).replace('\\','/'),'markdown_sha256':hashlib.sha256(text.encode()).hexdigest()}
         path.parent.mkdir(parents=True,exist_ok=True)
         with path.open('x',encoding='utf-8',newline='\n') as f: f.write(text)
-        with closing(self.store.connect()) as db,db: db.execute('INSERT INTO analysis_items VALUES (?,?,?,?)',(iid,case['id'],kind,packed(value)))
+        try:
+            with closing(self.store.connect()) as db,db: db.execute('INSERT INTO analysis_items VALUES (?,?,?,?)',(iid,case['id'],kind,packed(value)))
+        except Exception:
+            path.unlink(missing_ok=True)
+            raise
         return value
 
     def holding(self, case, a):
@@ -245,8 +264,16 @@ class AnalysisService:
                 'existing_risk':snap['accounts'].get('risk'),'limitations':limitations,
                 'formula':'q=floor(min(budget/(entry+cost+slippage),max_loss/(entry-stop+cost+slippage))/quantity_step)*quantity_step'}
 
-    def dispatch(self, op, a, origin):
+    def dispatch(self, op, a, origin, *, principal='legacy', session=None):
         if not isinstance(a,dict): raise ValueError('object_required')
+        if op in COLLABORATION_OPS:
+            return self.collaboration.dispatch(op, a, origin, principal, session)
+        if principal == 'risk' and op not in ('list','detail','holding_links','calculate','read'):
+            raise Forbidden('risk_cannot_write_collaboration_or_legacy_records')
+        if principal == 'risk' and op == 'read' and not a.get('snapshot_id'):
+            raise Forbidden('risk_read_requires_frozen_snapshot')
+        if op in ('decide','holding') and principal not in ('browser','legacy'):
+            raise Forbidden('local_browser_confirmation_required')
         if op=='list':
             cases=self.rows('analysis_cases')
             if a.get('stock_key'): cases=[c for c in cases if c['stock_key']==a['stock_key']]
