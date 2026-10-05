@@ -23,14 +23,27 @@ window.WorkbenchWorkspace = (() => {
       if(historyStatus)historyStatus.textContent='이전 서버 · 일/주/월 작도 공유 미적용 · 대시보드를 새로 실행하세요.';
       return;
     }
-    const drawingBars=DrawingTools.timeline(bars,frame);
+    let anchorBars=DrawingTools.withAnchorTimes(bars,frame==='1d'?bars:[],frame),anchorWarning='';
+    if(frame!=='1d'){
+      try{
+        const r=await fetch('/api/chart/'+key+'?timeframe=1d');
+        if(!r.ok)throw Error('daily_anchor_source_unavailable');
+        const daily=await r.json();
+        if(!isCurrent())return;
+        anchorBars=DrawingTools.withAnchorTimes(bars,daily.bars||[],frame);
+      }catch{
+        if(!isCurrent())return;
+      }
+      if(anchorBars.some(b=>!b.anchorTimes))anchorWarning=' · 일부 봉의 실제 발생일 미확인: 해당 봉 자동 붙임 보류';
+    }
+    const drawingBars=DrawingTools.timeline(anchorBars,frame);
     let state=packet.state,revision=packet.revision,lastSaved=JSON.stringify(state),history=[],future=[],selected=null;
     let previewDrawings=null,proposals=[];
     let saving=null,timer=null,dead=false,averageVersion=0,chart,price,drawings,averageRefs=[],averageValues={},hoverTime=null,conflict=false;
     host.innerHTML=`<div class="chart-tools" role="toolbar" aria-label="차트 작도 도구">
       <button data-tool="select" class="selected" title="선택·이동" aria-label="선택·이동"><span aria-hidden="true">↖</span><span>선택·이동</span></button><button data-tool="trend" title="추세선" aria-label="추세선"><span aria-hidden="true">╱</span><span>추세선</span></button><button data-tool="channel" title="평행 채널: 시작 하단점 → 끝 하단점 → 상단점" aria-label="평행 채널"><span aria-hidden="true">∥</span><span>평행 채널</span></button><button data-tool="horizontal" title="수평선" aria-label="수평선"><span aria-hidden="true">―</span><span>수평선</span></button><button data-tool="box" title="박스" aria-label="박스"><span aria-hidden="true">▱</span><span>박스</span></button><button data-tool="measure" title="구간 측정" aria-label="구간 측정"><span aria-hidden="true">↔</span><span>구간 측정</span></button>
       <button data-tool="riskreward" title="손익비: 진입·손절·목표 3점" aria-label="손익비"><span aria-hidden="true">▥</span><span>손익비</span></button>
-      <span class="tool-divider"></span><button data-action="snap" aria-pressed="${candleSnapEnabled}" class="${candleSnapEnabled?'selected':''}" title="마우스 날짜 봉의 시가·고가·저가·종가 중 가까운 가격에 붙습니다. Alt로 자유 선택.">봉 스냅</button><button data-action="undo" title="Ctrl+Z">실행 취소</button><button data-action="redo" title="Ctrl+Shift+Z">다시 실행</button><button data-action="delete">선택 삭제</button><button data-action="save" class="primary">저장</button>
+      <span class="tool-divider"></span><button data-action="snap" aria-pressed="${candleSnapEnabled}" class="${candleSnapEnabled?'selected':''}" title="봉의 시가·고가·저가·종가 중 가까운 가격과 실제 발생일에 붙습니다. Alt로 자유 선택.">봉 스냅</button><button data-action="undo" title="Ctrl+Z">실행 취소</button><button data-action="redo" title="Ctrl+Shift+Z">다시 실행</button><button data-action="delete">선택 삭제</button><button data-action="save" class="primary">저장</button>
       <span class="save-state" role="status" aria-live="polite"></span></div>
       <p class="drawing-hint"></p><div class="chart-controls"><details class="averages-control"><summary>이동평균선 · ${frameName} SMA</summary><div class="average-list"></div><form class="average-add"><label>추가 기간 <input name="period" type="number" min="1" max="500" value="30" required aria-label="추가 SMA 기간"></label><button>추가</button><small>1~500봉 · 최대 6개 · 종가 기준</small></form><p class="average-status" role="status"></p></details><details class="drawing-control"><summary>작도 목록·정밀 편집 <span class="drawing-count"></span></summary><div class="drawing-list"></div><div class="drawing-editor"></div></details></div>`;
     const q=s=>host.querySelector(s),qa=s=>host.querySelectorAll(s);
@@ -152,7 +165,7 @@ window.WorkbenchWorkspace = (() => {
       renderSmaLegend();renderPriceLegend(hoverTime);
     });
     drawings=DrawingTools.attach({element:plot,chart,series:price,bars:drawingBars,currency,timeframe:frame,snapEnabled:candleSnapEnabled,drawingLimit:packet.drawing_limit||300,getDrawings:()=>previewDrawings||state.drawings,getOverlays:()=>proposals,
-      onHint:text=>{q('.drawing-hint').textContent=text+' · 봉 스냅: 마우스 날짜의 시가·고가·저가·종가에 근접 붙임 · 과거 종가는 점선 참고만 · Alt로 자유 선택 · 마지막 봉 오른쪽도 작도 가능 · 미래 5년 달력 공간(일봉: 평일, 휴장일 미반영)';},
+      onHint:text=>{q('.drawing-hint').textContent=text+' · 봉 스냅: 시가·고가·저가·종가의 실제 발생일·가격 고정 · 과거 종가는 점선 참고만 · Alt로 자유 선택 · 마지막 봉 오른쪽도 작도 가능 · 미래 5년 달력 공간(일봉: 평일, 휴장일 미반영)'+anchorWarning;},
       onSelect:id=>{if(id){host.hidden=false;document.querySelector('#stock-tools-toggle')?.setAttribute('aria-expanded','true');}selected=id;window.dispatchEvent(new Event('workbench-context'));qa('[data-tool]').forEach(b=>b.classList.toggle('selected',b.dataset.tool==='select'));refresh();},
       onChange:(next,options={})=>{
         if(options.preview){previewDrawings=next;return;}

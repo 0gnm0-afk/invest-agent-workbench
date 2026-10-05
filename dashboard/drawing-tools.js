@@ -42,6 +42,36 @@ window.DrawingTools = (() => {
     // Preserve distinct dates even when both anchors fall inside one week/month.
     return frame==='1d'?i+fraction:i-.4+.8*fraction;
   }
+  // Map aggregate OHLC to the actual daily session, without changing source bars.
+  function withAnchorTimes(bars,daily,frame='1d') {
+    if(frame==='1d')return bars.map(b=>({...b,anchorTimes:Object.fromEntries(['open','high','low','close'].map(k=>[k,b.date]))}));
+    const groups=new Map();
+    for(const b of daily){
+      const d=new Date(b.date+'T00:00:00Z');
+      if(frame==='1w')d.setUTCDate(d.getUTCDate()-(d.getUTCDay()+6)%7);else d.setUTCDate(1);
+      const key=d.toISOString().slice(0,10);
+      if(!groups.has(key))groups.set(key,[]);
+      groups.get(key).push(b);
+    }
+    return bars.map(b=>{
+      const rows=groups.get(b.date);
+      if(!rows?.length)return {...b};
+      const first=rows[0],last=rows.at(-1);
+      const high=rows.reduce((a,v)=>v.high>a.high?v:a);
+      const low=rows.reduce((a,v)=>v.low<a.low?v:a);
+      // Refuse to join different snapshots/bases or incomplete source intervals.
+      if(first.date!==b.first_session||last.date!==b.last_session||
+         first.open!==b.open||last.close!==b.close||high.high!==b.high||low.low!==b.low||
+         (b.sessions!=null&&b.sessions!==rows.length))return {...b};
+      return {...b,anchorTimes:{open:first.date,high:high.date,low:low.date,close:last.date}};
+    });
+  }
+  function pointIndex(point,bars,frame='1d') {
+    const logical=index(point.time,bars,frame);
+    if(logical==null||frame==='1d')return logical;
+    const i=Math.round(logical),b=bars[i];
+    return b&&Object.keys(b.anchorTimes||{}).some(k=>b.anchorTimes[k]===point.time&&b[k]===point.price)?i:logical;
+  }
   function coordinate(scale, logical) {
     const base=Math.floor(logical),left=scale.logicalToCoordinate(base),right=scale.logicalToCoordinate(base+1);
     return left==null||right==null?null:left+(logical-base)*(right-left);
@@ -72,7 +102,7 @@ window.DrawingTools = (() => {
   }
   const priceLabels = {open:'시가',high:'고가',low:'저가',close:'종가'};
   // Only the candle under the pointer can supply a drawing anchor.
-  function candleSnap(bars,scale,series,logical,y,previous=null) {
+  function candleSnap(bars,scale,series,logical,y,previous=null,frame='1d') {
     if(!Number.isFinite(logical)||!Number.isFinite(y))return null;
     const i=Math.round(logical),b=bars[i],x=scale.logicalToCoordinate(i);
     if(!b||b.projected||x==null||x<0||x>scale.width())return null;
@@ -80,7 +110,9 @@ window.DrawingTools = (() => {
     for(const field of Object.keys(priceLabels)){
       const price=b[field];if(!Number.isFinite(price)||price<=0)continue;
       const cy=series.priceToCoordinate(price);if(cy==null||!Number.isFinite(cy))continue;
-      const c={i,time:b.date,field,price,distance:Math.abs(y-cy)};
+      const time=frame==='1d'?b.date:b.anchorTimes?.[field];
+      if(!time)continue;
+      const c={i,time,field,price,distance:Math.abs(y-cy)};
       if(!best||c.distance<best.distance)best=c;
     }
     // Release on date/nearest-price changes; pixels are zoom independent.
@@ -112,9 +144,9 @@ window.DrawingTools = (() => {
     function node(tag,attrs,parent=svg) {
       const n=document.createElementNS(NS,tag);for(const [k,v] of Object.entries(attrs))n.setAttribute(k,v);parent.append(n);return n;
     }
-    function xy(p) {const i=index(p.time,bars,timeframe);return i==null?null:{x:coordinate(chart.timeScale(),i),y:series.priceToCoordinate(p.price)};}
+    function xy(p,exact=false) {const i=exact?index(p.time,bars,timeframe):pointIndex(p,bars,timeframe);return i==null?null:{x:coordinate(chart.timeScale(),i),y:series.priceToCoordinate(p.price)};}
     function channelAbove(points) {
-      const p=points.map(xy);
+      const p=project(points,'channel');
       return p.length===3&&p.every(v=>v&&v.x!=null&&v.y!=null)&&p[0].x!==p[1].x&&channel(p)[3].y<p[0].y;
     }
     function point(event) {
@@ -122,21 +154,27 @@ window.DrawingTools = (() => {
       const logical=chart.timeScale().coordinateToLogical(x), price=series.coordinateToPrice(y);
       if(logical==null||price==null||price<=0||x<0||y<0||x>r.width||y>r.height){snapped=null;reference=null;return null;}
       const editing=count[mode]||drag?.handle!=null;
-      snapped=snapEnabled&&!event.altKey&&editing?candleSnap(bars,chart.timeScale(),series,logical,y,snapped):null;
+      snapped=snapEnabled&&!event.altKey&&editing?candleSnap(bars,chart.timeScale(),series,logical,y,snapped,timeframe):null;
       reference=editing?closeReference(bars,chart.timeScale(),series,logical,y):null;
-      return {time:timeAt(logical,bars,timeframe),price:snapped?snapped.price:price};
+      return {time:snapped?snapped.time:timeAt(logical,bars,timeframe),price:snapped?snapped.price:price};
+    }
+    function project(points,kind) {
+      let p=points.map(v=>xy(v));
+      // Keep different dates inside one aggregate candle distinguishable.
+      if(['trend','channel'].includes(kind)&&p[0]&&p[1]&&p[0].x===p[1].x&&points[0].time!==points[1].time)p=points.map(v=>xy(v,true));
+      return p;
     }
     function render() {
       if(removed)return;
       const w=chart.timeScale().width(),h=chart.panes()[0].getHeight();
-      const all=getDrawings().concat(getOverlays()).map(d=>({d,p:d.points.map(xy)})).sort((a,b)=>Number(a.d.id===selected)-Number(b.d.id===selected));
+      const all=getDrawings().concat(getOverlays()).map(d=>({d,p:project(d.points,d.kind)})).sort((a,b)=>Number(a.d.id===selected)-Number(b.d.id===selected));
       if(draft.length) {
         const ps=[...draft];if(hover&&ps.length<count[mode])ps.push(hover);
         // Keep the lower baseline visible while the upper anchor is being chosen.
         if(mode==='channel'&&ps.length>=2&&!channelAbove(ps)) {
           const base=ps.slice(0,2);
-          all.push({d:{kind:'trend',points:base,color:'#218775',width:2,extend:false},p:base.map(xy)});
-        } else if(ps.length===count[mode])all.push({d:{kind:mode,points:ps,color:'#218775',width:2,extend:false},p:ps.map(xy)});
+          all.push({d:{kind:'trend',points:base,color:'#218775',width:2,extend:false},p:project(base,'trend')});
+        } else if(ps.length===count[mode])all.push({d:{kind:mode,points:ps,color:'#218775',width:2,extend:false},p:project(ps,mode)});
       }
       const sig=JSON.stringify([w,h,all,mode,selected,draft,hover,snapped,reference]);
       if(signature!==sig) {
@@ -283,5 +321,5 @@ window.DrawingTools = (() => {
     setMode('select');frame=requestAnimationFrame(render);
     return {setMode,select,cancel,setSnapEnabled(value){snapEnabled=!!value;snapped=null;reference=null;hover=null;signature='';},destroy(){removed=true;cancelAnimationFrame(frame);svg.remove();}};
   }
-  return {attach,measure,riskReward,channel,labels,count,index,timeAt,coordinate,timeline,candleSnap,closeReference};
+  return {attach,measure,riskReward,channel,labels,count,index,timeAt,coordinate,timeline,candleSnap,closeReference,withAnchorTimes,pointIndex};
 })();

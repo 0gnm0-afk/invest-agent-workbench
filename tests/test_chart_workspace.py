@@ -160,7 +160,7 @@ class WorkspaceHTTP(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.temp=tempfile.TemporaryDirectory();cls.root=Path(cls.temp.name)
-        stocks={'KR:A':{'bars':[{'date':'2026-09-21','close':100.1},{'date':'2026-09-22','close':100.2}]}}
+        stocks={'KR:A':{'market':'KR','symbol':'A','bars':[{'date':'2026-09-21','close':100.1},{'date':'2026-09-22','close':100.2}]}}
         cls.server=ThreadingHTTPServer(('127.0.0.1',0),handler_for({},stocks,cls.root,'test-token',cls.root/'state.sqlite3'))
         cls.thread=threading.Thread(target=cls.server.serve_forever,daemon=True);cls.thread.start()
     @classmethod
@@ -185,6 +185,22 @@ class WorkspaceHTTP(unittest.TestCase):
     def test_invalid_payload_and_size(self):
         self.assertEqual(self.call('/api/chart-state/KR%3AA','POST','{}',self.headers())[0],400)
         self.assertEqual(self.call('/api/chart-state/KR%3AA','POST',' '*131073,self.headers())[0],413)
+    def test_ohlc_anchor_dates_survive_every_timeframe_save(self):
+        points = [('open', '2025-04-07', 141.55), ('high', '2025-04-09', 159.55),
+                  ('low', '2025-04-07', 140.53), ('close', '2025-04-11', 157.14)]
+        for source in ('1d', '1w', '1mo'):
+            route = '/api/chart-state/KR%3AA?timeframe=' + source
+            _, current = self.call(route)
+            state = defaults()
+            state['drawings'] = [dict(id=field, kind='horizontal', points=[dict(time=day, price=price)],
+                                     color='#218775', width=2, extend=False) for field, day, price in points]
+            body = json.dumps(dict(revision=current['revision'], state=state))
+            self.assertEqual(self.call(route, 'POST', body, self.headers())[0], 200)
+            for target in ('1d', '1w', '1mo'):
+                code, restored = self.call('/api/chart-state/KR%3AA?timeframe=' + target)
+                self.assertEqual(code, 200)
+                self.assertEqual(restored['state']['drawings'], state['drawings'])
+
     def test_sma_endpoint(self):
         status,data=self.call('/api/averages/KR%3AA?periods=2');self.assertEqual(status,200);self.assertAlmostEqual(data['2'][1]['value'],100.15)
         self.assertEqual(self.call('/api/averages/KR%3AA?periods=0')[0],400)
