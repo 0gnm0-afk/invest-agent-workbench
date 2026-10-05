@@ -61,6 +61,9 @@ def project_plan(value, snapshot, *, scenario_id, assumptions):
     result = {'ref': ref, 'position_id': None, 'conditions': [], 'price': None, 'path': [], 'steps': [],
               'blockers': [], 'response_blockers': [], 'record_blockers': deepcopy(value.get('blockers', [])),
               'assumptions_hash': fingerprint(assumptions), 'response_mode': None}
+    result['limitations'] = deepcopy(value.get('limitations', []))
+    for drawing in value.get('drawing_evaluations', []):
+        result['limitations'].extend(drawing.get('basis', {}).get('limitations', []))
     stable = identity.get('stable_id')
     candidates = [p for p in snapshot['positions'] if stable and p.get('stable_id') == stable and
                   p.get('account') == plan.get('account_alias') and p.get('market') == identity.get('market') and
@@ -98,6 +101,7 @@ def project_plan(value, snapshot, *, scenario_id, assumptions):
             condition.update(kind='drawing', drawing={'id': drawing['drawing_id'], 'revision': drawing['workspace_revision'],
                 'geometry_version': drawing['geometry_version'], 'workspace': deepcopy(value['snapshot']['workspace']),
                 'price_scale': value['snapshot'].get('context', {}).get('price_scale'),
+                'chart': deepcopy(value['snapshot']['chart']),
                 'edge': {'line': 'line_price', 'other_line': 'other_line_price'}.get(drawing['line'])})
             condition['price_basis'] = drawing['price_basis']
         result['conditions'].append(condition)
@@ -107,8 +111,18 @@ def project_plan(value, snapshot, *, scenario_id, assumptions):
         result['response_blockers'].append('scenario_response_mode_required')
         return result
     allocation = plan['allocation']
-    if allocation['basis'] != 'units' or allocation['quantity'] is None:
-        result['response_blockers'].append('allocation_units_or_explicit_basis_resolution_required')
+    if allocation['basis'] not in ('units', 'initial', 'current_remaining') or allocation['quantity'] is None:
+        result['response_blockers'].append('allocation_basis_required')
+    resolved_basis = assumptions.get('allocation_basis') if allocation['basis'] == 'units' else allocation['basis']
+    if any(c['quantity']['basis'] in ('initial_fraction', 'remaining_fraction') for c in plan['conditions']) and resolved_basis not in ('initial', 'current_remaining'):
+        result['response_blockers'].append('allocation_lifecycle_assumption_required')
+    if resolved_basis == 'current_remaining' and any(c['quantity']['basis'] == 'initial_fraction' for c in plan['conditions']):
+        result['response_blockers'].append('initial_allocation_unknown_for_remaining_basis')
+    if assumptions.get('cost_policy') == 'record_total':
+        if s.get('cost') is None:
+            result['response_blockers'].append('scenario_total_cost_required')
+        else:
+            result['total_cost'] = {'id': r['id'], 'account': p['account'], 'currency': s['currency'], 'amount': s['cost']}
     if not s['price_path']:
         result['response_blockers'].append('declared_price_path_required')
         return result
@@ -148,18 +162,23 @@ def project_plan(value, snapshot, *, scenario_id, assumptions):
     return result
 
 
-def save_review(rpc, context, result, assumptions, *, title, body):
+def save_review(rpc, context, result, assumptions, *, title, body, related_contexts=()):
     """Explicit save only. Conflicts propagate to reread; never silently retry."""
     validate_input(context)
     if (fingerprint(assumptions.get('account_snapshot')) != result.get('snapshot_hash') or
             fingerprint(assumptions.get('scenario')) != result.get('scenario_hash')):
         raise ValueError('frozen_calculation_inputs_required')
     record = context['plan_record']
+    contexts = [context, *related_contexts]
+    for other in contexts:
+        validate_input(other)
+        if other['analysis_key'] != context['analysis_key']:
+            raise ValueError('review_context_case_mismatch')
     args = {'contract_version': CONTRACT, 'analysis_key': context['analysis_key'],
             'snapshot_id': context['snapshot_id'], 'expected_revision': assumptions['expected_revision'],
-            'title': title, 'body': body, 'plan_record_ids': [record['id']],
+            'title': title, 'body': body, 'plan_record_ids': [c['plan_record']['id'] for c in contexts],
             'calculation': {'code_version': result['calculator_version'],
-                            'input_snapshot_ids': [context['snapshot_id']],
+                            'input_snapshot_ids': list(dict.fromkeys(c['snapshot_id'] for c in contexts)),
                             'assumptions': deepcopy(assumptions), 'result': deepcopy(result)},
             'references': [{'kind': 'record', 'reference': record['id'], 'text': None, 'speaker': 'source'}]}
     saved = rpc('risk_review_save', args)
@@ -193,7 +212,8 @@ def assemble(projections, assumptions):
     steps.sort(key=lambda s: (times.get(s['path_id'], instant(assumptions['horizon'])), s['priority']))
     return {'id': assumptions['id'], 'version': assumptions['version'], 'horizon': assumptions['horizon'],
             'fx_to_base': deepcopy(assumptions.get('fx_to_base', {})), 'prices': prices, 'plan_refs': refs,
-            'response': {'path': paths, 'steps': steps, 'blockers': blockers, 'cost_policy': assumptions.get('cost_policy')}}
+            'response': {'path': paths, 'steps': steps, 'blockers': blockers, 'cost_policy': assumptions.get('cost_policy'),
+                         'total_costs': [p['total_cost'] for p in projections if p.get('total_cost')]}}
 
 
 def account_projection(bundle, *, evaluated_at):

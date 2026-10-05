@@ -8,6 +8,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
@@ -139,7 +140,12 @@ class BrokerBoundary(unittest.TestCase):
 class HttpBoundary(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.server = ThreadingHTTPServer(('127.0.0.1', 0), handler_for({'market': {'state':'failed'}}, {}, Path('.'), 'test'))
+        cls.temp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.temp.cleanup)
+        dependencies = {'histories': SimpleNamespace(saved=SimpleNamespace(stocks={}, markets={})),
+                        'financials': SimpleNamespace()}
+        cls.server = ThreadingHTTPServer(('127.0.0.1', 0), handler_for({'market': {'state':'failed'}}, {}, Path('.'), 'test',
+            Path(cls.temp.name)/'chart.sqlite3', analysis_dependencies=dependencies))
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True);cls.thread.start()
 
     @classmethod

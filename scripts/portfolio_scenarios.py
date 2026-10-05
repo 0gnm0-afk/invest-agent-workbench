@@ -8,7 +8,7 @@ from decimal import Decimal
 from risk_values import number, instant, fresh, fingerprint
 from risk_conditions import evaluate
 
-VERSION = 'portfolio-scenarios-v1'
+VERSION = 'portfolio-scenarios-v2'
 ZERO = Decimal(0)
 
 
@@ -151,7 +151,7 @@ def _respond(snapshot, scenario, prepared, cash, rows, issues):
             raise ValueError('response_path_and_steps_required')
         if response.get('blockers'):
             raise ValueError('shared_plan_inputs_incomplete:' + ';'.join(response['blockers']))
-        if response.get('cost_policy') not in ('excluded', 'explicit'):
+        if response.get('cost_policy') not in ('excluded', 'explicit', 'record_total'):
             raise ValueError('cost_assumption_required')
         path = response.get('path')
         if not isinstance(path, list):
@@ -191,6 +191,10 @@ def _respond(snapshot, scenario, prepared, cash, rows, issues):
                 raise ValueError('response_order_or_fill_overlap')
             observation = deepcopy(node['observations'][pid])
             observation['evaluated_at'] = node['at']
+            if step['condition'].get('kind') == 'drawing' and step['condition']['drawing'].get('chart'):
+                # Evaluate the exact frozen A chart, never a replacement supplied by a caller.
+                observation['chart'] = deepcopy(step['condition']['drawing']['chart'])
+                observation['drawing_revision'] = step['condition']['drawing']['revision']
             if instant(observation['as_of']) != at:
                 raise ValueError('path_observation_time_mismatch')
             if observation.get('currency') != p['position']['currency'] or observation.get('price_basis') != p['position']['price_basis']:
@@ -250,6 +254,18 @@ def _respond(snapshot, scenario, prepared, cash, rows, issues):
                            'side': step['side'], 'quantity': str(qty), 'condition_price': observation['price'],
                            'fill_price': str(fill_price), 'fill_at': fill['at'], 'cash_delta': str(delta), 'fee': str(fee)})
             last_times[pid] = fill_at
+        if response['cost_policy'] == 'record_total':
+            costs = response.get('total_costs', [])
+            if len({c['id'] for c in costs}) != len(costs):
+                raise ValueError('duplicate_scenario_total_cost')
+            for cost in costs:
+                amount = number(cost['amount'])
+                key = (cost['account'], cost['currency'])
+                if cash.get(key, ZERO) < amount:
+                    raise ValueError('insufficient_cash_for_total_cost')
+                cash[key] = cash.get(key, ZERO) - amount
+                deltas[key] = deltas.get(key, ZERO) - amount
+                ledger.append({'state': 'scenario_total_cost', 'source_ref': cost['id'], 'fee': str(amount), 'currency': cost['currency']})
         for row in rows:
             if row['id'] in prepared:
                 p = prepared[row['id']]

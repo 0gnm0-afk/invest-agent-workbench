@@ -32,7 +32,7 @@ def integration_fixture():
     snapshot['cash'][1]['account'] = 'synthetic-us'
     horizon = '2026-10-30T16:00:00+09:00'
     assumptions = {'id': 'derived-example', 'version': 1, 'horizon': horizon, 'fx_to_base': {'KRW': '1', 'USD': '1100'},
-                   'cost_policy': 'excluded', 'path_observations': {}, 'fills': {}}
+                   'cost_policy': 'excluded', 'allocation_basis': 'initial', 'path_observations': {}, 'fills': {}}
     for day in ('2026-10-06', '2026-10-30'):
         assumptions['path_observations'][day] = {'snapshot_id': 'synthetic-'+day, 'as_of': day+'T06:00:00+09:00',
           'currency': 'USD', 'frame': '1d', 'price_basis': 'raw', 'complete': True, 'session': day,

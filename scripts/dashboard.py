@@ -18,10 +18,11 @@ from financial_summary import selected_stock
 from chart_workspace import WorkspaceStore, Conflict, moving_averages
 from analysis_service import AnalysisService
 from analysis_collaboration import Forbidden
+from risk_service import RiskService, OPS as RISK_OPS
 
 
 def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None, daily_status=None, daily_retry=None,
-                analysis_capabilities=None, analysis_dependencies=None):
+                analysis_capabilities=None, analysis_dependencies=None, risk_options=None):
     initial_view = (data, stocks)
     store = WorkspaceStore(workspace_path or ROOT / "runtime/chart-workspaces.sqlite3")
     histories = (analysis_dependencies['histories'] if analysis_dependencies else
@@ -33,6 +34,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
     financials = (analysis_dependencies['financials'] if analysis_dependencies else
                   FinancialStore((Path(workspace_path).parent if workspace_path else ROOT / 'runtime') / 'financials'))
     analyses = AnalysisService(store, histories, financials, lambda: views['view'] if views is not None else initial_view, ROOT if workspace_path is None else Path(workspace_path).parent)
+    risks = RiskService(analyses, lambda: views['view'] if views is not None else initial_view, **(risk_options or {}))
     capabilities = dict(analysis_capabilities or {})
     if set(capabilities) - {'collaboration', 'risk'} or any(not isinstance(v,str) or not v or v == token for v in capabilities.values()) or len(set(capabilities.values())) != len(capabilities):
         raise ValueError('invalid_analysis_capabilities')
@@ -125,7 +127,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                 if value is None:
                     value = {'state': 'unavailable', 'reason': 'saved_price_series_missing', 'bars': []}
                 return self.send(json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8'))
-            names = {'/collaboration.js': 'collaboration.js', '/analysis.js': 'analysis.js', '/': 'index.html', '/app.js': 'app.js', '/tooltips.js': 'tooltips.js', '/financials.js': 'financials.js', '/financials.css': 'financials.css', '/style.css': 'style.css',
+            names = {'/risk-workbench.js': 'risk-workbench.js', '/risk-workbench.css': 'risk-workbench.css', '/collaboration.js': 'collaboration.js', '/analysis.js': 'analysis.js', '/': 'index.html', '/app.js': 'app.js', '/tooltips.js': 'tooltips.js', '/financials.js': 'financials.js', '/financials.css': 'financials.css', '/style.css': 'style.css',
                      '/stock-chart.js': 'stock-chart.js', '/drawing-tools.js': 'drawing-tools.js', '/chart-workspace.js': 'chart-workspace.js', '/chart-tools.css': 'chart-tools.css', '/format.js': 'format.js', '/charts.js': 'charts.js', '/workbench.png': 'workbench.png',
                      '/vendor/lightweight-charts.js': 'vendor/lightweight-charts.js',
                      '/vendor/NOTICE': 'vendor/NOTICE', '/vendor/LICENSE': 'vendor/LICENSE'}
@@ -196,8 +198,9 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                             if candidate and secrets.compare_digest(candidate.value, browser_session): principal = 'browser'
                         if body['op'] in ('decide', 'holding') and principal != 'browser':
                             raise Forbidden('local_browser_confirmation_required')
-                        result = analyses.dispatch(body['op'], body['arguments'], 'http://' + expected,
-                                                   principal=principal, session=browser_session if principal == 'browser' else None)
+                        service = risks if body['op'] in RISK_OPS else analyses
+                        result = service.dispatch(body['op'], body['arguments'], 'http://' + expected,
+                                                   principal=principal, session=browser_session if principal == 'browser' else role)
                         return self.send(json.dumps(result, ensure_ascii=False, allow_nan=False).encode('utf-8'))
                     except Forbidden as exc:
                         return self.send(json.dumps({'error':str(exc)}).encode(), status=403)

@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def loading_page(assets):
     page = (assets / 'index.html').read_text(encoding='utf-8')
     page = re.sub(r'<script\b[^>]*>.*?</script>', '', page, flags=re.S)
-    page = re.sub(r'<link\b[^>]*href="/(?:chart-tools|financials)\.css"[^>]*>', '', page)
+    page = re.sub(r'<link\b[^>]*href="/(?:chart-tools|financials|risk-workbench)\.css"[^>]*>', '', page)
     return page.replace('</head>', '<script defer src="/startup.js"></script></head>').replace(
         '<div class="loading">저장 자료를 불러오고 있습니다…</div>',
         '<section aria-live="polite"><p class="eyebrow">PRIVATE WORKBENCH</p>'

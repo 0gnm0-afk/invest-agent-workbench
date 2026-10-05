@@ -294,6 +294,8 @@ def account_view(config, output, refresh=True, risk_market=None):
     result.update(accounts=snapshot['accounts'], as_of=snapshot['as_of'],
                   snapshot_sha256=sha(normalized_path), limitations=result['limitations'] + snapshot.get('limitations', []))
     result['stale'] = (datetime.now(timezone.utc) - datetime.fromisoformat(snapshot['as_of'])).total_seconds() > 86400
+    from risk_service import saved_account_input
+    result['scenario_input'] = saved_account_input(snapshot)
     return result
 
 
