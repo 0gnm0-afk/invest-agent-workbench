@@ -31,6 +31,19 @@ window.WorkbenchCharts = (() => {
     options.onReady?.(chart, refs);
     mounted.push(chart); return chart;
   }
+  // Freeze the fitted price range before the library starts its native XY drag.
+  // Drawing SVGs, axes and the volume pane keep their own gestures.
+  function enableFreePan(el, chart, series) {
+    function beginPan(e) {
+      if (e.button !== 0 || e.isPrimary === false || e.target.tagName !== 'CANVAS') return;
+      const rect = el.getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
+      if (x < 0 || x >= chart.timeScale().width() || y < 0 || y >= chart.panes()[0].getHeight()) return;
+      series.priceScale().applyOptions({autoScale: false});
+    }
+    // Capture runs before the chart's mouse handler; it never consumes the event.
+    el.addEventListener('pointerdown', beginPan, true);
+    return () => el.removeEventListener('pointerdown', beginPan, true);
+  }
   function lineData(rows, key, scale = 1) { return rows.map(r => ({time: r.date, ...(r[key] == null ? {} : {value: r[key] * scale})})); }
-  return {create, clear, remove, lineData};
+  return {create, clear, remove, lineData, enableFreePan};
 })();
