@@ -164,6 +164,7 @@ class TrailingStore:
                                                  high=latest['high'], line=None, history=[], last_date=None, below=False)
                             if state['active']:
                                 pending = [b for b in bars if b['date'] >= state['started_on'] and b['date'] > (state.get('last_date') or '')]
+                                breach_pending = False
                                 for bar in pending:
                                     # Additional purchases preserve both H and the previous line.
                                     state['high'] = max(state['high'], bar['high'])
@@ -171,12 +172,16 @@ class TrailingStore:
                                     floor = cost if bar['date'] == latest['date'] else previous_cost
                                     state['line'] = max(state.get('line') or floor, floor, candidate)
                                     below = bar['close'] <= state['line']
+                                    if below and not state.get('below', False):
+                                        breach_pending = True
+                                    elif not below:
+                                        breach_pending = False
                                     idx = bars.index(bar)
                                     prior = bars[idx-1] if idx else None
                                     ma_cross = prior is not None and prior['ma5'] is not None and prior['close'] > prior['ma5'] and bar['close'] <= bar['ma5']
                                     # Backlogged bars rebuild the state; only the latest completed session issues new warnings.
                                     if bar['date'] == latest['date']:
-                                        for kind, triggered, threshold in [('trailing', below and not state.get('below',False), state['line']), ('ma5',ma_cross,bar['ma5'])]:
+                                        for kind, triggered, threshold in [('trailing', below and breach_pending, state['line']), ('ma5',ma_cross,bar['ma5'])]:
                                             if triggered:
                                                 event_id = hashlib.sha256(f"{key}|{state['generation']}|{bar['date']}|{kind}".encode()).hexdigest()
                                                 event = dict(id=event_id, key=key, account=alias, market=p['market'], symbol=p['symbol'], currency=p['currency'],

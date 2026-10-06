@@ -74,6 +74,10 @@ class Warnings(unittest.TestCase):
  def test_no_old_alert_replay(self):
   self.run_update();self.add(80);self.add(100)
   self.assertFalse(self.run_update()['events'])
+ def test_missed_breach_still_below_alerts_latest_once(self):
+  self.run_update();self.add(80);self.add(81)
+  r=self.run_update();self.assertEqual(len(r['events']),1);self.assertEqual(r['events'][0]['date'],self.bars[-1]['date'])
+  self.assertEqual(self.run_update()['events'],r['events'])
  def test_account_isolation(self):
   second=copy.deepcopy(self.bundle['accounts'][0]);second['alias']='b';self.bundle['accounts'].append(second)
   self.run_update();self.add(80);r=self.run_update();self.assertEqual(len(r['events']),2)
