@@ -57,7 +57,8 @@ class DashboardDaily:
             # A later saved recalculation is valid display evidence, not a successful retry.
             display = self.daily.display_run() or record.get('display_run')
             update = self.daily.public({**record, 'display_run': display})
-            refresh = initial and not retry and not self.saved_accounts and not record.get('reused')
+            account_stale = self.views['view'][0].get('accounts', {}).get('stale', False)
+            refresh = initial and not retry and not self.saved_accounts and (not record.get('reused') or account_stale)
             if display == self.display_run and not refresh:
                 data, stocks = self.views['view']
                 next_view = ({**data, 'daily_update': update}, stocks)

@@ -100,6 +100,19 @@ class RetryFixture(unittest.TestCase):
 
 
 class DashboardRetry(RetryFixture):
+    def test_initial_open_refreshes_stale_accounts_even_when_scheduled_market_reused(self):
+        self.views['view'][0]['accounts'] = {'stale':True}
+        self.controller(saved_accounts=False)
+        self.assertEqual(len(self.builds),1)
+        self.assertTrue(self.builds[0]['refresh'])
+        self.assertEqual(self.calls,[])
+
+    def test_saved_accounts_remain_read_only_when_stale(self):
+        self.views['view'][0]['accounts'] = {'stale':True}
+        self.controller(saved_accounts=True)
+        self.assertEqual(self.builds,[])
+
+
     def test_failed_receipt_is_reused_until_explicit_retry_then_new_view_published(self):
         controller = self.controller(saved_accounts=False)
         first = controller.status()

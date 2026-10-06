@@ -131,7 +131,11 @@ class Launch(unittest.TestCase):
         (folder/'daily_market.py').write_text(program)
         self.gate.folder.mkdir(parents=True,exist_ok=True)
         progress=[];got=self.gate.execute({**self.plan(NOW),'prior_run':old['output']},progress.append)
-        args=json.loads((self.root/'args.json').read_text());self.assertIn('--session-cutoff',args);self.assertIn('--evaluated-at',args);self.assertIn(old['output'],args);self.assertEqual(got,new);self.assertEqual(progress[0]['stage'],'collection')
+        args=json.loads((self.root/'args.json').read_text());self.assertIn('--session-cutoff',args);self.assertIn('--evaluated-at',args);self.assertIn(old['output'],args);self.assertEqual(got,{**new,"trailing_state":"unavailable"});self.assertEqual(progress[0]['stage'],'collection')
+        with patch('trailing_warnings.refresh_saved',return_value={'events':[]}) as refresh:
+            got=self.gate.execute({**self.plan(NOW),'prior_run':old['output']},lambda _:None)
+        self.assertEqual(got['trailing_state'],'evaluated')
+        refresh.assert_called_once_with(self.root,new['output'],self.targets)
 
 class DashboardViews(unittest.TestCase):
     def test_published_view_and_update_status_are_read_only(self):

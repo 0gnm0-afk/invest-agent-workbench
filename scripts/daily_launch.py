@@ -163,7 +163,7 @@ class DailyLaunch:
                     record.update(plan)
                     self.save(record)
                     run = self.runner({**plan,'prior_run':record['display_run']}, progress)
-                    record.update(run=run.get('output'), state=run['state'], stage='finished')
+                    record.update(run=run.get('output'), state=run['state'], stage='finished', trailing_state=run.get('trailing_state'))
                     display = self.usable_run(run.get('output'))
                     if display:
                         record['display_run'] = display
@@ -225,10 +225,17 @@ class DailyLaunch:
                 process.wait()
                 if result is None or process.returncode not in (0,1,2):
                     raise RuntimeError('market_worker_failed')
+        if result.get('state') in ('succeeded', 'partial'):
+            try:
+                from trailing_warnings import refresh_saved
+                refresh_saved(self.root, result['output'], plan['targets'])
+                result['trailing_state'] = 'evaluated'
+            except Exception:
+                result['trailing_state'] = 'unavailable'
         return result
 
     def public(self, record):
-        result={k:record.get(k) for k in ('day','state','stage','targets','started_at','finished_at','error','reused','manual_retry')}
+        result={k:record.get(k) for k in ('day','state','stage','targets','started_at','finished_at','error','reused','manual_retry','trailing_state')}
         result['attempt_id'] = attempt_id(record)
         result['display_updated'] = False
         result['display_stale'] = bool(record.get('display_run') and record.get('display_run') != record.get('run'))

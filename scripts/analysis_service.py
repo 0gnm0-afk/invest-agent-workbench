@@ -2,7 +2,7 @@
 from contextlib import closing
 from copy import deepcopy
 from datetime import datetime, timezone
-from decimal import Decimal, ROUND_FLOOR
+from decimal import Decimal
 import hashlib
 import json
 from pathlib import Path
@@ -110,10 +110,7 @@ class AnalysisService:
                   "기존 보고서는 기업 조사 근거다. 7항목을 한꺼번에 묻지 말고 차트·보유 이유·반증·대응에서 이번 판단을 바꾸는 모호함만 자연스럽게 논의해줘. "
                   "새 조사 필요 때만 stock-qualitative-analysis를 사용하고 미정 판단을 대신 채택하지 마. "
                   "확보한 발언 원문과 합의·미정을 analysis_save_discussion으로 저장하고 계획은 analysis_save_plan으로 초안 버전을 남겨줘. "
-                  "계산용 시나리오는 확인된 조건에서 네가 만들어 저장해줘. 사용자가 평가일·가격·경로·환율·비용 폼을 일일이 채우게 하지 말고, "
-                  "아직 정하지 않은 값은 null로 유지하며 계산을 막는 핵심 미정만 하나씩 물어줘. 조건 가격을 미래 평가가나 체결가로 바꾸지 마. "
-                  "저장 후 invest_risk의 risk_overview로 같은 버전을 확인하고 가능한 시나리오는 risk_calculate로 hypothetical 계산해줘. "
-                  "결과의 누락·해시를 확인해 필요하면 risk_save로 검토를 기록하고 재조회해줘. 전체 금액이 보류되면 그 이유를 말해줘. "
+                  "가격 경고는 저장 일봉의 트레일링·MA5 자동 판정이다. 폐기한 시나리오 계산 도구를 호출하지 말고 과거 계획·위험 검토는 기록으로 보존해줘. "
                   "snapshot_id와 expected_revision을 고정하며 충돌은 재조회해 조정한다. 저장 뒤 ID·버전·재조회 일치와 복귀 링크를 확인해줘. "
                   f"계획 채택은 사용자가 화면에서 정확한 버전을 확인한다. 대시보드: {dashboard}")
         return {'analysis_key':cid,'dashboard_url':dashboard,'reopen_command':f'.\\analysis.ps1 -AnalysisKey {cid}',
@@ -236,39 +233,9 @@ class AnalysisService:
                'thesis':short(a['thesis'],12000),'invalidation':short(a['invalidation'],12000),
                'confirmation':short(a['confirmation'],4000),'author':'user','test_record':case['test_record'],'authority':'user_attested_link_to_observed_holding_not_execution_evidence'})
 
-    def calculate(self, case, a):
-        from invest_agent.trading.portfolio import number
-        snap=self.snapshot(case['id'],a['snapshot_id']); p=a['inputs']
-        allowed={'entry','stop','budget','max_loss','currency','quantity_step','cost_per_share','slippage_per_share','account_alias','fx_to_base','fx_as_of','equity_base','existing_value_base','orderable_cash','basis_note'}
-        if not isinstance(p,dict) or set(p)-allowed: raise ValueError('invalid_calculation_inputs')
-        if p.get('account_alias') and not any(x['alias']==p['account_alias'] for x in snap['accounts']['accounts']):
-            raise ValueError('unknown_account_alias')
-        entry=number(p['entry'],positive=True); stop=number(p['stop'],positive=True)
-        if stop>=entry: raise ValueError('long_scenario_requires_stop_below_entry')
-        currency=snap['chart'].get('currency') or ('KRW' if case['stock_key'].startswith('KR:') else 'USD')
-        if p['currency']!=currency: raise ValueError('budget_and_price_currency_must_match')
-        budget=number(p['budget']); loss=number(p['max_loss']); step=number(p['quantity_step'],positive=True)
-        limitations=['hypothetical_quantity_not_fill_or_order','gap_risk_not_bounded_by_stop','existing_risk_limits_unchanged','open_orders_not_queried_or_reconciled']
-        cost=number(p['cost_per_share']) if p.get('cost_per_share') is not None else Decimal(0)
-        slip=number(p['slippage_per_share']) if p.get('slippage_per_share') is not None else Decimal(0)
-        if p.get('cost_per_share') is None or p.get('slippage_per_share') is None: limitations.append('costs_or_slippage_unknown_gross_estimate_only')
-        if p.get('orderable_cash') is None: limitations.append('actual_orderable_cash_unavailable_budget_is_not_buying_power')
-        else: budget=min(budget,number(p['orderable_cash'])); limitations.append('orderable_cash_user_supplied_not_verified')
-        # Same Decimal lot-floor formula as portfolio.size_preview; this isolated tranche estimate cannot claim its fresh-cash/order-reconciliation prerequisites.
-        unit_loss=entry-stop+cost+slip; quantity=(min(budget/(entry+cost+slip),loss/unit_loss)/step).to_integral_value(rounding=ROUND_FLOOR)*step
-        fx=Decimal(1) if currency=='KRW' else (number(p['fx_to_base'],positive=True) if p.get('fx_to_base') is not None and p.get('fx_as_of') else None)
-        equity=p.get('equity_base'); existing=p.get('existing_value_base'); weight=None
-        if fx is not None and equity is not None and existing is not None:
-            eq=number(equity,positive=True)-quantity*(cost+slip)*fx
-            if eq>0: weight=str((number(existing)+quantity*entry*fx)/eq)
-            limitations.append('weight_uses_explicit_user_supplied_equity_existing_value_and_fx')
-        else: limitations.append('post_weight_unavailable_missing_equity_existing_value_or_fx')
-        return {'snapshot_id':snap['id'],'inputs':p,'currency':currency,'quantity':str(quantity),'scenario_loss':str(quantity*unit_loss),
-                'purchase_value':str(quantity*entry),'post_weight':weight,'account_as_of':snap['accounts'].get('as_of'),
-                'existing_risk':snap['accounts'].get('risk'),'limitations':limitations,
-                'formula':'q=floor(min(budget/(entry+cost+slippage),max_loss/(entry-stop+cost+slippage))/quantity_step)*quantity_step'}
-
     def dispatch(self, op, a, origin, *, principal='legacy', session=None):
+        if op in ('risk_overview','risk_calculate','risk_save','risk_review_save','calculate'):
+            raise ValueError('retired_risk_operation')
         if not isinstance(a,dict): raise ValueError('object_required')
         if op in COLLABORATION_OPS:
             return self.collaboration.dispatch(op, a, origin, principal, session)
@@ -348,5 +315,4 @@ class AnalysisService:
         if op=='decide': return self.decide(case,a['proposal_id'],a['action'],a.get('reason',''),a.get('drawings'))
         if op=='record': return {**self.record(case,a),'links':self.links(case,origin)}
         if op=='holding': return self.holding(case,a)
-        if op=='calculate': return self.calculate(case,a)
         raise ValueError('unknown_analysis_operation')

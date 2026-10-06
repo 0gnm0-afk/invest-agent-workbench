@@ -74,7 +74,6 @@ def saved_market(root=ROOT, run_dir=None):
         result['errors'].append('sectors_unavailable:' + type(exc).__name__)
     source = Path(run['market_source']) / 'snapshot.json'
     snapshot = checked(source, manifest['input_hashes'].get(str(source)))
-    result['_risk_market'] = {'snapshot': snapshot, 'screen': {}}
     # Keep all saved symbols accessible from sector leaders and actual holdings.
     for s in snapshot['series']:
         result['stocks'][s['market'] + ':' + s['symbol']] = {
@@ -211,7 +210,7 @@ def collect_balances(reader, pages, error_type):
             'accounts': accounts, 'endpoint_calls': calls}
 
 
-def account_view(config, output, refresh=True, risk_market=None):
+def account_view(config, output, refresh=True, saved_dashboard_root=None):
     mother = Path(config['mother'])
     # Reuse account-only adapters without shadowing current market/chart modules.
     mother_scripts = str(mother / 'scripts')
@@ -221,10 +220,8 @@ def account_view(config, output, refresh=True, risk_market=None):
     from nh_collect import pages
     from nh_api import read, NHError
     from nh_diagnostics import successful
-    from account_stops import attach_stops
-    from invest_agent.trading.portfolio import review
     previous_paths = list((mother / 'runtime/nh-live/exports').glob('account-*.json'))
-    previous_paths += list(output.parent.glob('*/account-snapshot.private.json'))
+    previous_paths += list(Path(saved_dashboard_root or output.parent).glob('*/account-snapshot.private.json'))
     previous = None
     for path in previous_paths:
         try:
@@ -271,29 +268,13 @@ def account_view(config, output, refresh=True, risk_market=None):
         result['source_mode'] = 'historical_saved'
     if snapshot is None:
         return result
-    stops_path = mother / 'runtime/nh-live/inputs/adopted-stops.json'
-    if stops_path.is_file():
-        try:
-            snapshot = attach_stops(snapshot, load(stops_path))
-            result['protection_source_sha256'] = sha(stops_path)
-            snapshot['limitations'] = [x for x in snapshot.get('limitations', []) if x != 'stops_not_adopted']
-        except (ValueError, KeyError, TypeError):
-            result['limitations'].append('adopted_protection_not_applicable_to_this_snapshot')
-    try:
-        risk = review(snapshot)
-        from invest_agent.trading.holding_review import attach
-        policy_path = mother / 'runtime/nh-live/inputs/holding-review-policy.json'
-        risk = attach(risk, snapshot, risk_market or {}, load(policy_path) if policy_path.is_file() else {})
-        result['limitations'].append('protection_uses_saved_completed_bars_check_each_price_date')
-        result['risk'] = risk
-        result['risk_market_dates'] = {r['symbol']: r.get('technical_context', {}).get('as_of') for r in risk['positions']}
-    except (ValueError, KeyError, TypeError):
-        result['limitations'].append('risk_calculation_unavailable')
     normalized_path = output / 'account-snapshot.private.json'
     write(normalized_path, snapshot)
     result.update(accounts=snapshot['accounts'], as_of=snapshot['as_of'],
                   snapshot_sha256=sha(normalized_path), limitations=result['limitations'] + snapshot.get('limitations', []))
     result['stale'] = (datetime.now(timezone.utc) - datetime.fromisoformat(snapshot['as_of'])).total_seconds() > 86400
+    result['valuation'] = {k: snapshot.get(k) for k in ('base_currency', 'fx_to_base')}
+    result['accounts_complete'] = snapshot.get('accounts_complete', False)
     return result
 
 
@@ -308,9 +289,12 @@ def build(root=ROOT, refresh=True, *, market_run=None, daily_update=None):
         market = {'state': 'unavailable', 'errors': ['saved_market_unavailable:' + type(exc).__name__],
                   'entries': [], 'sectors': [], 'stocks': {}, 'session_dates': {}, 'quality': {},
                   'candidate_count': None, 'entry_candidate_count': None}
-    accounts = account_view(config, output, refresh, market.pop('_risk_market', None))
+    accounts = account_view(config, output, refresh)
     stocks = market.pop('stocks')
-    data = {'generated_at': now(), 'market': market, 'accounts': accounts}
+    from trailing_warnings import TrailingStore
+    from daily_launch import plan_for
+    warnings = TrailingStore(root/'runtime/trailing-warnings.sqlite3').update(accounts, stocks, plan_for(datetime.now(timezone.utc))['targets'])
+    data = {'generated_at': now(), 'market': market, 'accounts': accounts, 'trailing': warnings}
     if daily_update is not None:
         data['daily_update'] = daily_update
     write(output / 'dashboard.json', data)

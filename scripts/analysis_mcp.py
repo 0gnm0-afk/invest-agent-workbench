@@ -34,11 +34,6 @@ def analysis_save_record(analysis_key: str, snapshot_id: str, kind: str, title: 
     return call('record',dict(analysis_key=analysis_key,snapshot_id=snapshot_id,kind=kind,title=title,body=body,author=author,llm_opinion=llm_opinion,user_response=user_response or {},sources=sources or []))
 
 @mcp.tool()
-def analysis_calculate(analysis_key: str, snapshot_id: str, inputs: dict) -> dict:
-    """Python long-scenario sizing, never orderable quantity. Required inputs: entry,stop,budget,max_loss,currency,quantity_step (user supplied, budget/loss in price currency). Optional cost_per_share,slippage_per_share,orderable_cash,fx_to_base,fx_as_of,equity_base,existing_value_base,account_alias,basis_note. Unknown cost/FX/cash/weight stay limited; do not invent risk limits. Existing account risk is returned unchanged."""
-    return call('calculate',dict(analysis_key=analysis_key,snapshot_id=snapshot_id,inputs=inputs))
-
-@mcp.tool()
 def analysis_holding_links(account_alias: str | None = None) -> dict:
     """Read user-confirmed links to observed holdings, acquisition scenario snapshots and subsequent review history via analysis keys. Planned quantities are never fills."""
     return call('holding_links',dict(account_alias=account_alias))
@@ -69,31 +64,8 @@ def analysis_save_plan(analysis_key: str, snapshot_id: str, expected_revision: i
         plan=plan, references=references, plan_id=plan_id, expected_plan_version=expected_plan_version, contract_version=contract_version))
 
 @mcp.tool()
-def analysis_plan_input(analysis_key: str, plan_record_id: str, mode: str, evaluation_at: str | None = None) -> dict:
-    """Read reproducible exact plan version and snapshot for B. mode adopted rejects inactive drafts; hypothetical explicitly allows draft calculations. Pins plan/snapshot hashes, adoption proof, blockers and frozen drawing geometry at evaluation_at. Snapshot balances are historical; B must supply authorized current stored account/market evidence and pin code version, FX/cost/evaluation/path assumptions. Never infer risk defaults, fill missing with zero, or call scenario loss actual maximum loss."""
+def analysis_plan_input(analysis_key: str, plan_record_id: str, mode: str = 'adopted', evaluation_at: str | None = None) -> dict:
+    """Read an exact stored plan version and its frozen source snapshot. Read-only historical planning evidence; no risk calculation, new assumptions, adoption, or orders. Historical balances are not current balances."""
     return call('plan_input', dict(analysis_key=analysis_key, plan_record_id=plan_record_id, mode=mode, evaluation_at=evaluation_at))
-
-@mcp.tool()
-def analysis_save_risk_review(analysis_key: str, snapshot_id: str, expected_revision: int, title: str, body: str,
-                              plan_record_ids: list[str], calculation: dict | None, references: list[dict],
-                              contract_version: str = 'collaboration.v1') -> dict:
-    """Risk role only (separate MCP process configured INVEST_ANALYSIS_ROLE=risk). Append risk-area review, never modify collaboration summary/plans/adoption. calculation null or {code_version,input_snapshot_ids,assumptions,result}. Plan records and analysis snapshots must belong to this case. Put external immutable account/market/FX ID/hash/as_of in assumptions.external_inputs and explicit scope/limitations in result. Verify saved ID and reread; conflict must reconcile."""
-    return call('risk_review_save', dict(analysis_key=analysis_key, snapshot_id=snapshot_id, expected_revision=expected_revision,
-        title=title, body=body, plan_record_ids=plan_record_ids, calculation=calculation, references=references, contract_version=contract_version))
-
-@mcp.tool()
-def risk_overview(account_alias: str | None = None) -> dict:
-    """Risk role only. Read stored account valuation, exact drafts/adopted plans and saved reviews. No refresh; stale/missing facts remain blockers."""
-    return call('risk_overview', dict(account_alias=account_alias))
-
-@mcp.tool()
-def risk_calculate(selections: list[dict], assumptions: dict, account_alias: str | None = None) -> dict:
-    """Risk role only. Calculate through B's Python engine from exact selected plan versions and explicit assumptions. Read docs/risk-integration-2026-10-05.md and risk_adapter.py for schema. No invented user assumptions. Returns a server-held single-use ticket and results including blockers, never adoption or orders."""
-    return call('risk_calculate', dict(selections=selections, assumptions=assumptions, account_alias=account_alias))
-
-@mcp.tool()
-def risk_save(ticket: str, analysis_key: str, title: str, body: str) -> dict:
-    """Risk role only. Save the exact server-calculated result using its unexpired single-use ticket. Reread after uncertain delivery, never blindly retry. Does not change the current discussion or adopt a plan."""
-    return call('risk_save', dict(ticket=ticket, analysis_key=analysis_key, title=title, body=body))
 
 if __name__=='__main__': mcp.run(transport='stdio')

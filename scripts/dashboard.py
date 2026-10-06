@@ -1,11 +1,12 @@
 """Private loopback dashboard; serves only curated views and bundled assets."""
+from datetime import datetime, timezone
 import argparse
 import json
 import mimetypes
 import secrets
 import sqlite3
 from http.cookies import SimpleCookie
-from daily_launch import DailyLaunch
+from daily_launch import DailyLaunch, plan_for
 from dashboard_daily import DashboardDaily, RetryConflict
 from market_exclusion_review import ExclusionReview, ReviewConflict
 from invest_agent.trading.store import instance_lock
@@ -20,7 +21,7 @@ from financial_summary import selected_stock
 from chart_workspace import WorkspaceStore, Conflict, moving_averages
 from analysis_service import AnalysisService
 from analysis_collaboration import Forbidden
-from risk_service import RiskService, OPS as RISK_OPS
+from trailing_warnings import TrailingStore
 
 
 def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None, daily_status=None, daily_retry=None,
@@ -36,7 +37,6 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
     financials = (analysis_dependencies['financials'] if analysis_dependencies else
                   FinancialStore((Path(workspace_path).parent if workspace_path else ROOT / 'runtime') / 'financials'))
     analyses = AnalysisService(store, histories, financials, lambda: views['view'] if views is not None else initial_view, ROOT if workspace_path is None else Path(workspace_path).parent)
-    risks = RiskService(analyses, lambda: views['view'] if views is not None else initial_view, **(risk_options or {}))
     capabilities = dict(analysis_capabilities or {})
     if set(capabilities) - {'collaboration', 'risk'} or any(not isinstance(v,str) or not v or v == token for v in capabilities.values()) or len(set(capabilities.values())) != len(capabilities):
         raise ValueError('invalid_analysis_capabilities')
@@ -83,6 +83,9 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                     return self.send(json.dumps(result, ensure_ascii=False, allow_nan=False).encode('utf-8'))
                 except (ValueError, KeyError, TypeError, OSError):
                     return self.send(b'{"error":"exclusion_review_unavailable"}', status=503)
+            if path == '/api/trailing':
+                target = (Path(workspace_path).parent if workspace_path else ROOT/'runtime')/'trailing-warnings.sqlite3'
+                return self.send(json.dumps(TrailingStore(target).public(datetime.now(timezone.utc), plan_for(datetime.now(timezone.utc))['targets']), ensure_ascii=False, allow_nan=False).encode('utf-8'))
             if path == '/api/home':
                 return self.send(json.dumps(data, ensure_ascii=False, allow_nan=False).encode('utf-8'))
             if path == '/api/stock-search':
@@ -143,7 +146,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                     if excluded:
                         value = {**value,'state':'excluded','reason':excluded['reason'],'bars':[]}
                 return self.send(json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8'))
-            names = {'/market-exclusions.js':'market-exclusions.js', '/market-exclusions.css':'market-exclusions.css', '/risk-workbench.js': 'risk-workbench.js', '/risk-workbench.css': 'risk-workbench.css', '/collaboration.js': 'collaboration.js', '/analysis.js': 'analysis.js', '/': 'index.html', '/app.js': 'app.js', '/tooltips.js': 'tooltips.js', '/financials.js': 'financials.js', '/financials.css': 'financials.css', '/style.css': 'style.css',
+            names = {'/trailing.js':'trailing.js', '/market-exclusions.js':'market-exclusions.js', '/market-exclusions.css':'market-exclusions.css', '/risk-workbench.js': 'risk-workbench.js', '/risk-workbench.css': 'risk-workbench.css', '/collaboration.js': 'collaboration.js', '/analysis.js': 'analysis.js', '/': 'index.html', '/app.js': 'app.js', '/tooltips.js': 'tooltips.js', '/financials.js': 'financials.js', '/financials.css': 'financials.css', '/style.css': 'style.css',
                      '/stock-chart.js': 'stock-chart.js', '/drawing-tools.js': 'drawing-tools.js', '/chart-workspace.js': 'chart-workspace.js', '/chart-tools.css': 'chart-tools.css', '/format.js': 'format.js', '/charts.js': 'charts.js', '/workbench.png': 'workbench.png',
                      '/vendor/lightweight-charts.js': 'vendor/lightweight-charts.js',
                      '/vendor/NOTICE': 'vendor/NOTICE', '/vendor/LICENSE': 'vendor/LICENSE'}
@@ -239,7 +242,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                             if candidate and secrets.compare_digest(candidate.value, browser_session): principal = 'browser'
                         if body['op'] in ('decide', 'holding') and principal != 'browser':
                             raise Forbidden('local_browser_confirmation_required')
-                        service = risks if body['op'] in RISK_OPS else analyses
+                        service = analyses
                         result = service.dispatch(body['op'], body['arguments'], 'http://' + expected,
                                                    principal=principal, session=browser_session if principal == 'browser' else role)
                         return self.send(json.dumps(result, ensure_ascii=False, allow_nan=False).encode('utf-8'))

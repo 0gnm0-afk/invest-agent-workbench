@@ -49,6 +49,8 @@ def ensure():
 
 
 def call(op, arguments):
+    if op in ('risk_overview','risk_calculate','risk_save','risk_review_save','calculate'):
+        raise ValueError('retired_risk_operation')
     target=ensure()
     role = os.environ.get('INVEST_ANALYSIS_ROLE', 'collaboration')
     if role not in ('collaboration', 'risk'): raise ValueError('invalid_analysis_role')

@@ -79,12 +79,9 @@ class AnalysisTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.s.holding(self.case,a)
         link=self.s.holding(self.case,{**a,'confirmed_by_user':True});self.assertEqual(link['adopted_snapshot_id'],self.sid)
         with self.assertRaises(ValueError):self.s.holding(self.case,{**a,'confirmed_by_user':True,'account_alias':'unknown'})
-    def test_python_sizing_decimal_lot_and_missing_values(self):
-        conf=json.loads((ROOT/'config.json').read_text(encoding='utf-8-sig'));sys.path.insert(0,str(Path(conf['engine'])/'src'))
-        p=dict(entry='100',stop='90',budget='1050',max_loss='35',currency='USD',quantity_step='1')
-        v=self.s.calculate(self.case,dict(snapshot_id=self.sid,inputs=p));self.assertEqual(v['quantity'],'3');self.assertEqual(v['scenario_loss'],'30');self.assertIsNone(v['post_weight']);self.assertEqual(v['existing_risk'],self.accounts['risk'])
-        p.update(cost_per_share='1',slippage_per_share='1',equity_base='100000',existing_value_base='10000',fx_to_base='10',fx_as_of='2026-10-01')
-        v=self.s.calculate(self.case,dict(snapshot_id=self.sid,inputs=p));self.assertEqual(v['quantity'],'2');self.assertEqual(v['scenario_loss'],'24');self.assertGreater(float(v['post_weight']),.12)
+    def test_retired_sizing_cannot_be_called(self):
+        with self.assertRaisesRegex(ValueError,'retired_risk_operation'):
+            self.s.dispatch('calculate',{},'http://127.0.0.1:1234')
     def test_geometry_all_kinds_frame_and_js_projection_parity(self):
         js="const fs=require('fs'),vm=require('vm');global.window={};vm.runInThisContext(fs.readFileSync(process.argv[1],'utf8'));const a=JSON.parse(fs.readFileSync(0,'utf8'));const t=window.DrawingTools.timeline(a.bars,a.frame);console.log(JSON.stringify(a.days.map(d=>window.DrawingTools.index(d,t,a.frame))));"
         for frame in ('1d','1w','1mo'):

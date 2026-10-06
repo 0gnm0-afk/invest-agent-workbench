@@ -70,8 +70,8 @@ class CollaborationTests(unittest.TestCase):
         self.assertEqual(self.s.snapshot(self.cid,self.sid),before)
         self.assertEqual(result['active_plans'],[])
         self.assertIn('analysis_collaboration_read',result['links']['resume_prompt'])
-        self.assertIn('risk_calculate',result['links']['resume_prompt'])
-        self.assertIn('계산용 시나리오는 확인된 조건에서 네가 만들어',result['links']['resume_prompt'])
+        self.assertNotIn('risk_calculate',result['links']['resume_prompt'])
+        self.assertIn('트레일링·MA5',result['links']['resume_prompt'])
 
     def test_additive_migration_keeps_legacy_records_snapshots_and_drawings(self):
         self.call('record',dict(snapshot_id=self.sid,kind='report',title='legacy',body='original',author='llm'))
@@ -136,15 +136,11 @@ class CollaborationTests(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=2) as pool:results=list(pool.map(run,range(2)))
         self.assertEqual(sorted(results),[False,True]);self.assertEqual(self.read()['revision'],1)
 
-    def test_risk_review_same_interface_cannot_replace_current(self):
+    def test_retired_risk_routes_preserve_records(self):
         current=self.discussion();p=self.plan();self.adopt(p)
-        fresh=AnalysisService(self.store,self.hist,self.fin,lambda:self.fail('provider read'),self.root)
-        packet=fresh.dispatch('plan_input',dict(analysis_key=self.cid,plan_record_id=p['id'],mode='adopted'),self.origin,principal='risk')
-        self.assertEqual(packet['plan_version'],1);self.assertEqual(packet['snapshot_sha256'],digest(self.s.snapshot(self.cid,self.sid)))
-        args={**self.envelope(),**deepcopy(FIXTURE['risk_review']),'plan_record_ids':[p['id']]}
-        with self.assertRaises(Forbidden):self.call('risk_review_save',args)
-        result=self.call('risk_review_save',args,'risk')
-        self.assertTrue(result['verified']);self.assertEqual(result['record']['area'],'risk')
+        for op in ('risk_review_save','risk_overview','risk_calculate','risk_save','calculate'):
+            with self.assertRaisesRegex(ValueError,'retired_risk_operation'):
+                self.call(op,{},'risk')
         self.assertEqual(self.read()['current'],current)
         self.assertEqual(self.read()['active_plans'][0]['record']['id'],p['id'])
 
@@ -249,15 +245,12 @@ class CollaborationTests(unittest.TestCase):
             response=await client.call_tool('analysis_collaboration_read',dict(analysis_key=self.cid))
             self.assertFalse(response.isError);packet=json.loads(response.content[0].text)
             self.assertEqual(packet['current']['id'],saved_id)
-            response=await client.call_tool('analysis_plan_input',dict(analysis_key=self.cid,plan_record_id=plan['id'],mode='adopted'))
-            self.assertFalse(response.isError);packet=json.loads(response.content[0].text)
-            self.assertEqual(packet['plan_record']['id'],plan['id']);self.assertEqual(packet['plan_version'],1)
-            response=await client.call_tool('analysis_save_risk_review',dict(analysis_key=self.cid,**self.envelope(),**deepcopy(FIXTURE['risk_review']),plan_record_ids=[plan['id']]))
-            self.assertFalse(response.isError)
+            listed=await client.list_tools()
+            self.assertFalse({'analysis_save_risk_review','risk_calculate','risk_overview','risk_save','analysis_calculate'} & {t.name for t in listed.tools})
         try:
             saved_id=asyncio.run(session('collaboration',save));plan=self.plan();self.adopt(plan)
             asyncio.run(session('risk',consume))
-            self.assertEqual(self.read()['records'][-1]['kind'],'risk_review')
+            self.assertEqual(self.read()['active_plans'][0]['record']['id'],plan['id'])
         finally:server.shutdown();server.server_close();thread.join()
 
     def test_http_capability_cookie_origin_and_mcp_transport(self):
@@ -293,8 +286,8 @@ class CollaborationTests(unittest.TestCase):
             status,saved=request('plan_decide',dict(contract_version=VERSION,expected_revision=2,confirmation=review['confirmation'],action='adopt',reason='fixture'),'legacy-token',browser)
             self.assertEqual(status,200);self.assertTrue(saved['verified'])
             with patch.object(analysis_bridge,'ensure',return_value=dict(url=origin,token='legacy-token',analysis_capabilities=capabilities)),patch.dict('os.environ',{'INVEST_ANALYSIS_ROLE':'risk'}):
-                v=analysis_bridge.call('plan_input',dict(analysis_key=self.cid,plan_record_id=p['id'],mode='adopted'))
-                self.assertEqual(v['plan_record']['id'],p['id'])
+                packet=analysis_bridge.call('plan_input',dict(analysis_key=self.cid,plan_record_id=p['id'],mode='adopted'))
+                self.assertEqual(packet['plan_record']['id'],p['id'])
                 with self.assertRaises(ValueError):analysis_bridge.call('discussion_save',{'analysis_key':self.cid,**args})
         finally:server.shutdown();server.server_close();thread.join()
 
