@@ -75,50 +75,72 @@ window.WorkbenchFinancials=(()=>{
     el.querySelector('#financial-status').textContent=packet.state==='running'?'공식 자료 수집 중 · '+(packet.attempt?.stage||''):
       [packet.attempt?.error&&'최근 갱신 실패: '+packet.attempt.error,r?'자료 수집 '+new Date(r.collected_at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'})+' · 재무기간 '+r.financial_as_of:'저장된 재무자료가 없습니다.',r?.recalculated_at&&'재계산 '+new Date(r.recalculated_at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'})].filter(Boolean).join(' · ');
     if(!r){el.querySelector('#financial-content').innerHTML='<p class="empty">만들기 버튼으로 선택 종목의 공식 자료를 수집합니다.</p>';return;}
-    if(r.calculation_version!=='financial-focus-1'){el.querySelector('#financial-content').innerHTML='<p class="empty">이전 형식의 저장 결과입니다. 재무요약 다시 만들기 또는 저장 자료 재계산이 필요합니다. 과거 결과는 보존됩니다.</p>';return;}
+    if(!['financial-focus-1','financial-focus-2'].includes(r.calculation_version)){el.querySelector('#financial-content').innerHTML='<p class="empty">이전 형식의 저장 결과입니다. 재무요약 다시 만들기 또는 저장 자료 재계산이 필요합니다. 과거 결과는 보존됩니다.</p>';return;}
     if(ctx.snapshot===r.snapshot_id)return;ctx.snapshot=r.snapshot_id;ctx.result=r;paint(ctx);
   }
+
+  const palette=['#438dff','#258d75','#d99734','#9560db','#4ab7b8'];
+  const missing={value:null,reason:'공식 공시 자료 미확보'};
+  function cell(row,path){return path.split('.').reduce((v,k)=>v?.[k],row)||missing;}
+  function series(label,path,color,type='bar'){return {label,path,color,type};}
+  function table(ctx,rows,items,cls=''){
+    return `<div class="scroll" tabindex="0" aria-label="기간별 수치 가로 스크롤"><table class="financial-performance-table ${cls}" ${cls?`style="min-width:${Math.max(720,rows.length*94+180)}px"`:""}><thead><tr><th>항목</th>${rows.map(row=>`<th>${esc(cls?row.date.slice(2,7):row.label)}<small>${esc(row.date)}</small></th>`).join('')}</tr></thead><tbody>${items.map(m=>`<tr><th><i style="background:${m.color||'transparent'}"></i>${esc(m.label)}</th>${rows.map(row=>`<td>${button(ctx,cell(row,m.path),m.label)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+  }
+  function plot(rows,items,currency){
+    if(!items.some(m=>rows.some(row=>cell(row,m.path).value!=null)))return '<p class="empty">이 기간에 표시할 공시 자료가 없습니다.</p>';
+    const width=Math.max(720,rows.length*94+180),height=310,left=160,right=width-20,top=20,bottom=275,step=(right-left)/Math.max(1,rows.length);
+    const bars=items.filter(s=>s.type==='bar'),lines=items.filter(s=>s.type==='line');
+    const extent=list=>{const vals=list.flatMap(s=>rows.map(r=>cell(r,s.path).value)).filter(x=>x!=null&&Number.isFinite(x));return [Math.min(0,...vals),Math.max(0,...vals)];};
+    let [lo,hi]=extent(bars.length?bars:lines);if(lo===hi)hi=lo+1;
+    const y=x=>bottom-(x-lo)/(hi-lo)*(bottom-top-20),zero=y(0);
+    const parts=[`<svg viewBox="0 0 ${width} ${height}" style="min-width:${width}px" preserveAspectRatio="none" role="img" aria-label="기간별 공시 수치 막대와 비율 선 차트">`];
+    for(let j=0;j<=4;j++){const v=lo+(hi-lo)*j/4,yy=y(v);parts.push(`<line x1="${left}" x2="${right}" y1="${yy}" y2="${yy}" class="financial-grid"/><text x="${left-10}" y="${yy+4}" text-anchor="end">${esc(compactMoney(v,currency))}</text>`);}
+    rows.forEach((row,i)=>{const x=left+step*i+step/2,bw=Math.min(30,step*.65/Math.max(bars.length,1));bars.forEach((m,j)=>{const c=cell(row,m.path);if(c.value!=null)parts.push(`<rect x="${x+(j-bars.length/2)*bw}" y="${Math.min(zero,y(c.value))}" width="${bw-3}" height="${Math.max(1,Math.abs(zero-y(c.value)))}" rx="2" fill="${m.color}"/>`);});parts.push(`<text x="${x}" y="300" text-anchor="middle">${esc(row.date.slice(2,7))}</text>`);});
+    lines.forEach(m=>{const vals=rows.map(r=>cell(r,m.path).value).filter(x=>x!=null);let min=Math.min(...vals),max=Math.max(...vals);if(min===max){min-=Math.max(1,Math.abs(min)*.2);max+=Math.max(1,Math.abs(max)*.2);}
+      const ly=v=>55+(max-v)/(max-min)*130;let prev=null;
+      rows.forEach((row,i)=>{const c=cell(row,m.path),x=left+step*i+step/2;if(c.value==null){prev=null;return;}const yy=ly(c.value);if(prev)parts.push(`<line x1="${prev.x}" y1="${prev.y}" x2="${x}" y2="${yy}" stroke="${m.color}" stroke-width="2"/>`);parts.push(`<circle cx="${x}" cy="${yy}" r="3.5" fill="#17191f" stroke="${m.color}" stroke-width="2"/>`);prev={x,y:yy};});});
+    rows.forEach((row,i)=>parts.push(`<rect class="financial-hit" data-period="${i}" x="${left+step*i}" y="${top}" width="${step}" height="${bottom-top}" fill="transparent" tabindex="0" role="button" aria-label="${esc(row.label+' '+items.map(m=>m.label+' '+value(cell(row,m.path),currency)).join(' · '))}"/>`));
+    parts.push('</svg>');return parts.join('');
+  }
   function paint(ctx){
-    clear(ctx);ctx.cells=[];const r=ctx.result,rows=r[ctx.frame]||[],last=rows.at(-1),mode=ctx.frame==='annual'?'growth':ctx.comparison;
-    const performance=mode==='qoq'?'performance_qoq':'performance';
-    const metrics=r.performance_metrics||[],coverage=r.coverage_metadata?.[ctx.frame];
-    const dividendRows=rows.some(row=>row.values?.dividend?.value!=null)?rows:(r.annual||[]);
-    const dividendAnnual=dividendRows!==rows&&ctx.frame==='quarterly';
-    ctx.el.querySelector('#financial-content').innerHTML=`
-      <div class="financial-meta"><span>${esc(r.standard)} · ${esc(r.currency)} · ${esc(r.calculation_version)}</span><a target="_blank" rel="noreferrer" href="/api/financials/${encodeURIComponent(ctx.key)}">화면·MCP 공통 결과 JSON ↗</a></div>
-      <div class="financial-chart-head"><div><h3>실적과 성장률</h3><p class="chart-caption">연간 5개 · 분기 12개 목표 / 확보 ${rows.length}개 · ${esc(coverage?.first||'없음')} ~ ${esc(coverage?.last||'없음')}</p></div><div class="chart-toolbar"><button data-focus-frame="annual" aria-pressed="${ctx.frame==='annual'}">연간</button><button data-focus-frame="quarterly" aria-pressed="${ctx.frame==='quarterly'}">분기</button>${ctx.frame==='quarterly'?`<button data-focus-comparison="growth" aria-pressed="${mode==='growth'}">YoY 전년 대비</button><button data-focus-comparison="qoq" aria-pressed="${mode==='qoq'}">QoQ 전분기 대비</button>`:''}</div></div>
-      <p class="chart-caption">아래 막대: 실적 · 위 점선: ${mode==='growth'?'YoY 전년':'QoQ 전분기'} 대비 성장률 · 금액은 원·만·억·조 / USD K·M·B·T로 축약 · 마우스를 올리면 원값 표시 · 색상은 비교기간 대비 개선/악화이며 매수·매도 판단이 아닙니다.</p>
-      ${(last?.warnings||[]).map(w=>`<p class="financial-equity-warning" role="alert">${esc(w.message)} ${button(ctx,w.evidence)}</p>`).join('')}
-      <div class="financial-focus-health">${Object.entries(last?.metrics||{}).map(([id,c])=>`<article class="${id==='operating_margin'?'financial-margin':''}"><h4>${esc(c.label)}</h4>${button(ctx,c)}<small>전년 대비 ${esc(value(c.change,r.currency))} · ${esc(sourceName(c))}</small><p>${esc(c.explanation)} · ${esc(c.definition)}</p></article>`).join('')}</div>
-      <div class="financial-focus-charts">${metrics.map(m=>`<article class="financial-chart-card"><h3>${esc(m.label)}</h3><div id="focus-chart-${m.id}" class="financial-chart" role="img" aria-label="${esc(m.label)} 실적 막대와 성장률 점선"></div><p id="focus-legend-${m.id}" class="chart-caption"></p></article>`).join('')}</div>
-      <details class="financial-periods" open><summary>기간별 수치·성장률·건전성</summary><div class="scroll" tabindex="0" aria-label="기간별 재무 수치 가로 스크롤"><table class="financial-performance-table"><thead><tr><th>항목</th>${rows.map(row=>`<th>${esc(row.label)}<small>${esc(row.date)}</small></th>`).join('')}</tr></thead><tbody>${metrics.map(m=>`<tr><th>${esc(m.label)}<small>${esc(r.currency)}${m.id.includes('eps')?'/주':''}</small></th>${rows.map(row=>`<td>${button(ctx,row[performance]?.[m.id])}<div>${mode==='growth'?'YoY':'QoQ'} ${button(ctx,row[mode]?.[m.id])}</div></td>`).join('')}</tr>`).join('')}${['operating_margin','debt_ratio','icr'].map(id=>`<tr><th>${esc(last?.metrics?.[id]?.label||id)}</th>${rows.map(row=>`<td>${button(ctx,row.metrics?.[id])}<small>전년 대비 ${esc(value(row.metrics?.[id]?.change,r.currency))}</small></td>`).join('')}</tr>`).join('')}<tr><th>자본총계 0 이하</th>${rows.map(row=>`<td>${row.warnings?.length?'경고':row.values?.total_equity?.value==null?'자료 없음':'해당 없음'}</td>`).join('')}</tr></tbody></table></div></details>
-      <section class="financial-dividends"><h3>주당배당금</h3><p class="chart-caption">공시된 ${dividendAnnual?'연간':ctx.frame==='annual'?'연간':'분기'} 주당배당금 · ${esc(r.currency)}/주 · ${dividendAnnual?'분기 공시값이 없어 연간 내역을 표시합니다. ':''}사업기간 기준이며 지급일별 내역·최근 12개월 예상배당과 다릅니다.</p><div id="focus-chart-dividend" class="financial-chart" role="img" aria-label="공시 주당배당금 막대 차트"></div><p id="focus-legend-dividend" class="chart-caption"></p><div class="financial-periods"><div class="scroll" tabindex="0" aria-label="주당배당금 가로 스크롤"><table class="financial-performance-table"><thead><tr><th>항목</th>${dividendRows.map(row=>`<th>${esc(row.label)}<small>${esc(row.date)}</small></th>`).join('')}</tr></thead><tbody><tr><th>주당배당금<small>${esc(r.currency)}/주</small></th>${dividendRows.map(row=>`<td>${button(ctx,row.values?.dividend,'주당배당금')}<small>${row.values?.dividend?.value==null?'공시 자료 없음':esc(dividendBasis(row.values.dividend))}</small></td>`).join('')}</tr></tbody></table></div></div></section>
-      <details class="financial-evidence" id="financial-evidence"><summary>값을 눌러 공시 원값·계산 근거·결측 사유 보기</summary><div id="financial-evidence-body"></div></details>
-      <details><summary>자료 범위와 한계</summary><ul>${(r.limitations||[]).map(x=>`<li>${esc(x)}</li>`).join('')}</ul></details>`;
-    ctx.el.querySelectorAll('[data-focus-frame]').forEach(b=>b.onclick=()=>{ctx.frame=b.dataset.focusFrame;paint(ctx);});
+    clear(ctx);ctx.cells=[];ctx.views||={};const r=ctx.result,rows=r[ctx.frame]||[],last=rows.at(-1),mode=ctx.frame==='annual'?'growth':ctx.comparison;
+    const perf=mode==='qoq'?'performance_qoq':'performance',metrics=r.performance_metrics||[];
+    const groups=[
+      {id:'profit',title:'수익성',subtitle:'매출·순이익 성장률',items:[series('매출','values.sales',palette[0]),series('지배주주 순이익','values.income',palette[1]),series('순이익률','metrics.net_margin',palette[2],'line')],extra:[series('매출 성장률',mode+'.sales'),series('순이익 성장률',mode+'.income')]},
+      {id:'growth',title:'성장성',subtitle:'영업이익 성장률',items:[series('영업이익','values.operating',palette[3]),series('영업이익률','metrics.operating_margin',palette[4],'line')],extra:[series('영업이익 성장률',mode+'.operating')]},
+      {id:'stability',title:'안정성',subtitle:'부채·유동·이자보상비율',items:[],extra:[]},
+      ...metrics.filter(m=>m.id.includes('eps')).map(m=>({id:m.id,title:m.label,subtitle:'공시 주당순이익과 성장률',items:[series(m.label,'values.'+m.id,palette[0]),series('성장률',mode+'.'+m.id,palette[2],'line')],extra:[]})),
+      {id:'dividend',title:'배당',subtitle:'공시 주당배당금',items:[series('주당배당금','values.dividend',palette[0])],extra:[]}
+    ];
+    const stability=ctx.stability||'debt_ratio';groups[2].items=stability==='current_ratio'?[series('유동자산','values.current_assets',palette[4]),series('유동부채','values.current_liabilities',palette[1]),series('유동비율','metrics.current_ratio',palette[2],'line')]:stability==='icr'?[series('영업이익','values.operating',palette[3]),series('이자비용','values.interest_expense',palette[1]),series('이자보상배율','metrics.icr',palette[2],'line')]:[series('총자본','values.total_equity',palette[4]),series('총부채','values.liabilities',palette[1]),series('부채비율','metrics.debt_ratio',palette[2],'line')];
+    const rendered=groups.map(g=>{
+      const view=ctx.views[g.id]||{frame:ctx.frame,years:ctx.frame==='annual'?5:3};let rr=r[view.frame]||[],fallback=false;
+      if(g.id==='dividend'&&view.frame==='quarterly'&&!rr.some(row=>cell(row,'values.dividend').value!=null)){rr=r.annual||[];fallback=true;}
+      if(view.frame==='annual'){g.items=g.items.map(m=>({...m,path:m.path.replace('qoq.','growth.')}));g.extra=g.extra.map(m=>({...m,path:m.path.replace('qoq.','growth.')}));}
+      rr=rr.slice(-(view.years*(view.frame==='annual'||fallback?1:4)));g.rows=rr;
+      if(g.id==='profit'&&rr.some(row=>cell(row,'values.net_income').value!=null)){
+        g.items[1]={...g.items[1],label:'순이익',path:'values.net_income'};
+        g.extra=[series('지배주주 순이익','values.income'),...g.extra];
+      }
+      const items=[...g.items,...g.extra],last=rr.at(-1);
+      return `<section class="financial-toss-section" data-chart-section="${g.id}"><header><h3>${esc(g.title)} <span>${esc(g.subtitle)}</span></h3><p class="financial-story">${last?esc(last.label+' · '+g.items.map(m=>m.label+' '+value(cell(last,m.path),r.currency)).join(' · ')):'공시 자료 없음'}</p></header><div class="financial-selectors">${g.id==='stability'?`<select data-stability aria-label="안정성 지표">${[['debt_ratio','부채비율'],['current_ratio','유동비율'],['icr','이자보상배율']].map(([id,label])=>`<option value="${id}" ${stability===id?'selected':''}>${label}</option>`).join('')}</select>`:''}<select data-chart-years="${g.id}" aria-label="${esc(g.title)} 기간">${[1,3,5].map(y=>`<option value="${y}" ${view.years===y?'selected':''}>${y}년</option>`).join('')}</select><select data-chart-frame="${g.id}" aria-label="${esc(g.title)} 주기"><option value="annual" ${view.frame==='annual'?'selected':''}>연간</option><option value="quarterly" ${view.frame==='quarterly'?'selected':''}>분기</option></select></div>${fallback?'<p class="chart-caption">분기 공시값이 없어 연간 배당 내역을 표시합니다.</p>':''}${g.id==='dividend'?'<p class="chart-caption">사업기간별 주당배당금 · 지급/선언 기준은 각 값에서 확인 · 예상치 제외</p>':''}<div class="financial-toss-chart">${plot(rr,g.items,r.currency)}</div><div class="financial-series-key">${g.items.map(m=>`<span><i style="background:${m.color}"></i>${esc(m.label)}${m.type==='line'?' (선 · 별도 비율 척도)':''}</span>`).join('')}</div><div class="financial-chart-table">${table(ctx,rr,items,'financial-short-table')}</div></section>`;
+    }).join('');
+    const all=[...metrics.flatMap(m=>[series(m.label,perf+'.'+m.id),series(m.label+' '+(mode==='growth'?'YoY':'QoQ'),mode+'.'+m.id)]),...['net_margin','operating_margin','debt_ratio','current_ratio','icr'].flatMap(id=>{const label=last?.metrics?.[id]?.label||({net_margin:'순이익률',current_ratio:'유동비율'}[id])||id;return [series(label,'metrics.'+id),series(label+' 전년 대비 변화','metrics.'+id+'.change')];}),series('주당배당금','values.dividend')];
+    ctx.el.querySelector('#financial-content').innerHTML=`<div class="financial-meta"><span>${esc(r.standard)} · ${esc(r.currency)} · 공시 실적만 표시</span></div><div class="financial-chart-head"><h3>재무</h3><div class="chart-toolbar"><button data-focus-frame="annual" aria-pressed="${ctx.frame==='annual'}">연간</button><button data-focus-frame="quarterly" aria-pressed="${ctx.frame==='quarterly'}">분기</button>${ctx.frame==='quarterly'?`<button data-focus-comparison="growth" aria-pressed="${mode==='growth'}">YoY 전년 대비</button><button data-focus-comparison="qoq" aria-pressed="${mode==='qoq'}">QoQ 전분기 대비</button>`:''}</div></div><p class="chart-caption">연간 5개 · 분기 12개 공시 확보 범위 내 표시 · 금액 원/만/억/조, USD K/M/B/T · 각 기간에 마우스를 올려 수치를 확인하세요.</p><div class="financial-focus-health">${['debt_ratio','current_ratio','icr','operating_margin'].map(id=>{const c=last?.metrics?.[id];return `<article><h4>${esc(c?.label||({current_ratio:'유동비율'}[id])||id)}</h4>${button(ctx,c)}<p>${esc(c?.definition||'공시 원값 미확보')}</p></article>`;}).join('')}</div>${(last?.warnings||[]).map(w=>`<p class="financial-equity-warning">${esc(w.message)} ${button(ctx,w.evidence)}</p>`).join('')}${rendered}<details class="financial-evidence" id="financial-evidence"><summary>공시 원값·계산 근거·결측 사유</summary><div id="financial-evidence-body"></div></details><details><summary>자료 범위와 한계</summary><ul>${(r.limitations||[]).map(x=>`<li>${esc(x)}</li>`).join('')}</ul></details><details class="financial-periods financial-final-table" open><summary>기간별 수치·성장률·건전성</summary>${table(ctx,rows,all)}</details><div class="financial-hover" role="tooltip" hidden></div>`;
+    ctx.el.querySelectorAll('[data-chart-section]').forEach(section=>{
+      const chart=section.querySelector('.financial-toss-chart'),scroll=section.querySelector('.financial-chart-table .scroll');
+      chart.scrollLeft=chart.scrollWidth;scroll.scrollLeft=chart.scrollLeft;
+      chart.onscroll=()=>{scroll.scrollLeft=chart.scrollLeft;};scroll.onscroll=()=>{chart.scrollLeft=scroll.scrollLeft;};
+    });
+    const tooltip=ctx.el.querySelector('.financial-hover');
+    function show(html,event,target){tooltip.innerHTML=html;tooltip.hidden=false;const rect=target.getBoundingClientRect();const x=event?.clientX??rect.left,y=event?.clientY??rect.top;tooltip.style.left=Math.max(8,Math.min(x+16,window.innerWidth-320))+'px';tooltip.style.top=Math.max(8,Math.min(y+16,window.innerHeight-tooltip.offsetHeight-12))+'px';}
+    const hide=()=>{tooltip.hidden=true;};
+    ctx.el.querySelectorAll('[data-focus-frame]').forEach(b=>b.onclick=()=>{ctx.frame=b.dataset.focusFrame;ctx.views={};paint(ctx);});
     ctx.el.querySelectorAll('[data-focus-comparison]').forEach(b=>b.onclick=()=>{ctx.comparison=b.dataset.focusComparison;paint(ctx);});
-    ctx.el.querySelectorAll('[data-focus-cell]').forEach(b=>b.onclick=()=>evidence(ctx,ctx.cells[Number(b.dataset.focusCell)]));
-    for(const metric of metrics){
-      const key=metric.id,legend=ctx.el.querySelector('#focus-legend-'+key),unit=r.currency+(key.includes('eps')?'/주':'');
-      const label=row=>row?row.label+' · '+value(row[performance]?.[key],r.currency)+' '+unit+' · '+(mode==='growth'?'YoY ':'QoQ ')+value(row[mode]?.[key],r.currency):'자료 없음';
-      legend.textContent=label(last);legend.title=exact(last?.[performance]?.[key],r.currency);
-      const series=[{type:'volume',pane:1,label:metric.label,data:rows.map(row=>({time:row.date,...(row[performance]?.[key]?.value==null?{}:{value:row[performance][key].value,color:colors[row[performance][key].trend]||colors.neutral})})),options:{priceScaleId:'left',lastValueVisible:false,priceFormat:{type:'custom',minMove:r.currency==='KRW'?1:.01,formatter:x=>compactMoney(x,r.currency)}}},
-        {type:'line',pane:0,label:mode==='growth'?'YoY %':'QoQ %',data:rows.map(row=>({time:row.date,...(row[mode]?.[key]?.value==null?{}:{value:row[mode][key].value*100,color:colors[row[mode][key].trend]||colors.neutral})})),options:{priceScaleId:'right',lineStyle:2,lineWidth:2,pointMarkersVisible:true,lastValueVisible:false,priceFormat:{type:'custom',minMove:.01,formatter:x=>n(x)+'%'}}}];
-      const chart=WorkbenchCharts.create(ctx.el.querySelector('#focus-chart-'+key),series,{height:300,onReady(chart){
-        chart.panes()[0].setHeight(110);chart.panes()[1].setHeight(160);
-        chart.applyOptions({leftPriceScale:{visible:true,borderVisible:false},rightPriceScale:{visible:true,borderVisible:false}});
-        chart.timeScale().applyOptions({tickMarkFormatter:t=>ctx.frame==='annual'?String(t).slice(0,4):String(t).slice(2,7)});
-        chart.subscribeCrosshairMove(p=>{const row=rows.find(row=>row.date===String(p.time));legend.textContent=row?row.label+' · '+exact(row[performance]?.[key],r.currency)+' · '+(mode==='growth'?'YoY ':'QoQ ')+value(row[mode]?.[key],r.currency):label(last);legend.title=exact((row||last)?.[performance]?.[key],r.currency);});
-        chart.subscribeClick(p=>{const row=rows.find(row=>row.date===String(p.time));if(row)evidence(ctx,row[performance]?.[key]);});
-      }});if(chart)ctx.charts.push(chart);
-    }
-    const dividendLegend=ctx.el.querySelector('#focus-legend-dividend');
-    const dividendLabel=(row,hover=false)=>row?row.label+' · '+(hover?exact(row.values?.dividend,r.currency):value(row.values?.dividend,r.currency)+' '+r.currency+'/주')+' · '+dividendBasis(row.values?.dividend):'공시 자료 없음';
-    dividendLegend.textContent=dividendLabel(dividendRows.at(-1));dividendLegend.title=exact(dividendRows.at(-1)?.values?.dividend,r.currency);
-    const dividendChart=WorkbenchCharts.create(ctx.el.querySelector('#focus-chart-dividend'),[{type:'volume',label:'주당배당금',color:'#6db8f6',data:dividendRows.map(row=>({time:row.date,...(row.values?.dividend?.value==null?{}:{value:row.values.dividend.value})})),options:{lastValueVisible:false,priceFormat:{type:'custom',minMove:r.currency==='USD'?.0001:1,formatter:x=>compactMoney(x,r.currency)}}}],{height:220,onReady(chart){
-      chart.subscribeCrosshairMove(p=>{dividendLegend.textContent=dividendLabel(dividendRows.find(row=>row.date===String(p.time))||dividendRows.at(-1),!!p.time);});
-      chart.subscribeClick(p=>{const row=dividendRows.find(row=>row.date===String(p.time));if(row)evidence(ctx,{...row.values?.dividend,label:'주당배당금'});});
-    }});if(dividendChart)ctx.charts.push(dividendChart);
+    ctx.el.querySelectorAll('[data-chart-frame],[data-chart-years]').forEach(b=>b.onchange=()=>{const id=b.dataset.chartFrame||b.dataset.chartYears;ctx.views[id]||={frame:ctx.frame,years:ctx.frame==='annual'?5:3};ctx.views[id][b.dataset.chartFrame?'frame':'years']=b.dataset.chartFrame?b.value:Number(b.value);paint(ctx);});
+    ctx.el.querySelector('[data-stability]').onchange=e=>{ctx.stability=e.target.value;paint(ctx);};
+    ctx.el.querySelectorAll('[data-focus-cell]').forEach(b=>{const c=ctx.cells[Number(b.dataset.focusCell)];b.onclick=()=>evidence(ctx,c);const hover=e=>show(`<strong>${esc(c?.label||'공시 수치')}</strong><b>${esc(value(c,r.currency))}</b><small>${esc(exact(c,r.currency))}</small><small>${esc(c?.dividend_basis?dividendBasis(c):c?.reason||c?.definition||sourceName(c))}</small>`,e,b);b.onpointerenter=hover;b.onpointermove=hover;b.onfocus=hover;b.onpointerleave=hide;b.onblur=hide;});
+    groups.forEach(g=>{const section=ctx.el.querySelector(`[data-chart-section="${g.id}"]`);section.querySelectorAll('[data-period]').forEach(hit=>{const row=g.rows[Number(hit.dataset.period)],items=[...g.items,...g.extra];const hover=e=>show(`<strong>${esc(row.label)} · ${esc(row.date)}</strong>${items.map(m=>`<div><i style="background:${m.color||'#a8b3c3'}"></i>${esc(m.label)} <b>${esc(value(cell(row,m.path),r.currency))}</b><small>${esc(exact(cell(row,m.path),r.currency))}</small></div>`).join('')}`,e,hit);hit.onpointerenter=hover;hit.onpointermove=hover;hit.onfocus=hover;hit.onpointerleave=hide;hit.onblur=hide;hit.onclick=()=>evidence(ctx,cell(row,g.items[0].path));});});
   }
   return {shell,mount,close};
 })();

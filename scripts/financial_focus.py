@@ -2,11 +2,13 @@
 from copy import deepcopy
 from financial_model import VERSION as NORMALIZATION_VERSION, fact, calc, growth, comparable_period, days
 
-VERSION = 'financial-focus-1'
+VERSION = 'financial-focus-2'
 LABELS = {'sales':'매출액', 'operating':'영업이익', 'income':'지배주주 순이익',
           'basic_eps':'기본 EPS', 'eps':'희석 EPS', 'operating_margin':'영업이익률',
-          'debt_ratio':'부채비율', 'icr':'이자보상배율 (ICR)'}
+          'net_margin':'순이익률', 'current_ratio':'유동비율', 'debt_ratio':'부채비율', 'icr':'이자보상배율 (ICR)'}
 DEFINITIONS = {
+    'net_margin':('순이익 ÷ 매출액', '공시 순이익이 같은 기간 매출에서 차지하는 비중. 원값의 귀속 범위를 확인하세요.', 'percent'),
+    'current_ratio':('유동자산 ÷ 유동부채', '동일 기말 유동부채 대비 유동자산', 'percent'),
     'operating_margin':('영업이익 ÷ 매출액', '동일 기간 영업이익이 매출에서 차지하는 비중', 'percent'),
     'debt_ratio':('총부채 ÷ 자본총계', '기말 총부채/자본총계. 종전 이자부부채/지배주주자본과 다른 정의', 'percent'),
     'icr':('영업이익 ÷ 이자비용', '동일 기간 공시 이자비용 대비 영업이익. 금융비용·현금 이자지급으로 대체하지 않음', 'multiple')}
@@ -73,7 +75,7 @@ def movement(cell, previous, *, reverse=False, ratio=False):
 
 def ratio(values, key):
     formula,explanation,kind=DEFINITIONS[key]
-    numerator,denominator={'operating_margin':('operating','sales'),'debt_ratio':('liabilities','total_equity'),
+    numerator,denominator={'net_margin':('net_income' if values.get('net_income',{}).get('value') is not None else 'income','sales'),'current_ratio':('current_assets','current_liabilities'),'operating_margin':('operating','sales'),'debt_ratio':('liabilities','total_equity'),
                            'icr':('operating','interest_expense')}[key]
     a,b=values.get(numerator),values.get(denominator)
     denominator_tag=(b or {}).get('tag')
@@ -85,6 +87,9 @@ def ratio(values, key):
     if direct and direct.get('value') is not None and direct.get('definition')==formula and direct.get('unit')==cell['unit'] and direct.get('source_type') in ('company_reported','opendart_indicator') and direct.get('definition_verified') is True and (direct.get('start'),direct.get('end'))==((a or {}).get('start'),(a or {}).get('end')):
         cell=deepcopy(direct)
     if key=='icr':cell['comparison_key']='icr:'+str(sorted({denominator_tag} if denominator_tag else {x.get('tag') or '' for x in (b or {}).get('inputs',[])}))
+    if key=='net_margin':
+        cell['comparison_key']='net_margin:'+numerator+':'+str((b or {}).get('comparison_key'))
+        if numerator=='income':explanation='지배주주/공시 순이익 ÷ 매출액. 분자의 귀속 범위는 공시 근거에서 확인.'
     if key=='operating_margin':cell['comparison_key']='margin:'+str((b or {}).get('comparison_key'))
     cell.update(id=key,label=LABELS[key],kind=kind,definition=formula,explanation=explanation,source_type=origin(cell))
     return cell

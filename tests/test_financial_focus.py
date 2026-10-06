@@ -26,11 +26,21 @@ def normal(provider='SEC', basic=True, diluted=True):
 class FocusTests(unittest.TestCase):
     def test_korea_six_metrics_and_five_twelve(self):
         r=summarize(normal('DART'),{})
-        self.assertEqual(len(r['summary']),6)
+        self.assertEqual(len(r['summary']),8)
         self.assertEqual((len(r['annual']),len(r['quarterly'])),(5,12))
         self.assertEqual([m['id'] for m in r['performance_metrics']],['sales','operating','income'])
         self.assertEqual(r['quarterly'][-1]['metrics']['debt_ratio']['value'],1.5)
         self.assertEqual(r['quarterly'][-1]['metrics']['icr']['value'],13)
+    def test_added_toss_ratios(self):
+        n=normal();v=n['quarterly'][-1]['values']
+        v['current_assets']=fact(80,unit='USD',end=v['assets']['end'],filed=v['assets']['filed'])
+        v['current_liabilities']=fact(40,unit='USD',end=v['assets']['end'],filed=v['assets']['filed'])
+        row=summarize(n,{})['quarterly'][-1]
+        self.assertEqual(row['metrics']['current_ratio']['value'],2)
+        self.assertAlmostEqual(row['metrics']['net_margin']['value'],16/106)
+        v['current_liabilities']['end']='2024-12-31'
+        self.assertIsNone(summarize(n,{})['quarterly'][-1]['metrics']['current_ratio']['value'])
+
     def test_us_both_or_single_eps_never_synthetic(self):
         for basic,diluted,expected in [(True,True,['basic_eps','eps']),(True,False,['basic_eps']),(False,True,['eps']),(False,False,[])]:
             r=summarize(normal(basic=basic,diluted=diluted),{})
