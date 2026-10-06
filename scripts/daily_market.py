@@ -212,7 +212,7 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
     output = ROOT/'runtime'/date/(datetime.now(timezone.utc).strftime('%H%M%S')+'-'+mode+'-'+uuid4().hex[:8])
     output.mkdir(parents=True)
     run = {'schema':1, 'state':'running', 'processing_state':'running', 'mode':mode, 'started_at':now(),
-           'output':str(output), 'stages':{s:'not_started' for s in ('inputs','collection','nh_fallback','quality','stock_screen','sector_screen','priority_review','charts','sector_states','report')}}
+           'output':str(output), 'stages':{s:'not_started' for s in ('inputs','collection','nh_fallback','adr_metadata','quality','stock_screen','sector_screen','priority_review','charts','sector_states','report')}}
     if session_cutoff:
         run.update(session_cutoff=session_cutoff, evaluated_at=evaluated_at)
     started = time.monotonic()
@@ -317,6 +317,19 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
             update(stage, 'completed' if fallback['unrecovered'] == 0 else 'completed_with_exceptions')
         else:
             update('nh_fallback', 'not_requested_offline')
+        if mode not in ('replay','review') and not nh_evidence and config.get('adr_metadata',{}).get('enabled'):
+            import adr_metadata
+            stage = 'adr_metadata'
+            update(stage, 'running')
+            inputs.update({str(source/name):h for name,h in sector.load(source/'manifest.json').items()})
+            inputs[str(source/'manifest.json')] = sector.sha(source/'manifest.json')
+            reference = adr_metadata.collect(sector.load(source/'snapshot.json'), output/'adr-evidence')
+            source = adr_metadata.derive(source, output/'adr-market', reference)
+            records = adr_metadata.read(reference['path'])['records']
+            run['adr_metadata'] = {'requested':len(records),'available':sum(r['state']=='available' for r in records)}
+            update(stage, 'completed' if all(r['state']=='available' for r in records) else 'completed_with_exceptions')
+        else:
+            update('adr_metadata', 'not_requested_offline' if mode in ('replay','review') or nh_evidence else 'disabled')
         run['market_source'] = str(source)
         inputs.update({str(source/name):h for name,h in sector.load(source/'manifest.json').items()})
         inputs[str(source/'manifest.json')] = sector.sha(source/'manifest.json')

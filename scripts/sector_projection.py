@@ -42,7 +42,13 @@ def cached(root, run, config, source, original_observation, review):
             if run_manifest['input_hashes'].get(path) != expected:
                 raise ValueError('projection_unpinned_classification_refresh')
         inputs.update(refresh_inputs)
-    names = ['user_classification.py', 'sector_projection.py', 'sector_observation.py', 'sector_signals.py', 'sector_basis.py',
+    from adr_metadata import verified as verify_adr
+    adr_inputs = {}
+    verify_adr(so.load(Path(source)/'snapshot.json').get('adr_metadata'), adr_inputs)
+    if any(run_manifest['input_hashes'].get(p) != h for p,h in adr_inputs.items()):
+        raise ValueError('projection_unpinned_adr_metadata')
+    inputs.update(adr_inputs)
+    names = ['adr_metadata.py', 'user_classification.py', 'sector_projection.py', 'sector_observation.py', 'sector_signals.py', 'sector_basis.py',
              'wics_classification.py', 'finviz_public_classification.py', 'sector_external_review.py', 'classification_refresh.py']
     key_data = dict(inputs=inputs, seed=config['sector_manifest_sha256'], applied=applied,
                     settings=config.get('sector_states'), review=review,

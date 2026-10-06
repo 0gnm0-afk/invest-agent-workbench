@@ -49,10 +49,10 @@ class UserScopeOther(unittest.TestCase):
         self.assertIsNotNone(market_scope.match({'market':'US','symbol':'NEW'},p))
         self.assertIsNone(market_scope.match({**self.row,'isin_code':'NEWISSUER'},p))
 
-    def test_all_31_block_chart_retry_before_client_creation(self):
+    def test_all_37_block_chart_retry_before_client_creation(self):
         policy=market_scope.load()
         records=[r for r in policy['records'] if r.get('identity_bound')]
-        self.assertEqual(len(records),31)
+        self.assertEqual(len(records),37)
         with tempfile.TemporaryDirectory() as tmp, patch.object(HistoryStore,'view',return_value={'bars':[]}):
             store=HistoryStore(Path(tmp)/'cache.sqlite',lambda:self.fail('network client created'))
             for row in records:
@@ -68,7 +68,7 @@ class UserScopeOther(unittest.TestCase):
             self.assertEqual(value['bars'],[])
             self.assertEqual(value['history']['state'],'excluded')
 
-    def test_future_daily_collection_skips_all_31_and_freezes_other_policy(self):
+    def test_future_daily_collection_skips_all_37_and_freezes_other_policy(self):
         from test_hybrid_market import TossMarketPipelineTests
         fixture=TossMarketPipelineTests();fixture.setUp()
         try:
@@ -81,7 +81,7 @@ class UserScopeOther(unittest.TestCase):
             requested={c.args[1] for c in fixture.candles.call_args_list}
             self.assertFalse(requested & {r['symbol'] for r in excluded})
             self.assertEqual(len(result['universe']),2)
-            self.assertEqual(len(result['scope_exclusions']),31)
+            self.assertEqual(len(result['scope_exclusions']),37)
             self.assertEqual(result['user_classification'],user)
         finally:fixture.doCleanups()
 

@@ -479,6 +479,8 @@ def build(market_root, classification_root, evidence, nh_root, applied, *, allow
         groups, changes = align_groups(groups, universe, applied)
     from classification_refresh import apply as apply_refresh
     groups = apply_refresh(groups, snapshot, checked, inputs, applied, classification_age_issue, SECTORS)
+    from adr_metadata import apply_groups as apply_adr_groups
+    groups = apply_adr_groups(groups, snapshot, inputs, applied)
     from user_classification import apply as apply_user_classification
     groups = apply_user_classification(groups, snapshot)
     wics = load_wics(evidence, checked, load, inputs)
@@ -551,7 +553,7 @@ def build(market_root, classification_root, evidence, nh_root, applied, *, allow
               'source_exceptions':quality['exceptions'], 'markets':market_info, 'coverage':coverage,
               'kr_classification_basis': 'FnGuide_WICS_top_level_direct_components'
                   if (evidence/'wics-public.json').exists() else 'legacy_NH_mixed_level_observation_baskets',
-              'us_classification_basis': 'public_full_market_map_and_residual_screener_with_verified_alias_links'
+              'us_classification_basis': 'verified_public_sector_maps_and_stockanalysis_adr' if snapshot.get('adr_metadata') else 'public_full_market_map_and_residual_screener_with_verified_alias_links'
                   if (evidence/'finviz-public.json').exists() else 'individual_quote_convenience_sample',
               'limitations':['current_classification_of_historical_prices_not_point_in_time_backtest',
                             'current_provider_universe_survivorship_and_incomplete_sector_coverage',
