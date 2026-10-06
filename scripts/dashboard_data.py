@@ -223,13 +223,20 @@ def account_view(config, output, refresh=True, saved_dashboard_root=None):
     previous_paths = list((mother / 'runtime/nh-live/exports').glob('account-*.json'))
     previous_paths += list(Path(saved_dashboard_root or output.parent).glob('*/account-snapshot.private.json'))
     previous = None
+    previous_meta = None
+    previous_score = None
     for path in previous_paths:
         try:
             candidate = load(path)
+            meta = None
             if path.name.endswith('.private.json'):
-                candidate = checked(path, load(path.parent / 'manifest.json')['files'].get(path.name))
-            if previous is None or candidate['as_of'] > previous['as_of']:
-                previous = candidate
+                hashes = load(path.parent / 'manifest.json')['files']
+                candidate = checked(path, hashes.get(path.name))
+                if hashes.get('account-view.json'):
+                    meta = checked(path.parent/'account-view.json', hashes['account-view.json'])
+            score = (candidate['as_of'], (meta or {}).get('attempted_at', ''))
+            if previous_score is None or score > previous_score:
+                previous, previous_meta, previous_score = candidate, meta, score
         except (OSError, ValueError, KeyError):
             continue
     result = {'attempted_at': now(), 'query_state': 'not_requested', 'reason': None,
@@ -266,6 +273,8 @@ def account_view(config, output, refresh=True, saved_dashboard_root=None):
     if snapshot is None and previous:
         snapshot = previous
         result['source_mode'] = 'historical_saved'
+        if not refresh and previous_meta:
+            result.update({k:previous_meta.get(k) for k in ('query_state','reason','attempted_at')})
     if snapshot is None:
         return result
     normalized_path = output / 'account-snapshot.private.json'
@@ -290,6 +299,8 @@ def build(root=ROOT, refresh=True, *, market_run=None, daily_update=None):
                   'entries': [], 'sectors': [], 'stocks': {}, 'session_dates': {}, 'quality': {},
                   'candidate_count': None, 'entry_candidate_count': None}
     accounts = account_view(config, output, refresh)
+    if (daily_update or {}).get('account_state') == 'failed':
+        accounts.update(query_state='failed', reason='daily_account_refresh_failed')
     stocks = market.pop('stocks')
     from trailing_warnings import TrailingStore
     from daily_launch import plan_for
@@ -297,9 +308,21 @@ def build(root=ROOT, refresh=True, *, market_run=None, daily_update=None):
     data = {'generated_at': now(), 'market': market, 'accounts': accounts, 'trailing': warnings}
     if daily_update is not None:
         data['daily_update'] = daily_update
+    write(output / 'account-view.json', accounts)
     write(output / 'dashboard.json', data)
     # Prices remain in the immutable market source, projected in memory only.
     # Do not duplicate hundreds of MB of full-universe bars on every launch.
     write(output / 'manifest.json', {'files': {p.name: sha(p) for p in output.iterdir() if p.is_file()},
                                     'market_network_calls': 0, 'authority': 'read_only_no_orders'})
     return output, data, stocks
+
+
+def refresh_account_snapshot(root=ROOT):
+    """One balance-only refresh; immutable receipt is reusable by scheduled and UI paths."""
+    output = root/'runtime/dashboard'/('account-'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'))
+    output.mkdir(parents=True)
+    accounts = account_view(load(root/'config.json'), output, refresh=True)
+    write(output/'account-view.json', accounts)
+    write(output/'manifest.json', {'files':{p.name:sha(p) for p in output.iterdir() if p.is_file()},
+                                  'authority':'read_only_no_orders'})
+    return accounts

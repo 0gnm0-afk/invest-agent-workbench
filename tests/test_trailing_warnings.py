@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from trailing_warnings import TrailingStore, indicators
+from trailing_warnings import TrailingStore, indicators, holding_series
 
 class Warnings(unittest.TestCase):
  def setUp(self):
@@ -104,5 +104,24 @@ class Warnings(unittest.TestCase):
  def test_trailing_equality(self):
   p=self.run_update()['positions'][0];self.add(p['line'],high=100,low=95)
   self.assertIn('trailing',[e['kind'] for e in self.run_update()['events']])
+
+class SelectedSeries(unittest.TestCase):
+ def test_selected_only_and_integrity(self):
+  import json,hashlib
+  with tempfile.TemporaryDirectory() as temp:
+   path=Path(temp)/'snapshot.json'
+   rows=[{'market':'US','symbol':str(i),'bars':[{'date':'2026-10-05','close':100}]} for i in range(4)]
+   path.write_text(json.dumps({'metadata':{},'series':rows},indent=2),encoding='utf-8')
+   sha=hashlib.sha256(path.read_bytes()).hexdigest()
+   self.assertEqual(holding_series(path,sha,{'US:2'}),{'US:2':rows[2]})
+   with self.assertRaises(ValueError):holding_series(path,'wrong',{'US:2'})
+ def test_empty_and_unrecognized_layout(self):
+  import json,hashlib
+  with tempfile.TemporaryDirectory() as temp:
+   path=Path(temp)/'snapshot.json'
+   path.write_text(json.dumps({'series':[]},indent=2),encoding='utf-8')
+   self.assertEqual(holding_series(path,hashlib.sha256(path.read_bytes()).hexdigest(),set()),{})
+   path.write_text('{"series": []}',encoding='utf-8')
+   with self.assertRaises(ValueError):holding_series(path,hashlib.sha256(path.read_bytes()).hexdigest(),set())
 
 if __name__=='__main__':unittest.main()

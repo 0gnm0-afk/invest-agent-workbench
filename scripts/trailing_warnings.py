@@ -213,6 +213,38 @@ class TrailingStore:
         return self.read()
 
 
+def holding_series(path, expected_hash, keys):
+    """Read selected series from our indent=2 immutable snapshot without loading the universe."""
+    with path.open('rb') as stream:
+        if not expected_hash or hashlib.file_digest(stream, 'sha256').hexdigest() != expected_hash:
+            raise ValueError('saved_artifact_hash_mismatch')
+    found, ended, item, result = False, False, [], {}
+    with path.open(encoding='utf-8-sig') as stream:
+        for line in stream:
+            if not found:
+                if line.rstrip() == '  "series": [':
+                    found = True
+                elif line.rstrip() in ('  "series": [],', '  "series": []'):
+                    found = ended = True
+                    break
+                continue
+            if line.rstrip() in ('  ],', '  ]'):
+                ended = True
+                break
+            item.append(line)
+            if line.rstrip() in ('    },', '    }'):
+                row = json.loads(''.join(item).rstrip().rstrip(','))
+                key = row['market']+':'+row['symbol']
+                if key in keys:
+                    if key in result:
+                        raise ValueError('duplicate_market_series')
+                    result[key] = row
+                item = []
+    if not found or not ended or item:
+        raise ValueError('snapshot_series_format_unconfirmed')
+    return result
+
+
 def refresh_saved(root, market_run, targets, now=None):
     """Morning path: verified saved market + saved accounts only; no broker calls."""
     from dashboard_data import account_view, load, checked
@@ -224,11 +256,10 @@ def refresh_saved(root, market_run, targets, now=None):
     manifest = load(run_dir/'manifest.json')
     run = checked(run_dir/'run.json', manifest['output_hashes'].get('run.json'))
     source = Path(run['market_source'])/'snapshot.json'
-    snapshot = checked(source, manifest['input_hashes'].get(str(source)))
     with tempfile.TemporaryDirectory(prefix='risk-account-', dir=root/'runtime') as folder:
         accounts = account_view(load(root/'config.json'), Path(folder), refresh=False,
                                 saved_dashboard_root=root/'runtime/dashboard')
     keys = {p['market']+':'+p.get('quote_symbol',p['symbol'])
             for a in accounts['accounts'] for p in a['positions'] if equity(p)}
-    stocks = {s['market']+':'+s['symbol']:s for s in snapshot['series'] if s['market']+':'+s['symbol'] in keys}
+    stocks = holding_series(source, manifest['input_hashes'].get(str(source)), keys)
     return TrailingStore(root/'runtime/trailing-warnings.sqlite3').update(accounts, stocks, targets, now)

@@ -301,7 +301,7 @@ def main():
         parser.error('--retry-market requires --daily-refresh')
     if args.build_only and args.daily_refresh:
         parser.error('--build-only is saved-market only')
-    daily = DailyLaunch(ROOT) if args.daily_refresh else None
+    daily = DailyLaunch(ROOT, accounts=not args.saved_accounts) if args.daily_refresh else None
     base_run = (daily or DailyLaunch(ROOT)).display_run()
     saved_notice = None
     if not daily and base_run:

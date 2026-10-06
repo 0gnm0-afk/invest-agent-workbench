@@ -42,11 +42,12 @@ def attempt_id(record):
 
 
 class DailyLaunch:
-    def __init__(self, root, runner=None, planner=plan_for):
+    def __init__(self, root, runner=None, planner=plan_for, *, accounts=True):
         self.root = Path(root).resolve()
         self.folder = self.root / 'runtime/dashboard-daily'
         self.runner = runner or self.execute
         self.planner = planner
+        self.accounts = accounts
 
     def read(self, day):
         path = self.folder / (day + '.json')
@@ -141,7 +142,7 @@ class DailyLaunch:
                         # even when an earlier dashboard launch failed or used older US bars.
                         retry = True
                 if retry and expected_attempt is not None:
-                    if not record or attempt_id(record) != expected_attempt or record['state'] not in ('failed', 'interrupted', 'partial'):
+                    if not record or attempt_id(record) != expected_attempt or (record['state'] not in ('failed', 'interrupted', 'partial') and record.get('account_state') not in ('failed','partial')):
                         return {**(record or {'day':day,'state':'unavailable','targets':{}}), 'reused':True}
                 if record and not retry:
                     if record['state'] == 'running':
@@ -163,7 +164,7 @@ class DailyLaunch:
                     record.update(plan)
                     self.save(record)
                     run = self.runner({**plan,'prior_run':record['display_run']}, progress)
-                    record.update(run=run.get('output'), state=run['state'], stage='finished', trailing_state=run.get('trailing_state'))
+                    record.update(run=run.get('output'), state=run['state'], stage='finished', trailing_state=run.get('trailing_state'), account_attempted=run.get('account_attempted',False), account_state=run.get('account_state'))
                     display = self.usable_run(run.get('output'))
                     if display:
                         record['display_run'] = display
@@ -225,7 +226,17 @@ class DailyLaunch:
                 process.wait()
                 if result is None or process.returncode not in (0,1,2):
                     raise RuntimeError('market_worker_failed')
-        if result.get('state') in ('succeeded', 'partial'):
+        if self.accounts:
+            progress({'stage':'accounts'})
+            result['account_attempted'] = True
+            try:
+                from dashboard_data import refresh_account_snapshot
+                result['account_state'] = refresh_account_snapshot(self.root)['query_state']
+            except Exception:
+                result['account_state'] = 'failed'
+        if result.get('account_state') == 'failed':
+            result['trailing_state'] = 'unavailable'
+        elif result.get('state') in ('succeeded', 'partial'):
             try:
                 from trailing_warnings import refresh_saved
                 refresh_saved(self.root, result['output'], plan['targets'])
@@ -235,7 +246,7 @@ class DailyLaunch:
         return result
 
     def public(self, record):
-        result={k:record.get(k) for k in ('day','state','stage','targets','started_at','finished_at','error','reused','manual_retry','trailing_state')}
+        result={k:record.get(k) for k in ('day','state','stage','targets','started_at','finished_at','error','reused','manual_retry','trailing_state','account_attempted','account_state')}
         result['attempt_id'] = attempt_id(record)
         result['display_updated'] = False
         result['display_stale'] = bool(record.get('display_run') and record.get('display_run') != record.get('run'))

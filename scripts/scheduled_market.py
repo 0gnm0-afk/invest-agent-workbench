@@ -1,4 +1,4 @@
-"""Finite, headless 06:40 KST market job; no accounts, browser, or LLM."""
+"""Finite, headless 06:40 KST market and balance job; no orders, browser, or LLM."""
 import argparse
 from datetime import datetime, timezone
 import getpass

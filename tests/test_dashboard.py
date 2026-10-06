@@ -8,6 +8,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
@@ -139,7 +140,12 @@ class BrokerBoundary(unittest.TestCase):
 class HttpBoundary(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.server = ThreadingHTTPServer(('127.0.0.1', 0), handler_for({'market': {'state':'failed'}}, {}, Path('.'), 'test'))
+        cls.temp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.temp.cleanup)
+        dependencies = {'histories': SimpleNamespace(saved=SimpleNamespace(stocks={}, markets={})),
+                        'financials': SimpleNamespace()}
+        cls.server = ThreadingHTTPServer(('127.0.0.1', 0), handler_for({'market': {'state':'failed'}}, {}, Path('.'), 'test',
+            Path(cls.temp.name)/'chart.sqlite3', analysis_dependencies=dependencies))
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True);cls.thread.start()
 
     @classmethod
@@ -203,6 +209,20 @@ class AccountFallback(unittest.TestCase):
         self.assertEqual((value['query_state'],value['source_mode'],value['reason']),('failed','historical_saved','http_503'))
         self.assertTrue(value['stale'])
         self.assertEqual(value['as_of'], snapshot['as_of'])
+
+    def test_persisted_account_failure_remains_failed_on_saved_read(self):
+        import nh_api
+        d.write(self.root/'config.json',self.config)
+        snapshot={'as_of':'2026-10-06T00:00:00+00:00','accounts':[],'limitations':[]}
+        d.write(self.root/'runtime/nh-live/exports/account-test.json',snapshot)
+        with patch('nh_api.read', side_effect=nh_api.NHError('http_503')):
+            value=d.refresh_account_snapshot(self.root)
+        self.assertEqual(value['query_state'],'failed')
+        output=self.root/'runtime/dashboard/read';output.mkdir()
+        with patch('nh_api.read',side_effect=AssertionError('unexpected duplicate read')):
+            saved=d.account_view(self.config,output,refresh=False)
+        self.assertEqual(saved['query_state'],'failed');self.assertEqual(saved['reason'],'http_503')
+        self.assertEqual(saved['as_of'],snapshot['as_of'])
 
     def test_saved_mode_never_calls_broker(self):
         with patch('nh_api.read', side_effect=AssertionError('must not call')):

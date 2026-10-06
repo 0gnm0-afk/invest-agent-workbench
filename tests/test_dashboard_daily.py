@@ -100,6 +100,23 @@ class RetryFixture(unittest.TestCase):
 
 
 class DashboardRetry(RetryFixture):
+    def test_account_failure_alone_offers_explicit_retry(self):
+        self.seed.update(state='succeeded',account_attempted=True,account_state='failed')
+        self.gate.save(self.seed)
+        controller=self.controller()
+        self.assertTrue(controller.status()['retry_available'])
+        controller.retry('failed-attempt');self.wait(controller)
+        self.assertEqual(len(self.calls),1)
+
+
+    def test_completed_cycle_reuses_account_refresh_without_second_query(self):
+        self.seed.update(account_attempted=True,account_state='received')
+        self.gate.save(self.seed)
+        self.views['view'][0]['accounts']={'stale':True}
+        self.controller(saved_accounts=False)
+        self.assertEqual(self.builds,[])
+
+
     def test_initial_open_refreshes_stale_accounts_even_when_scheduled_market_reused(self):
         self.views['view'][0]['accounts'] = {'stale':True}
         self.controller(saved_accounts=False)

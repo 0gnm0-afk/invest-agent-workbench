@@ -125,6 +125,7 @@ class Launch(unittest.TestCase):
         self.assertEqual(collector.call_args.kwargs['session_cutoff'],'2026-09-29')
 
     def test_worker_process_passes_cutoff_and_prior_run(self):
+        self.gate.accounts=False
         old=self.result('old');new=self.result('new')
         folder=self.root/'scripts';folder.mkdir()
         program='import json,sys\nfrom pathlib import Path\nPath("args.json").write_text(json.dumps(sys.argv))\nprint('+repr(json.dumps({'stage':'collection','output':new['output']}))+',flush=True)\nprint('+repr(json.dumps(new))+',flush=True)\n'
@@ -136,6 +137,16 @@ class Launch(unittest.TestCase):
             got=self.gate.execute({**self.plan(NOW),'prior_run':old['output']},lambda _:None)
         self.assertEqual(got['trailing_state'],'evaluated')
         refresh.assert_called_once_with(self.root,new['output'],self.targets)
+        self.gate.accounts=True
+        order=[]
+        with patch('dashboard_data.refresh_account_snapshot',side_effect=lambda root: (order.append('account') or {'query_state':'received'})) as account, patch('trailing_warnings.refresh_saved',side_effect=lambda *a:order.append('risk')):
+            got=self.gate.execute({**self.plan(NOW),'prior_run':old['output']},lambda _:None)
+        self.assertEqual(order,['account','risk']);account.assert_called_once_with(self.root)
+        self.assertEqual(got['account_state'],'received')
+        with patch('dashboard_data.refresh_account_snapshot',side_effect=OSError('test')), patch('trailing_warnings.refresh_saved') as warning:
+            got=self.gate.execute({**self.plan(NOW),'prior_run':old['output']},lambda _:None)
+        self.assertEqual(got['account_state'],'failed');self.assertEqual(got['trailing_state'],'unavailable');warning.assert_not_called()
+
 
 class DashboardViews(unittest.TestCase):
     def test_published_view_and_update_status_are_read_only(self):

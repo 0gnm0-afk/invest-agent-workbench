@@ -58,8 +58,8 @@ class DashboardDaily:
             display = self.daily.display_run() or record.get('display_run')
             update = self.daily.public({**record, 'display_run': display})
             account_stale = self.views['view'][0].get('accounts', {}).get('stale', False)
-            refresh = initial and not retry and not self.saved_accounts and (not record.get('reused') or account_stale)
-            if display == self.display_run and not refresh:
+            refresh = not record.get('account_attempted') and initial and not retry and not self.saved_accounts and (not record.get('reused') or account_stale)
+            if display == self.display_run and not refresh and not (record.get('account_attempted') and not record.get('reused')):
                 data, stocks = self.views['view']
                 next_view = ({**data, 'daily_update': update}, stocks)
             else:
@@ -94,7 +94,7 @@ class DashboardDaily:
             if self.view_error:
                 value.update(state='failed', error=self.view_error)
             value.update(enabled=True, view_ready=self.ready, revision=self.revision, reused=self.record.get('reused', False),
-                         retry_available=self.ready and value['day'] == self.day() and value['state'] in ('failed', 'interrupted', 'partial'))
+                         retry_available=self.ready and value['day'] == self.day() and (value['state'] in ('failed', 'interrupted', 'partial') or value.get('account_state') in ('failed','partial')))
             return value
 
     def retry(self, expected_attempt):
