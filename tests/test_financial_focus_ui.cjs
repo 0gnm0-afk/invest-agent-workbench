@@ -11,7 +11,7 @@ class Element{
  }
 }
 function harness(result){
- const root=new Element(),charts=[],ctx={console,setTimeout,clearTimeout,document:{querySelector:()=>root},fetch:async()=>({ok:true,json:async()=>({state:'complete',result})}),WorkbenchCharts:{remove(){},create(el,series,options){const chart={series,applyOptions(o){this.options=o;},timeScale(){return {applyOptions(){}};},subscribeClick(fn){this.click=fn;},subscribeCrosshairMove(fn){this.move=fn;}};charts.push(chart);options.onReady(chart);return chart;}}};
+ const root=new Element(),charts=[],ctx={console,setTimeout,clearTimeout,document:{querySelector:()=>root},fetch:async()=>({ok:true,json:async()=>({state:'complete',result})}),WorkbenchCharts:{remove(){},create(el,series,options){if(!series.some(s=>s.data.some(p=>p.value!=null)))return;const chart={series,panes(){return [{setHeight(){}},{setHeight(){}}];},applyOptions(o){this.options=o;},timeScale(){return {applyOptions(){}};},subscribeClick(fn){this.click=fn;},subscribeCrosshairMove(fn){this.move=fn;}};charts.push(chart);options.onReady(chart);return chart;}}};
  ctx.window=ctx;vm.createContext(ctx);for(const name of ['format.js','financial-focus.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'../dashboard',name),'utf8'),ctx);
  return {root,charts,mount:()=>ctx.WorkbenchFinancials.mount({market:result.provider==='DART'?'KR':'US',symbol:'TEST',isCurrent:()=>true})};
 }
@@ -26,13 +26,27 @@ function sample(provider='SEC',eps=['basic_eps','eps']){
   const result=sample(provider),before=JSON.stringify(result),h=harness(result);await h.mount();let html=h.root.querySelector('#financial-content').innerHTML;
   assert.match(html,/연간 5개 · 분기 12개/);assert.match(html,/총부채 ÷ 자본총계/);assert.doesNotMatch(html,/Finviz|기관 지분|유동비율/);
   assert.equal(h.charts.length,provider==='SEC'?5:3);assert.equal(h.charts[0].series[0].type,'volume');assert.equal(h.charts[0].series[1].options.lineStyle,2);
-  assert.equal(h.charts[0].series[0].options.priceScaleId,'left');assert.equal(h.charts[0].series[1].options.priceScaleId,'right');assert.equal(h.charts[0].series[0].data.length,5);
-  assert.equal(h.charts[0].series[0].options.priceFormat.formatter(1234.5),provider==='SEC'?'1,234.50':'1,235');
+  assert.equal(h.charts[0].series[0].pane,1);assert.equal(h.charts[0].series[1].pane,0);assert.equal(h.charts[0].series[0].options.priceScaleId,'left');assert.equal(h.charts[0].series[1].options.priceScaleId,'right');assert.equal(h.charts[0].series[0].data.length,5);
+  assert.equal(h.charts[0].series[0].options.priceFormat.formatter(1234.5),provider==='SEC'?'1.23K':'1,235원');
+  const fmt=h.charts[0].series[0].options.priceFormat.formatter;
+  for(const [x,text] of (provider==='DART'?[[1e14,'100조'],[1e8,'1억'],[1e4,'1만'],[-123456789,'-1.23억'],[0,'0원']]:[[1e12,'1T'],[1e9,'1B'],[1e6,'1M'],[-2e9,'-2B'],[0,'0.00']]))assert.equal(fmt(x),text);
+  assert.match(html,provider==='SEC'?/1,234.50 USD/:/1,234.5 KRW/);
   if(provider==='DART')assert.doesNotMatch(html,/기본 EPS|희석 EPS/);else{assert.match(html,/기본 EPS/);assert.match(html,/희석 EPS/);}
   h.root.querySelectorAll('[data-focus-frame]').find(x=>x.dataset.focusFrame==='quarterly').onclick();assert.equal(h.charts.at(-1).series[0].data.length,12);
   h.root.querySelectorAll('[data-focus-comparison]').find(x=>x.dataset.focusComparison==='qoq').onclick();assert.match(h.root.querySelector('#financial-content').innerHTML,/적자축소/);assert.equal(h.charts.at(-1).series[1].data[0].value,undefined);
   h.charts.at(-1).click({time:'2025-12-31'});assert.match(h.root.querySelector('#financial-evidence-body').innerHTML,/검증 산식/);
   assert.equal(JSON.stringify(result),before);
+ }
+ for(const provider of ['DART','SEC']){
+  const r=sample(provider);r.annual.forEach(row=>row.values.dividend={value:provider==='DART'?1668:.034,unit:r.currency+'/share',dividend_basis:provider==='DART'?'annual_common_cash':'declared',formula:'공시 원값'});
+  r.annual[0].values.dividend.value=null;r.annual[1].values.dividend.value=0;
+  const before=JSON.stringify(r),h=harness(r);await h.mount();
+  assert.match(h.root.querySelector('#financial-content').innerHTML,/주당배당금/);if(provider==='SEC')assert.match(h.root.querySelector('#financial-content').innerHTML,/>0.034<\/button>/);
+  assert.match(h.root.querySelector('#financial-content').innerHTML,provider==='DART'?/사업연도 보통주 현금배당/:/선언 기준/);
+  const d=h.charts.at(-1);assert.equal(d.series[0].data[0].value,undefined);assert.equal(d.series[0].data[1].value,0);
+  d.move({time:'2025-12-31'});assert.match(h.root.querySelector('#focus-legend-dividend').textContent,provider==='DART'?/1,668 KRW\/share/:/0.034 USD\/share/);
+  h.root.querySelectorAll('[data-focus-frame]').find(x=>x.dataset.focusFrame==='quarterly').onclick();assert.match(h.root.querySelector('#financial-content').innerHTML,/분기 공시값이 없어 연간/);
+  assert.equal(JSON.stringify(r),before);
  }
  const one=harness(sample('SEC',['basic_eps']));await one.mount();assert.doesNotMatch(one.root.querySelector('#financial-content').innerHTML,/희석 EPS/);
  const old=harness({...sample(),calculation_version:'old'});await old.mount();assert.equal(old.charts.length,0);assert.match(old.root.querySelector('#financial-content').innerHTML,/이전 형식/);
