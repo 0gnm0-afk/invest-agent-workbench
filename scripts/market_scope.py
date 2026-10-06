@@ -8,7 +8,7 @@ from pathlib import Path
 POLICY = Path(__file__).with_name('market_exclusions.json')
 
 
-def load(path=None):
+def load(path=None, *, user_registry=None):
     path = Path(path or POLICY)
     payload = json.loads(path.read_text(encoding='utf-8'))
     if payload.get('schema') != 1 or payload.get('scope') != 'market_symbol_until_user_restores':
@@ -21,31 +21,37 @@ def load(path=None):
         payload['records'] += [r for r in automatic if (r['market'],r['symbol']) not in manual_keys
             and r.get('dual_provider_rule') == payload['dual_provider'].get('rule_id')
             and r.get('reason') == 'dual_provider_data_unavailable']
+    from market_exclusion_review import read_records
+    approved, user_raw = read_records(user_registry)
+    existing = {(r['market'],r['symbol'],r.get('isin_code'),r.get('exchange')) for r in payload['records']}
+    payload['records'] += [r for r in approved if (r['market'],r['symbol'],r.get('isin_code'),r.get('exchange')) not in existing]
     lifecycle_path = Path(__file__).with_name('market_lifecycle.json')
     lifecycle_raw = lifecycle_path.read_bytes()
     payload['lifecycle_records'] = json.loads(lifecycle_raw)['records']
     seen = set()
     for r in payload['records']:
-        key = r['market'], r['symbol'], r.get('isin_code')
+        key = r['market'], r['symbol'], r.get('isin_code'), r.get('exchange')
         if key in seen or r['market'] not in ('KR','US') or not all(r.get(k) for k in ('symbol','reason','approved_on','approval','evidence_run')):
             raise ValueError('invalid_or_duplicate_market_exclusion')
         seen.add(key)
-    return {**payload, 'path': str(path.resolve()), 'sha256': hashlib.sha256(path.read_bytes()+registry_raw+lifecycle_raw).hexdigest()}
+    return {**payload, 'path': str(path.resolve()), 'sha256': hashlib.sha256(path.read_bytes()+registry_raw+lifecycle_raw+user_raw).hexdigest()}
 
 
 def match(row, policy=None, *, completed_session=None):
     policy = policy if policy is not None else load()
     as_of = completed_session if completed_session is not None else policy.get('completed_sessions', {}).get(
         row['market'], datetime.now(timezone.utc).date().isoformat())
-    found = next((r for r in policy['records'] if (r['market'],r['symbol']) == (row['market'],row['symbol'])
-                  and (not r.get('dual_provider_rule') or r.get('isin_code') == row.get('isin_code'))), None)
-    if found:
+    for found in policy['records']:
+        if (found['market'],found['symbol']) != (row['market'],row['symbol']):
+            continue
         if found.get('identity_bound') and row.get('isin_code') and found.get('isin_code') != row['isin_code']:
-            return None
-        if found.get('dual_provider_rule') and (not row.get('isin_code') or found.get('isin_code') != row['isin_code']):
-            return None
-        if found.get('dual_provider_rule') and as_of < found.get('effective_session', ''):
-            return None
+            continue
+        exchange = row.get('listing_exchange_family') or row.get('exchange')
+        if found.get('approval_id') and exchange and found.get('exchange') != exchange:
+            continue
+        if found.get('dual_provider_rule'):
+            if not row.get('isin_code') or found.get('isin_code') != row['isin_code'] or as_of < found.get('effective_session', ''):
+                continue
         return found
     from market_quality import lifecycle_record
     ended = lifecycle_record(row, as_of, policy.get('lifecycle_records', []))

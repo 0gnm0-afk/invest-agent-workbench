@@ -7,6 +7,8 @@ import sqlite3
 from http.cookies import SimpleCookie
 from daily_launch import DailyLaunch
 from dashboard_daily import DashboardDaily, RetryConflict
+from market_exclusion_review import ExclusionReview, ReviewConflict
+from invest_agent.trading.store import instance_lock
 import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -22,7 +24,7 @@ from risk_service import RiskService, OPS as RISK_OPS
 
 
 def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None, daily_status=None, daily_retry=None,
-                analysis_capabilities=None, analysis_dependencies=None, risk_options=None, offline=False):
+                analysis_capabilities=None, analysis_dependencies=None, risk_options=None, offline=False, exclusion_review=None):
     initial_view = (data, stocks)
     store = WorkspaceStore(workspace_path or ROOT / "runtime/chart-workspaces.sqlite3")
     histories = (analysis_dependencies['histories'] if analysis_dependencies else
@@ -52,6 +54,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
             self.send_header('Referrer-Policy', 'no-referrer')
             if cookie:
                 self.send_header('Set-Cookie', 'workbench_confirm=' + browser_session + '; HttpOnly; SameSite=Strict; Path=/api/analysis-rpc')
+                self.send_header('Set-Cookie', 'workbench_scope_confirm=' + browser_session + '; HttpOnly; SameSite=Strict; Path=/api/market-exclusions')
             self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
             self.end_headers()
             self.wfile.write(body)
@@ -72,6 +75,14 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                 return self.send(json.dumps({'app': 'invest-workbench', 'token': token, 'analysis_protocol': 1, 'collaboration_protocol': 1, 'offline': offline, 'workspace': str(ROOT)}).encode(), cookie=self.headers.get('Sec-Fetch-Site') == 'same-origin')
             if path == '/api/daily-update':
                 return self.send(json.dumps(daily_status() if daily_status else {'enabled':False}, ensure_ascii=False).encode('utf-8'))
+            if path == '/api/market-exclusions':
+                if query:
+                    return self.send(b'{"error":"invalid_exclusion_request"}', status=400)
+                try:
+                    result = exclusion_review.status() if exclusion_review else {'issues':[], 'job':None, 'busy':False, 'view_ready':False}
+                    return self.send(json.dumps(result, ensure_ascii=False, allow_nan=False).encode('utf-8'))
+                except (ValueError, KeyError, TypeError, OSError):
+                    return self.send(b'{"error":"exclusion_review_unavailable"}', status=503)
             if path == '/api/home':
                 return self.send(json.dumps(data, ensure_ascii=False, allow_nan=False).encode('utf-8'))
             if path == '/api/stock-search':
@@ -126,8 +137,13 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                 value = stocks.get(key)
                 if value is None:
                     value = {'state': 'unavailable', 'reason': 'saved_price_series_missing', 'bars': []}
+                elif exclusion_review:
+                    from market_scope import match
+                    excluded = match(value)
+                    if excluded:
+                        value = {**value,'state':'excluded','reason':excluded['reason'],'bars':[]}
                 return self.send(json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8'))
-            names = {'/risk-workbench.js': 'risk-workbench.js', '/risk-workbench.css': 'risk-workbench.css', '/collaboration.js': 'collaboration.js', '/analysis.js': 'analysis.js', '/': 'index.html', '/app.js': 'app.js', '/tooltips.js': 'tooltips.js', '/financials.js': 'financials.js', '/financials.css': 'financials.css', '/style.css': 'style.css',
+            names = {'/market-exclusions.js':'market-exclusions.js', '/market-exclusions.css':'market-exclusions.css', '/risk-workbench.js': 'risk-workbench.js', '/risk-workbench.css': 'risk-workbench.css', '/collaboration.js': 'collaboration.js', '/analysis.js': 'analysis.js', '/': 'index.html', '/app.js': 'app.js', '/tooltips.js': 'tooltips.js', '/financials.js': 'financials.js', '/financials.css': 'financials.css', '/style.css': 'style.css',
                      '/stock-chart.js': 'stock-chart.js', '/drawing-tools.js': 'drawing-tools.js', '/chart-workspace.js': 'chart-workspace.js', '/chart-tools.css': 'chart-tools.css', '/format.js': 'format.js', '/charts.js': 'charts.js', '/workbench.png': 'workbench.png',
                      '/vendor/lightweight-charts.js': 'vendor/lightweight-charts.js',
                      '/vendor/NOTICE': 'vendor/NOTICE', '/vendor/LICENSE': 'vendor/LICENSE'}
@@ -150,7 +166,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                 frame = timeframe(query.get('timeframe', ['1d'])[0])
             except ValueError:
                 return self.send(b'{"error":"invalid_timeframe"}', status=400)
-            if path != '/api/daily-update' and not path.startswith(('/api/chart-state/', '/api/chart-history/', '/api/financials/', '/api/analysis-rpc')):
+            if path not in ('/api/daily-update', '/api/market-exclusions') and not path.startswith(('/api/chart-state/', '/api/chart-history/', '/api/financials/', '/api/analysis-rpc')):
                 return self.send(b'{"error":"read_only"}', status=405)
             expected = '127.0.0.1:' + str(self.server.server_port)
             supplied_token = self.headers.get('X-Workbench-Token', '')
@@ -161,7 +177,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
             if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
                 return self.send(b'{"error":"json_required"}', status=415)
             key = urllib.parse.unquote(path.rsplit('/', 1)[-1])
-            if path not in ('/api/analysis-rpc', '/api/daily-update') and key not in stocks:
+            if path not in ('/api/analysis-rpc', '/api/daily-update', '/api/market-exclusions') and key not in stocks:
                 return self.send(b'{"error":"unknown_stock"}', status=404)
             try:
                 length = int(self.headers.get('Content-Length', '0'))
@@ -186,6 +202,29 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                         result = daily_retry(body['attempt_id'])
                     except RetryConflict:
                         return self.send(b'{"error":"daily_attempt_changed"}', status=409)
+                    return self.send(json.dumps(result, ensure_ascii=False, allow_nan=False).encode('utf-8'), status=202)
+                if path == '/api/market-exclusions':
+                    cookies = SimpleCookie(self.headers.get('Cookie', ''))
+                    candidate = cookies.get('workbench_scope_confirm')
+                    if self.headers.get('Sec-Fetch-Site') != 'same-origin' or not candidate or not secrets.compare_digest(candidate.value, browser_session):
+                        return self.send(b'{"error":"local_browser_confirmation_required"}', status=403)
+                    if query or not isinstance(body,dict):
+                        return self.send(b'{"error":"invalid_exclusion_request"}', status=400)
+                    action = body.get('action')
+                    if not (action == 'approve' and set(body)=={'action','review_id','issue_ids'} or action == 'retry' and set(body)=={'action','job_id'} and isinstance(body['job_id'],str)):
+                        return self.send(b'{"error":"invalid_exclusion_request"}', status=400)
+                    if not exclusion_review:
+                        return self.send(b'{"error":"exclusion_review_unavailable"}', status=503)
+                    try:
+                        result = exclusion_review.approve(body['review_id'],body['issue_ids']) if action=='approve' else exclusion_review.retry(body['job_id'])
+                    except ReviewConflict:
+                        return self.send(b'{"error":"exclusion_review_changed"}', status=409)
+                    except ValueError as exc:
+                        known = {'invalid_exclusion_request','invalid_exclusion_selection','empty_market_scope'}
+                        code = str(exc) if str(exc) in known else 'exclusion_review_unavailable'
+                        return self.send(json.dumps({'error':code}).encode(), status=400 if code in known else 503)
+                    except (OSError, KeyError, TypeError):
+                        return self.send(b'{"error":"exclusion_review_unavailable"}', status=503)
                     return self.send(json.dumps(result, ensure_ascii=False, allow_nan=False).encode('utf-8'), status=202)
                 if path == '/api/analysis-rpc':
                     if not isinstance(body, dict) or set(body) != {'op', 'arguments'}:
@@ -276,9 +315,29 @@ def main():
         print(json.dumps({'output': str(output), 'market_state': data['market']['state'],
                           'account_query_state': data['accounts']['query_state']}))
         return
+    def publish_exclusion(result_run):
+        # Do not replace a newer daily result with an older approval result.
+        with instance_lock(ROOT/'runtime/dashboard-daily'),instance_lock(ROOT/'runtime'):
+            if controller and controller.active:
+                raise ReviewConflict('daily_view_preparation_running')
+            gate = daily or DailyLaunch(ROOT)
+            result_run = gate.display_run() or str(result_run)
+            run = gate.checked_run(result_run)
+            update = daily.public({**controller.record,'display_run':str(result_run)}) if daily else dict(saved_only=True,latest_state=run['state'],display_stale=False)
+            _, next_data, next_stocks = build(refresh=False,market_run=str(result_run),daily_update=update)
+            if next_data.get('market',{}).get('state')=='unavailable':
+                raise ValueError('dashboard_preparation_failed')
+            if controller:
+                with controller.lock:
+                    views['view'] = (next_data,next_stocks)
+                    controller.display_run = str(result_run)
+                    controller.revision += 1
+            else:
+                views['view'] = (next_data,next_stocks)
+    exclusion_review = ExclusionReview(ROOT,publish=publish_exclusion)
     token = secrets.token_urlsafe(18)
     capabilities = {role: secrets.token_urlsafe(32) for role in ('collaboration','risk')}
-    server = ThreadingHTTPServer(('127.0.0.1', args.port), handler_for(data, stocks, ROOT / 'dashboard', token, views=views, daily_status=controller.status if controller else None, daily_retry=controller.retry if controller else None, analysis_capabilities=capabilities, offline=args.offline))
+    server = ThreadingHTTPServer(('127.0.0.1', args.port), handler_for(data, stocks, ROOT / 'dashboard', token, views=views, daily_status=controller.status if controller else None, daily_retry=controller.retry if controller else None, analysis_capabilities=capabilities, offline=args.offline, exclusion_review=exclusion_review))
     server.daemon_threads = True
     ready = {'url': 'http://127.0.0.1:' + str(server.server_port), 'output': str(output), 'token': token}
     if args.ready_file:

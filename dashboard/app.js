@@ -215,7 +215,7 @@ function focusDetail(market,code) {
  WorkbenchCharts.create($('#focus-delta'),[{label:'증가율 (%)',data:WorkbenchCharts.lineData(usable,'growth',100)},{label:'가속 (%p)',data:WorkbenchCharts.lineData(usable,'acceleration',100),color:'#c39345'}]);
 }
 
-fetch('/api/home').then(r=>{if(!r.ok)throw Error('dashboard_load_failed');return r.json();}).then(d=>{DATA=d;mountStockSearch();window.addEventListener('hashchange',route);route();pollDaily();}).catch(e=>{$('#main').textContent='저장 자료 불러오기 실패: '+e.message;});
+fetch('/api/home').then(r=>{if(!r.ok)throw Error('dashboard_load_failed');return r.json();}).then(d=>{DATA=d;mountStockSearch();window.addEventListener('hashchange',route);route();pollDaily();WorkbenchExclusions.mount($('#market-exclusions'),async()=>{if(!await WorkbenchWorkspace.closeActive())return false;const r=await fetch('/api/home');if(!r.ok)throw Error('home_unavailable');DATA=await r.json();await route();return true;});}).catch(e=>{$('#main').textContent='저장 자료 불러오기 실패: '+e.message;});
 
 $('.skip').onclick = event => { event.preventDefault(); $('#main').focus(); };
 

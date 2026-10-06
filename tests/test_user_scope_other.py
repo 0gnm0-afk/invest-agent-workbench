@@ -14,6 +14,8 @@ from sector_focus import baskets
 
 class UserScopeOther(unittest.TestCase):
     def setUp(self):
+        self.registry_patch=patch('market_exclusion_review.read_records',return_value=([],b''))
+        self.registry_patch.start();self.addCleanup(self.registry_patch.stop)
         self.row=dict(market='US',symbol='NEW',isin_code='USNEW',exchange='NASDAQ',
                       group_state='unmatched',reason='security_type_conflict',
                       evidence=[{'source':'original'}])

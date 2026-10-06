@@ -10,6 +10,10 @@ import classification_refresh as refresh
 from sector_observation import checked,classification_age_issue,SECTORS
 
 class ScopeTests(unittest.TestCase):
+    def setUp(self):
+        self.registry_patch=patch('market_exclusion_review.read_records',return_value=([],b''))
+        self.registry_patch.start();self.addCleanup(self.registry_patch.stop)
+
     def policy(self,symbol='LOW'):
         return {'schema':1,'scope':'market_symbol_until_user_restores','path':'test','sha256':'a'*64,'records':[{'market':'US','symbol':symbol,'reason':'user_excluded','approved_on':'2026-10-02','approval':'test approval','evidence_run':'test'}]}
 

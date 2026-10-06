@@ -6,6 +6,10 @@ import automatic_scope as a
 import market_scope as m
 
 class AutomaticScopeTests(unittest.TestCase):
+    def setUp(self):
+        self.registry_patch=patch('market_exclusion_review.read_records',return_value=([],b''))
+        self.registry_patch.start();self.addCleanup(self.registry_patch.stop)
+
     def test_retired_rule_ignored_even_when_legacy_config_is_enabled(self):
         legacy={'market':'US','symbol':'OLD','isin_code':'ISIN','automatic_rule':'old','reason':'automatic_low_importance_problem','approved_on':'2026-10-02','approval':'old','evidence_run':'old'}
         dual={'market':'US','symbol':'MISSING','isin_code':'MISS','dual_provider_rule':'dual','reason':'dual_provider_data_unavailable','approved_on':'2026-10-02','approval':'user','evidence_run':'proof','effective_session':'2026-10-01'}
@@ -41,8 +45,8 @@ class AutomaticScopeTests(unittest.TestCase):
     def test_live_policy_has_only_current_explicit_manual_records(self):
         policy=json.loads(m.POLICY.read_text(encoding='utf-8'))
         self.assertNotIn('automatic',policy)
-        self.assertEqual(len(policy['records']),31)
-        self.assertTrue(all(x['approved_on']=='2026-10-04' and x.get('identity_bound') for x in policy['records']))
+        self.assertEqual(len(policy['records']),37)
+        self.assertTrue(all(x['approved_on'] in ('2026-10-04','2026-10-06') and x.get('identity_bound') for x in policy['records']))
 
     def test_review_classification_refresh_changes_no_observations(self):
         from market_collect import write_json

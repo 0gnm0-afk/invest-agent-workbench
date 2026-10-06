@@ -374,7 +374,7 @@ def recover(source, output, config, *, evidence_root=None, prior_source=None):
         original['providers'][market] = 'Toss adjusted candles; qualified NH PLUG period for adopted rows'
     original['nh_fallback'] = {'attempted':len(targets),'adopted':len(recovered)+len(metadata_recovered),
                                'observed_not_adopted':sum(r['state']=='observed_not_adopted' for r in results),
-                               'original_source':str(source),'excluded':len(new_exclusions)}
+                               'original_source':str(source),'excluded':len(new_exclusions),'results':results}
     if new_exclusions:
         frozen = {**policy,'records':policy['records']+new_exclusions}
         write_json(output/'scope-policy.json',frozen)

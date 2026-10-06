@@ -348,6 +348,8 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
             run['nh_fallback']['provenance'] = 'saved_source_no_new_requests'
         quality = audit(snapshot)
         write_json(output/'quality.json', quality)
+        from market_exclusion_review import inventory
+        write_json(output/'market-failures.json', inventory(snapshot,quality))
         run['quality'] = {k:quality[k] for k in ('state','processing_state','data_complete','quality_issue_series','unexpected_failures')}
         run['quality'].update({k:snapshot['collection_stats'][k] for k in ('requested','received','failed')})
         run['data_times'] = {k:snapshot.get(k) for k in ('fetched_at','collected_until')}
