@@ -186,6 +186,7 @@ class TrailingStore:
                                                 event_id = hashlib.sha256(f"{key}|{state['generation']}|{bar['date']}|{kind}".encode()).hexdigest()
                                                 event = dict(id=event_id, key=key, account=alias, market=p['market'], symbol=p['symbol'], currency=p['currency'],
                                                     date=bar['date'], kind=kind, close=bar['close'], threshold=threshold, created_at=now.isoformat(),
+                                                    name=state['name'], high=state['high'], atr=bar['atr'], line=state['line'], ma5=bar['ma5'],
                                                     reason='종가가 최종 트레일링 경고선에 접촉·이탈' if kind=='trailing' else '전일 종가는 MA5 위, 당일 종가는 당일 MA5에 접촉·이탈')
                                                 db.execute('INSERT OR IGNORE INTO warnings VALUES(?,?)',(event_id,packed(event)))
                                     state['history'].append(dict(date=bar['date'],close=bar['close'],line=state['line']))

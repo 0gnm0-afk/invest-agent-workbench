@@ -34,6 +34,7 @@ class Warnings(unittest.TestCase):
  def test_trailing_only_duplicate_recovery_recurrence(self):
   self.run_update();self.add(96)
   r=self.run_update();self.assertEqual([e['kind'] for e in r['events']],['trailing'])
+  e=r['events'][0];self.assertEqual(e['name'],'S');self.assertEqual(e['line'],e['threshold']);self.assertIsNotNone(e['atr']);self.assertIsNotNone(e['ma5'])
   self.assertEqual(self.run_update()['events'],r['events'])
   self.add(101);self.run_update();self.add(95);r=self.run_update()
   self.assertEqual(len([e for e in r['events'] if e['kind']=='trailing']),2)

@@ -164,7 +164,7 @@ class DailyLaunch:
                     record.update(plan)
                     self.save(record)
                     run = self.runner({**plan,'prior_run':record['display_run']}, progress)
-                    record.update(run=run.get('output'), state=run['state'], stage='finished', trailing_state=run.get('trailing_state'), account_attempted=run.get('account_attempted',False), account_state=run.get('account_state'))
+                    record.update(run=run.get('output'), state=run['state'], stage='finished', telegram_state=run.get('telegram_state'), trailing_state=run.get('trailing_state'), account_attempted=run.get('account_attempted',False), account_state=run.get('account_state'))
                     display = self.usable_run(run.get('output'))
                     if display:
                         record['display_run'] = display
@@ -243,10 +243,17 @@ class DailyLaunch:
                 result['trailing_state'] = 'evaluated'
             except Exception:
                 result['trailing_state'] = 'unavailable'
+        if self.accounts and result.get('trailing_state') == 'evaluated':
+            try:
+                from telegram_warnings import dispatch
+                result['telegram_state'] = dispatch(self.root, plan['targets'])['state']
+            except Exception:
+                # Delivery failure must not change a successful market/account result.
+                result['telegram_state'] = 'unavailable'
         return result
 
     def public(self, record):
-        result={k:record.get(k) for k in ('day','state','stage','targets','started_at','finished_at','error','reused','manual_retry','trailing_state','account_attempted','account_state')}
+        result={k:record.get(k) for k in ('day','state','stage','targets','started_at','finished_at','error','reused','manual_retry','telegram_state','trailing_state','account_attempted','account_state')}
         result['attempt_id'] = attempt_id(record)
         result['display_updated'] = False
         result['display_stale'] = bool(record.get('display_run') and record.get('display_run') != record.get('run'))
