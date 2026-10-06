@@ -8,7 +8,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from financial_sources import Collector, SourceError, settings
-from financial_model import VERSION, dart_normalize, sec_normalize, summarize
+from financial_model import dart_normalize, sec_normalize
+from financial_focus import VERSION, summarize
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -118,10 +119,6 @@ class FinancialStore:
             else:
                 collector=Collector(base/'raw',progress)
                 source=collector.korea(stock['symbol'].split('.')[0]) if stock['market']=='KR' else collector.usa(stock['symbol'])
-                if stock['market']=='KR' and not stock.get('preferred_price'):
-                    from financial_supplements import samsung_preferred_price
-                    try:samsung_preferred_price(collector,stock)
-                    except Exception:stock['preferred_price_error']='preferred_price_unavailable'
                 sources=collector.sources
             sources = list({s['id']:s for s in sources}.values())
             source['symbol']=stock['symbol']
@@ -136,7 +133,7 @@ class FinancialStore:
             save(base/'source.json',source);save(base/'normalized.json',normal);save(base/'saved-price.json',stock)
             save(base/'result.json',result)
             files={str(p.relative_to(base)).replace('\\','/'):hashlib.sha256(p.read_bytes()).hexdigest() for p in base.rglob('*') if p.is_file()}
-            code_files=['financial_sources.py','financial_model.py','financial_revenue.py','financial_dart_supplement.py','financial_store.py','financial_supplements.py','financial_summary.py']
+            code_files=['financial_focus.py','financial_sources.py','financial_model.py','financial_revenue.py','financial_dart_supplement.py','financial_store.py','financial_supplements.py','financial_summary.py']
             save(base/'manifest.json',dict(schema=1,key=key,version=VERSION,files=files,
                                           code={name:hashlib.sha256((ROOT/'scripts'/name).read_bytes()).hexdigest() for name in code_files}))
             save(folder/'latest.json',dict(snapshot=sid,manifest_sha256=hashlib.sha256((base/'manifest.json').read_bytes()).hexdigest()),atomic=True)

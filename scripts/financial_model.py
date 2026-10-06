@@ -56,6 +56,8 @@ DART_MAP = {
  'tax':('IS',['ifrs-full_IncomeTaxExpenseContinuingOperations'],['법인세비용(수익)','법인세비용']),
  'eps':('IS',['ifrs-full_DilutedEarningsLossPerShare'],['희석주당이익','희석주당이익(손실)']),
  'basic_eps':('IS',['ifrs-full_BasicEarningsLossPerShare'],['기본주당이익','기본주당이익(손실)']),
+ 'liabilities':('BS',['ifrs-full_Liabilities'],['부채총계']),
+ 'interest_expense':('IS',['ifrs-full_InterestExpense'],['이자비용']),
  'assets':('BS',['ifrs-full_Assets'],['자산총계']),
  'equity':('BS',['ifrs-full_EquityAttributableToOwnersOfParent'],['지배기업 소유주지분']),
  'total_equity':('BS',['ifrs-full_Equity'],['자본총계']),
@@ -253,6 +255,7 @@ SEC_MAP = {
  'net_income':['NetIncomeLoss'], 'gross':['GrossProfit'], 'operating':['OperatingIncomeLoss'],
  'pretax':['IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest'],
  'tax':['IncomeTaxExpenseBenefit'], 'eps':['EarningsPerShareDiluted'], 'basic_eps':['EarningsPerShareBasic'],
+ 'liabilities':['Liabilities'], 'interest_expense':['InterestExpense'], 'interest_nonoperating':['InterestExpenseNonoperating'],
  'assets':['Assets'], 'equity':['StockholdersEquity'], 'total_equity':['StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest','StockholdersEquity'],
  'cash':['CashAndCashEquivalentsAtCarryingValue'], 'current_assets':['AssetsCurrent'],
  'current_liabilities':['LiabilitiesCurrent'], 'inventory':['InventoryNet'], 'receivables':['AccountsReceivableNetCurrent'],
@@ -262,7 +265,7 @@ SEC_MAP = {
  'da':['DepreciationDepletionAndAmortization','DepreciationDepletionAndAmortizationPropertyPlantAndEquipment'],
  'shares':['CommonStockSharesOutstanding'], 'weighted_shares':['WeightedAverageNumberOfDilutedSharesOutstanding'],
  'dividend':['CommonStockDividendsPerShareDeclared','CommonStockDividendsPerShareCashPaid']}
-INSTANT = {'assets','equity','total_equity','cash','current_assets','current_liabilities','inventory','receivables','debt_short','debt_current','debt_long','debt_current_total','shares'}
+INSTANT = {'liabilities','assets','equity','total_equity','cash','current_assets','current_liabilities','inventory','receivables','debt_short','debt_current','debt_long','debt_current_total','shares'}
 
 def days(start,end):
     return (date.fromisoformat(end)-date.fromisoformat(start)).days+1
