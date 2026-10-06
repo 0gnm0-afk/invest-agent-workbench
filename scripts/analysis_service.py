@@ -14,6 +14,8 @@ from chart_workspace import Conflict, validate
 from analysis_geometry import geometry
 from analysis_collaboration import Collaboration, OPS as COLLABORATION_OPS, Forbidden
 
+from price_events import build as price_events, validate_research
+
 QUALITATIVE_SKILL = 'stock-qualitative-analysis'
 
 
@@ -96,7 +98,10 @@ class AnalysisService:
             prompt=(f"${QUALITATIVE_SKILL} 스킬을 사용해 투자 워크벤치 분석건 {cid} ({case['stock_key']})의 정성분석을 수행하고 "
                     "같은 분석건에 리포트를 저장해줘.\n"
                     "스킬의 goal·조사·최대 2회 자체 검증 절차를 따른다. invest_analysis MCP의 analysis_read(analysis_key)로 "
-                    "현재 저장 입력을 읽고 반환 snapshot_id를 고정해 필요한 재무 요약·연간/분기 실적·출처·가격 이력을 읽어줘. "
+                    "현재 저장 입력을 읽고 반환 snapshot_id를 고정해 events·research_groups·news_inputs와 재무 요약·연간/분기 실적·출처를 읽어줘. "
+                    "코드의 최근5년 사건과 우선순위를 재계산하지 말고 confirmed의 high는 상세, medium은 간단 조사하고 low/provisional은 기록만 유지해줘. "
+                    "각 news_window부터 실제 뉴스를 검색하고 근거 부족 시 확대하며 근접일을 같은 원인으로 단정하지 마. "
+                    "analysis_save_record의 event_research에 group_id, 조사상태(unresearched/failed/cause_unconfirmed/evidence_found), 검색범위·출처를 저장해줘. "
                     "필요한 배열은 next_offset이 null이 될 때까지 같은 snapshot_id로 읽고, analysis_history의 기존 보고서·사용자 의견을 확인해줘. "
                     "저장 자료의 기준일·회계기간·결측·실패와 이전 성공 자료 사용 여부를 보존하고, 스킬에 따라 추가 조사한 공식 공시·IR·뉴스는 "
                     "출처와 공개일을 별도로 기록해줘. 저장 입력을 실시간 자료로 부르거나 과거 입력에 새 근거가 있었던 것처럼 쓰지 마.\n"
@@ -124,12 +129,14 @@ class AnalysisService:
         if k not in stocks: raise ValueError('stock_not_available')
         chart=self.histories.view(stocks[k],ctx['timeframe'])
         workspace=self.store.shared(k,ctx['timeframe']); financial=self.financials.read(k)
+        daily=chart if ctx['timeframe']=='1d' else self.histories.view(stocks[k],'1d')
+        events=price_events(daily,financial)
         value={'id':ident('sn_'),'case_id':case['id'],'captured_at':now(),'stock_key':k,'context':ctx,
                'instrument':{field:stocks[k].get(field) for field in ('name','symbol','market','currency','isin_code','isin','exchange') if stocks[k].get(field) is not None},
-               'workspace':workspace,'chart':chart,'financials':financial,'accounts':data['accounts'],
+               'price_events':events,'workspace':workspace,'chart':chart,'financials':financial,'accounts':data['accounts'],
                'market':{k:v for k,v in data['market'].items() if k in ('state','session_dates','source','errors')},
                'geometry':geometry(workspace,chart,ctx),'authority':'saved_input_not_trade_confirmation',
-               'component_hashes':{'chart':digest(chart),'workspace':digest(workspace),'financials':digest(financial),'accounts':digest(data['accounts'])}}
+               'component_hashes':{'price_events':digest(events),'chart':digest(chart),'workspace':digest(workspace),'financials':digest(financial),'accounts':digest(data['accounts'])}}
         with closing(self.store.connect()) as db,db:
             db.execute('INSERT INTO analysis_snapshots VALUES (?,?,?,?)',(value['id'],case['id'],packed(value),digest(value)))
         return value
@@ -190,7 +197,7 @@ class AnalysisService:
                 'adopted_drawings':added,'original_workspace':before,'edited_proposal':drawings,'authority':'drawing_only_not_trade_or_risk_adoption'},db)
 
     def record(self, case, a):
-        if set(a)-{'analysis_key','snapshot_id','kind','title','body','author','llm_opinion','user_response','sources'}:
+        if set(a)-{'analysis_key','snapshot_id','kind','title','body','author','llm_opinion','user_response','sources','event_research'}:
             raise ValueError('invalid_record_fields')
         snap=self.snapshot(case['id'],a['snapshot_id']); kind=a['kind']
         if kind not in ('report','review'): raise ValueError('invalid_record_kind')
@@ -205,9 +212,11 @@ class AnalysisService:
         for s in sources:
             if not isinstance(s,dict) or set(s)-{'label','url','as_of'}: raise ValueError('invalid_source')
             for v in s.values(): short(v,2000)
+        research=validate_research(a.get('event_research',[]),snap.get('price_events'))
         iid=ident('it_'); path=self.root/'judgments'/'analyses'/case['id']/(iid+'.md')
         text=f"---\nanalysis_key: {case['id']}\nrecord_id: {iid}\nsnapshot_id: {snap['id']}\ntest_record: {str(case['test_record']).lower()}\n---\n\n# {title}\n\n{'[연결 검증용 — 실제 투자 분석 아님]' if case['test_record'] else '[명시 저장 기록]'}\n\n{body}\n\n## LLM 의견\n{opinion}\n\n## 사용자 응답\n"+'\n'.join(f'- {k}: {v}' for k,v in user.items())+'\n\n## 출처\n'+ '\n'.join(f"- {s.get('label','')}: {s.get('url','')} (기준 {s.get('as_of','미확인')})" for s in sources)+f"\n\n입력 SHA-256: {digest(snap)}\n작도 revision: {snap['workspace']['revision']}\n"
-        value={'id':iid,'case_id':case['id'],'kind':kind,'snapshot_id':snap['id'],'created_at':now(),'title':title,'body':body,'author':a['author'],
+        if research: text+='\n## 사건 조사 상태\n\n```json\n'+packed(research)+'\n```\n'
+        value={'event_research':research,'id':iid,'case_id':case['id'],'kind':kind,'snapshot_id':snap['id'],'created_at':now(),'title':title,'body':body,'author':a['author'],
                'llm_opinion':opinion,'user_response':user,'sources':sources,'test_record':case['test_record'],
                'authority':'narrative_only_not_verified_identity_or_plan_adoption',
                'markdown_path':str(path.relative_to(self.root)).replace('\\','/'),'markdown_sha256':hashlib.sha256(text.encode()).hexdigest()}
@@ -273,7 +282,19 @@ class AnalysisService:
             if type(offset) is not int or offset<0 or type(limit) is not int or not 1<=limit<=1000: raise ValueError('invalid_pagination')
             base={'analysis_key':cid,'snapshot_id':snap['id'],'captured_at':snap['captured_at'],'context':snap['context'],'component_hashes':snap['component_hashes'],'links':self.links(case,origin),'mode':'historical' if a.get('snapshot_id') else 'current_saved'}
             if section=='summary':
+                ev=snap.get('price_events')
+                base['price_events']={k:v for k,v in ev.items() if k not in ('events','groups')} if ev else {'state':'not_in_legacy_snapshot'}
+                base['price_events'].update(event_count=len((ev or {}).get('events',[])),group_count=len((ev or {}).get('groups',[])))
                 base.update(workspace=snap['workspace'],geometry=snap['geometry'],financials={k:v for k,v in snap['financials'].items() if k!='result'},financial_snapshot_id=(snap['financials'].get('result') or {}).get('snapshot_id'),chart={k:v for k,v in snap['chart'].items() if k!='bars'},bar_count=len(snap['chart']['bars']),latest_bars=snap['chart']['bars'][-5:],accounts_as_of=snap['accounts'].get('as_of'))
+            elif section in ('events','research_groups','news_inputs'):
+                ev=snap.get('price_events')
+                base['price_events']={k:v for k,v in (ev or {}).items() if k not in ('events','groups')} if ev else {'state':'not_in_legacy_snapshot'}
+                if section=='news_inputs': base['news_inputs']=(ev or {}).get('news_inputs',{})
+                else:
+                    field='events' if section=='events' else 'groups'
+                    rows=(ev or {}).get(field,[]); page=rows[offset:offset+limit]; end=offset+len(page)
+                    base.update(field=field,total=len(rows),offset=offset,next_offset=end if end<len(rows) else None)
+                    base[field]=page
             elif section=='chart':
                 bars=snap['chart']['bars']; page=bars[offset:offset+limit]; end=offset+len(page)
                 base.update(chart={**snap['chart'],'bars':page},total=len(bars),offset=offset,

@@ -20,6 +20,7 @@ from financial_store import FinancialStore
 from financial_summary import selected_stock
 from chart_workspace import WorkspaceStore, Conflict, moving_averages
 from analysis_service import AnalysisService
+from price_events import build as price_events
 from analysis_collaboration import Forbidden
 from trailing_warnings import TrailingStore
 
@@ -72,7 +73,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
             except ValueError:
                 return self.send(b'{"error":"invalid_timeframe"}', status=400)
             if path == '/health':
-                return self.send(json.dumps({'app': 'invest-workbench', 'token': token, 'analysis_protocol': 1, 'collaboration_protocol': 1, 'offline': offline, 'workspace': str(ROOT)}).encode(), cookie=self.headers.get('Sec-Fetch-Site') == 'same-origin')
+                return self.send(json.dumps({'app': 'invest-workbench', 'token': token, 'analysis_protocol': 1, 'price_events_protocol': 1, 'collaboration_protocol': 1, 'offline': offline, 'workspace': str(ROOT)}).encode(), cookie=self.headers.get('Sec-Fetch-Site') == 'same-origin')
             if path == '/api/daily-update':
                 return self.send(json.dumps(daily_status() if daily_status else {'enabled':False}, ensure_ascii=False).encode('utf-8'))
             if path == '/api/market-exclusions':
@@ -134,7 +135,10 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                 key = urllib.parse.unquote(path[len('/api/chart/'):])
                 if key not in stocks:
                     return self.send(b'{"error":"unknown_stock"}', status=404)
-                return self.send(json.dumps(histories.view(stocks[key], frame), ensure_ascii=False, allow_nan=False).encode('utf-8'))
+                value = histories.view(stocks[key], frame)
+                daily = value if frame == '1d' else histories.view(stocks[key], '1d')
+                value['price_events'] = price_events(daily, financials.read(key))
+                return self.send(json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8'))
             if path.startswith('/api/stock/'):
                 key = urllib.parse.unquote(path[len('/api/stock/'):])
                 value = stocks.get(key)
@@ -146,7 +150,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                     if excluded:
                         value = {**value,'state':'excluded','reason':excluded['reason'],'bars':[]}
                 return self.send(json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8'))
-            names = {'/trailing.js':'trailing.js', '/market-exclusions.js':'market-exclusions.js', '/market-exclusions.css':'market-exclusions.css', '/risk-workbench.js': 'risk-workbench.js', '/risk-workbench.css': 'risk-workbench.css', '/collaboration.js': 'collaboration.js', '/analysis.js': 'analysis.js', '/': 'index.html', '/app.js': 'app.js', '/tooltips.js': 'tooltips.js', '/financial-focus.js': 'financial-focus.js', '/financial-focus.css': 'financial-focus.css', '/financials.css': 'financials.css', '/style.css': 'style.css',
+            names = {'/chart-events.js':'chart-events.js', '/trailing.js':'trailing.js', '/market-exclusions.js':'market-exclusions.js', '/market-exclusions.css':'market-exclusions.css', '/risk-workbench.js': 'risk-workbench.js', '/risk-workbench.css': 'risk-workbench.css', '/collaboration.js': 'collaboration.js', '/analysis.js': 'analysis.js', '/': 'index.html', '/app.js': 'app.js', '/tooltips.js': 'tooltips.js', '/financial-focus.js': 'financial-focus.js', '/financial-focus.css': 'financial-focus.css', '/financials.css': 'financials.css', '/style.css': 'style.css',
                      '/stock-chart.js': 'stock-chart.js', '/drawing-tools.js': 'drawing-tools.js', '/chart-workspace.js': 'chart-workspace.js', '/chart-tools.css': 'chart-tools.css', '/format.js': 'format.js', '/charts.js': 'charts.js', '/workbench.png': 'workbench.png',
                      '/vendor/lightweight-charts.js': 'vendor/lightweight-charts.js',
                      '/vendor/NOTICE': 'vendor/NOTICE', '/vendor/LICENSE': 'vendor/LICENSE'}
