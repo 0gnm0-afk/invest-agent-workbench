@@ -1,4 +1,4 @@
-"""Loopback-only, memory-only Telegram authentication UI and read bridge."""
+"""Loopback Telegram UI/bridge with encrypted authorization restoration."""
 import asyncio
 from concurrent.futures import TimeoutError as FutureTimeout
 from http.cookies import SimpleCookie
@@ -6,9 +6,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import secrets
+import socket
 import threading
 from telegram_news import NewsService, READ_OPS, AUTH_OPS, ROOT
 from telegram_news_credentials import ApiCredentials
+from telegram_news_session import EncryptedSession
 
 PORT = 8769
 PROTOCOL = 'telegram-news-1'
@@ -16,8 +18,15 @@ PROTOCOL = 'telegram-news-1'
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True
+    allow_reuse_address = False
+
+    def server_bind(self):
+        if hasattr(socket, 'SO_EXCLUSIVEADDRUSE'):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
     def __init__(self, port=PORT, service=None):
-        self.service = service or NewsService(credentials=ApiCredentials(ROOT))
+        self.service = service or NewsService(credentials=ApiCredentials(ROOT),sessions=EncryptedSession(ROOT))
         self.loop = asyncio.new_event_loop()
         self.worker = threading.Thread(target=self.loop.run_forever, daemon=True)
         self.worker.start()
@@ -27,10 +36,12 @@ class Server(ThreadingHTTPServer):
         try:
             super().__init__(('127.0.0.1', port), Handler)
         except BaseException:
-            self.loop.call_soon_threadsafe(self.loop.stop)
-            self.worker.join(); self.loop.close()
+            if not self.loop.is_closed():
+                self.loop.call_soon_threadsafe(self.loop.stop)
+                self.worker.join(); self.loop.close()
             raise
         self.origin = f'http://127.0.0.1:{self.server_port}'
+        self.restore_future=asyncio.run_coroutine_threadsafe(self.service.request('restore',{}),self.loop)
 
     def invoke(self, op, args):
         future = asyncio.run_coroutine_threadsafe(self.service.request(op, args), self.loop)
@@ -44,8 +55,12 @@ class Server(ThreadingHTTPServer):
         pass  # No request/exception logging: credentials and news are transient.
 
     def server_close(self):
+        if self.loop.is_closed():
+            return super().server_close()
         try:
-            self.invoke('logout', {})
+            future=asyncio.run_coroutine_threadsafe(self.service.close(),self.loop)
+            try:future.result(timeout=50)
+            except FutureTimeout:future.cancel()
         finally:
             super().server_close()
             self.loop.call_soon_threadsafe(self.loop.stop)
@@ -96,7 +111,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self.boundary():
             return self.reply({'error':'forbidden_origin'}, 403)
         if self.path == '/health':
-            result = dict(app=PROTOCOL, root=str(ROOT), login_url=self.server.origin)
+            result = dict(app=PROTOCOL, root=str(ROOT), login_url=self.server.origin, session_persistence_supported=True)
             if self.native_request():
                 result['read_token'] = self.server.read_token
             return self.reply(result)

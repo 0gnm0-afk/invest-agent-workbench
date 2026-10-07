@@ -70,7 +70,7 @@ def analysis_plan_input(analysis_key: str, plan_record_id: str, mode: str = 'ado
 
 @mcp.tool()
 def telegram_news_status() -> dict:
-    """Read memory-only Telegram connection status. Login is user input at http://127.0.0.1:8769 via telegram-news.ps1. No secrets in tools/chat. Never auto-login or send messages."""
+    """Read Telegram connection status; automatically start and restore an encrypted saved session when available. Only missing/revoked/unreadable authorization requires user login at http://127.0.0.1:8769 via telegram-news.ps1. No secrets in tools/chat. Never initiate authentication codes or send messages."""
     from telegram_news_bridge import call as telegram_call
     return telegram_call('status', {})
 

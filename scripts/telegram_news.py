@@ -1,4 +1,4 @@
-"""On-demand Telegram searches. Session, entities and results stay in memory."""
+"""On-demand news search; encrypted authorization, transient entities/results."""
 import asyncio
 from datetime import datetime, timedelta, timezone
 import logging
@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 ROOT = Path(__file__).resolve().parents[1]
 KST = timezone(timedelta(hours=9))
 READ_OPS = {'status', 'dialogs', 'search'}
-AUTH_OPS = {'login', 'verify', 'logout', 'save_credentials', 'clear_credentials'}
+AUTH_OPS = {'login', 'verify', 'logout', 'save_credentials', 'clear_credentials', 'restore', 'persist_session'}
 NEWS_TERMS = re.compile(r'속보|뉴스|기사|보도|공시|실적|발표|매출|가이던스|인수|합병|보고서|reuters|bloomberg|earnings|revenue|announc|breaking|news|guidance|filing', re.I)
 
 
@@ -30,15 +30,15 @@ def fields(value, allowed):
         raise ValueError('invalid_fields')
 
 
-def client_factory(api_id, api_hash):
+def client_factory(api_id, api_hash, saved_session=None):
     # Optional dependency isolated from the shared trading engine environment.
     sys.path.insert(0, str(ROOT / 'runtime/telegram-news-deps'))
     from telethon import TelegramClient
-    from telethon.sessions import MemorySession
+    from telethon.sessions import MemorySession, StringSession
     logger = logging.getLogger('invest_telegram_news')
     logger.addHandler(logging.NullHandler())
     logger.propagate = False
-    return TelegramClient(MemorySession(), api_id, api_hash,
+    return TelegramClient(StringSession(saved_session) if saved_session else MemorySession(), api_id, api_hash,
                           receive_updates=False, catch_up=False, request_retries=2,
                           connection_retries=1, flood_sleep_threshold=0,
                           raise_last_call_error=True,
@@ -78,9 +78,13 @@ def news_item(message, room):
 
 
 class NewsService:
-    def __init__(self, factory=client_factory, credentials=None):
+    def __init__(self, factory=client_factory, credentials=None, sessions=None):
         self.factory = factory
         self.credentials = credentials
+        self.sessions = sessions
+        self.active_api = None
+        self.restore_error = None
+        self.session_saved = False
         self.client = None
         self.state = 'not_connected'
         self.phone = self.code_hash = None
@@ -93,9 +97,12 @@ class NewsService:
         self.lock = asyncio.Lock()
 
     def status(self):
-        return dict(state=self.state, storage='news_and_session_memory_only', news_persistence=False,
+        return dict(state=self.state, storage='news_memory_only', news_persistence=False,
                     api_credentials_saved=bool(self.credentials and self.credentials.exists()),
-                    session_persistence=False, receive_updates=False,
+                    session_persistence=self.sessions is not None,
+                    session_saved=self.session_saved,
+                    saved_session_available=bool(self.sessions and self.sessions.exists()),
+                    restore_error=self.restore_error, receive_updates=False,
                     diagnostic=self.last_error,
                     retry_after_seconds=max(0, int(self.cooldown_until-time.monotonic())+1)
                     if self.cooldown_until>time.monotonic() else 0)
@@ -108,20 +115,23 @@ class NewsService:
                 if op == 'status':
                     fields(args, []); return self.status()
                 self.last_error = None
-                if op not in ('logout','save_credentials','clear_credentials') and time.monotonic() < self.cooldown_until:
+                if op not in ('logout','save_credentials','clear_credentials','persist_session') and time.monotonic() < self.cooldown_until:
                     return {**self.status(), 'error':'telegram_rate_limited'}
                 return await asyncio.wait_for(self.dispatch(op, args), timeout=45)
             except ValueError as exc:
                 self.note_error(op,exc)
+                if op == 'restore':self.restore_error='session_restore_failed'
                 return {**self.status(), 'error':str(exc) if str(exc) in {
                     'invalid_integer','invalid_fields','invalid_api_credentials','invalid_phone',
                     'login_already_started','login_not_started','invalid_code','invalid_password',
                     'authentication_required','load_rooms_first','unknown_room','invalid_query',
                     'invalid_dates','invalid_offset','unsupported_operation','api_credentials_missing',
-                    'api_credentials_unreadable','api_credentials_save_failed','api_credentials_delete_failed'} else 'telegram_request_failed'}
+                    'api_credentials_unreadable','api_credentials_save_failed','api_credentials_delete_failed',
+                    'session_save_failed','session_unreadable','session_delete_failed','session_expired'} else 'telegram_request_failed'}
             except Exception as exc:
                 self.note_error(op,exc)
                 name = type(exc).__name__
+                if op == 'restore':self.restore_error='session_restore_failed'
                 if name == 'SessionPasswordNeededError':
                     self.state = 'password_required'; return self.status()
                 if name in ('FloodWaitError', 'FloodPremiumWaitError'):
@@ -136,6 +146,10 @@ class NewsService:
                          'TimeoutError':'telegram_timeout'}
                 if name in ('AuthKeyUnregisteredError', 'SessionRevokedError'):
                     self.state = 'session_expired'
+                    self.session_saved = False
+                    if self.sessions:
+                        try:self.sessions.clear()
+                        except ValueError:pass
                 # Never forward exception bodies/tracebacks: they may include auth input.
                 return {**self.status(), 'error':codes.get(name, 'telegram_request_failed')}
 
@@ -150,19 +164,54 @@ class NewsService:
                              line=tb.tb_lineno if tb else None)
 
     async def dispatch(self, op, args):
+        if op == 'restore':
+            fields(args,[])
+            if self.client or not self.sessions or not self.sessions.exists():
+                return self.status()
+            self.restore_error = None
+            api=self.credentials.load()
+            saved=self.sessions.load(api)
+            client=self.factory(api['api_id'],api['api_hash'],saved)
+            self.state='restoring'
+            self.client=client
+            try:
+                await client.connect()
+                if not await client.is_user_authorized():
+                    self.sessions.clear()
+                    raise ValueError('session_expired')
+                self.active_api=api
+                self.state='connected'
+                self.persist()
+            except BaseException:
+                self.client=None;self.active_api=None;self.session_saved=False
+                self.state='not_connected'
+                await client.disconnect()
+                raise
+            return self.status()
+        if op == 'persist_session':
+            fields(args,[])
+            if self.state != 'connected':raise ValueError('authentication_required')
+            self.persist()
+            return self.status()
         if op == 'save_credentials':
             fields(args,['api_id','api_hash'])
+            if self.client:raise ValueError('login_already_started')
             if not self.credentials:
                 raise ValueError('api_credentials_save_failed')
+            if self.sessions:self.sessions.clear()
             self.credentials.save(args.get('api_id'),args.get('api_hash'))
             return self.status()
         if op == 'clear_credentials':
             fields(args,[])
+            if self.client:raise ValueError('login_already_started')
+            if self.sessions:self.sessions.clear()
             if self.credentials:
                 self.credentials.clear()
             return self.status()
         if op == 'logout':
             fields(args, [])
+            if self.sessions:self.sessions.clear()
+            self.session_saved=False;self.restore_error=None
             client = self.client
             try:
                 if client:
@@ -173,6 +222,7 @@ class NewsService:
                         await client.disconnect()
                 finally:
                     self.client = None; self.phone = self.code_hash = None
+                    self.active_api=None
                     self.rooms.clear(); self.room_rows.clear(); self.rooms_loaded = False
                     self.state = 'not_connected'
             return self.status()
@@ -192,6 +242,8 @@ class NewsService:
             if not isinstance(phone, str) or not re.fullmatch(r'\+[0-9]{7,15}', phone):
                 raise ValueError('invalid_phone')
             self.client = self.factory(api_id, api_hash)
+            self.active_api={'api_id':api_id,'api_hash':api_hash}
+            self.restore_error=None
             try:
                 await self.client.connect()
                 sent = await self.client.send_code_request(phone)
@@ -199,6 +251,7 @@ class NewsService:
                 self.state = 'code_required'
             except BaseException:
                 client, self.client = self.client, None
+                self.active_api=None
                 await client.disconnect()
                 raise
             return self.status()
@@ -218,6 +271,7 @@ class NewsService:
                 await self.client.sign_in(password=password)
             self.phone = self.code_hash = None
             self.state = 'connected'
+            self.persist()
             return self.status()
         if self.state != 'connected':
             raise ValueError('authentication_required')
@@ -287,3 +341,20 @@ class NewsService:
                     next_offset_id=messages[-1].id if len(messages)==limit and messages else None,
                     server_match_count=getattr(result,'count',None), fetched_at=utc(),
                     storage='not_saved', classification_note='링크 또는 뉴스 관련 문구로 고른 후보입니다. 실제 기사 여부와 사실은 원 출처에서 대조하세요.')
+
+    def persist(self):
+        if self.sessions:
+            self.session_saved=False
+            self.sessions.save(self.client.session,self.active_api)
+            self.session_saved=True
+
+    async def close(self):
+        # Process shutdown is NOT account logout; saved authorization survives.
+        async with self.lock:
+            client,self.client=self.client,None
+            try:
+                if client:await client.disconnect()
+            finally:
+                self.phone=self.code_hash=self.active_api=None
+                self.rooms.clear();self.room_rows.clear();self.rooms_loaded=False
+                self.state='not_connected'
