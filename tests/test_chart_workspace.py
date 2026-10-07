@@ -22,6 +22,27 @@ class Workspaces(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.path=Path(self.temp.name)/'workspace.sqlite3';self.store=WorkspaceStore(self.path)
     def tearDown(self):self.temp.cleanup()
+    def test_bounded_extensions_shared_reopened_and_legacy_preserved(self):
+        state=defaults();state['drawings']=[drawing(ident='legacy'),drawing('channel','bounded')]
+        state['drawings'][1].update(extend=True,extension={'left':'2026-09-01','right':'2026-10-15'})
+        original=copy.deepcopy(state);self.store.shared('US:EXT',revision=0,state=state)
+        for frame in ('1d','1w','1mo'):
+            packet=WorkspaceStore(self.path).shared('US:EXT',frame)
+            self.assertEqual(packet['drawing_extensions'],'bounded-v1')
+            self.assertEqual(packet['state']['drawings'],original['drawings'])
+        state['drawings'][1]['extension']['right']='2026-11-20'
+        self.store.shared('US:EXT',revision=1,state=state)
+        with self.assertRaises(Conflict):self.store.shared('US:EXT',revision=1,state=original)
+        self.assertEqual(self.store.shared('US:EXT')['state']['drawings'],state['drawings'])
+    def test_invalid_extension_payloads_rejected(self):
+        for extension in (None,True,{}, {'left':'2026-09-01'}, {'left':'2026-09-01','right':'2026-10-10','extra':0},
+                {'left':0,'right':'2026-10-10'}, {'left':'2026-02-30','right':'2026-10-10'},
+                {'left':'2026-09-22','right':'2026-10-10'}, {'left':'2026-09-01','right':'2026-09-21'}):
+            with self.subTest(extension=extension):
+                state=defaults();state['drawings']=[dict(drawing(),extension=extension)]
+                with self.assertRaises(ValueError):validate(state)
+        state=defaults();state['drawings']=[dict(drawing('box'),extension={'left':'2026-09-01','right':'2026-10-10'})]
+        with self.assertRaises(ValueError):validate(state)
     def test_every_tool_and_average_persists_across_store_reopen(self):
         state=defaults();state['drawings']=[drawing(k,k) for k in ['trend','channel','horizontal','box','measure']]
         original=copy.deepcopy(state);self.store.save('KR:AAA',0,state)

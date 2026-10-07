@@ -8,6 +8,14 @@ window.DrawingTools = (() => {
     const offset = c.y - (a.y + slope*(c.x-a.x));
     return [a,b,{x:b.x,y:b.y+offset},{x:a.x,y:a.y+offset}];
   }
+  function extensionBounds(d,bars,frame='1d') {
+    const times=d.points.slice(0,2).map(p=>p.time).sort(),[left,right]=times;
+    if(d.extension)return {left:d.extension.left<left?d.extension.left:left,right:d.extension.right>right?d.extension.right:right};
+    const day=86400000,padding=Math.max(3,Math.ceil((Date.parse(right)-Date.parse(left))/day/4));
+    const shift=(time,n)=>new Date(Date.parse(time)+n*day).toISOString().slice(0,10);
+    return {left:shift(left,-padding)<bars[0].date?bars[0].date:shift(left,-padding),
+      right:shift(right,padding)>(bars.at(-1).last_session||bars.at(-1).date)?(bars.at(-1).last_session||bars.at(-1).date):shift(right,padding)};
+  }
   function boundary(bars, i, frame) {
     if(i+1<bars.length)return Date.parse(bars[i+1].date);
     const d=new Date(bars[i].date+'T00:00:00Z');
@@ -164,6 +172,11 @@ window.DrawingTools = (() => {
       if(['trend','channel'].includes(kind)&&p[0]&&p[1]&&p[0].x===p[1].x&&points[0].time!==points[1].time)p=points.map(v=>xy(v,true));
       return p;
     }
+    function extensionPointer(event) {
+      const rect=svg.getBoundingClientRect(),x=Math.max(0,Math.min(rect.width,event.clientX-rect.left));
+      const logical=chart.timeScale().coordinateToLogical(x);
+      return logical==null?null:{time:timeAt(logical,bars,timeframe),price:1};
+    }
     function render() {
       if(removed)return;
       const w=chart.timeScale().width(),h=chart.panes()[0].getHeight();
@@ -185,7 +198,7 @@ window.DrawingTools = (() => {
         for(const {d,p} of all) {
           if(p.some(v=>!v||v.x==null||v.y==null||!Number.isFinite(v.x+v.y)))continue;
           const g=node('g',{'data-id':d.id||'',opacity:d.id?1:.65,'aria-label':(d.ai?'AI 제안 · ':'')+labels[d.kind],class:d.ai?'ai-proposal':'user-drawing'});
-          const [a,b]=p, stroke=d.color;
+          const [a,b]=p, stroke=d.color;let extensionHandles=null;
           function line(v1,v2,dash='') {
             node('line',{x1:v1.x,y1:v1.y,x2:v2.x,y2:v2.y,stroke:'transparent','stroke-width':14,'pointer-events':mode==='select'?'stroke':'none'},g);
             node('line',{x1:v1.x,y1:v1.y,x2:v2.x,y2:v2.y,stroke,'stroke-width':d.width,'stroke-dasharray':d.ai?'7 5':dash,'pointer-events':'none'},g);
@@ -217,24 +230,42 @@ window.DrawingTools = (() => {
             }
           } else if(a.x!==b.x) {
             const slope=(b.y-a.y)/(b.x-a.x);
+            const [left,right]=a.x<b.x?[a,b]:[b,a],bounds=extensionBounds(d,bars,timeframe);
+            const edgeX=(time,fallback)=>{
+              const bounded=time<bars[0].date?bars[0].date:time>(bars.at(-1).last_session||bars.at(-1).date)?(bars.at(-1).last_session||bars.at(-1).date):time;
+              const logical=index(bounded,bars,timeframe);return logical==null?fallback:coordinate(chart.timeScale(),logical)??fallback;
+            };
+            const lx=d.extend?Math.min(left.x,edgeX(bounds.left,left.x)):left.x,rx=d.extend?Math.max(right.x,edgeX(bounds.right,right.x)):right.x;
+            const offset=d.kind==='channel'?channel(p)[3].y-a.y:0;
+            extensionHandles=[{side:'left',x:lx,y:a.y+slope*(lx-a.x)+offset/2},{side:'right',x:rx,y:a.y+slope*(rx-a.x)+offset/2}];
             function trendLine(v1,v2,dash='') {
-              // Keep the anchored span distinct from its projection, in either click order.
+              // Finite dates are independent of viewport pan/zoom and anchor click order.
               if(d.extend) {
                 const [left,right]=v1.x<v2.x?[v1,v2]:[v2,v1];
-                if(left.x>0)line({x:0,y:left.y-slope*left.x},left,'5 4');
-                if(right.x<w)line(right,{x:w,y:right.y+slope*(w-right.x)},'5 4');
+                if(lx<left.x)line({x:lx,y:left.y+slope*(lx-left.x)},left,'5 4');
+                if(rx>right.x)line(right,{x:rx,y:right.y+slope*(rx-right.x)},'5 4');
               }
               line(v1,v2,dash);
             }
             trendLine(a,b);
             if(d.kind==='channel') {
               const q=channel(p), offset=q[3].y-a.y;
-              node('polygon',{points:q.map(v=>`${v.x},${v.y}`).join(' '),fill:stroke,'fill-opacity':.10,'pointer-events':mode==='select'?'all':'none'},g);
+              node('polygon',{points:q.map(v=>`${v.x},${v.y}`).join(' '),fill:stroke,'fill-opacity':.05,'pointer-events':mode==='select'?'all':'none'},g);
+              if(d.extend)for(const [x1,x2] of [[lx,left.x],[right.x,rx]])if(x2>x1){
+                const y1=a.y+slope*(x1-a.x),y2=a.y+slope*(x2-a.x);
+                node('polygon',{points:[[x1,y1],[x2,y2],[x2,y2+offset],[x1,y1+offset]].map(v=>v.join(',')).join(' '),fill:stroke,'fill-opacity':.025,'pointer-events':'none'},g);
+              }
               trendLine(q[3],q[2]);trendLine({x:a.x,y:a.y+offset/2},{x:b.x,y:b.y+offset/2},'5 4');
             }
           }
           if(d.ai){g.setAttribute('opacity','.7');g.querySelectorAll('*').forEach(n=>n.setAttribute('pointer-events','none'));}
           if(d.id===selected&&mode==='select')p.forEach((v,i)=>node('circle',{cx:v.x,cy:v.y,r:6,fill:'#fff',stroke,'stroke-width':2,'data-point':i,'pointer-events':'all',cursor:'move'},g));
+          if(d.id===selected&&mode==='select'&&!d.ai&&extensionHandles)for(const v of extensionHandles){
+            const hx=Math.max(9,Math.min(w-9,v.x)),hy=Math.max(9,Math.min(h-9,v.y-18));
+            if(v.x>=0&&v.x<=w&&v.y>=0&&v.y<=h)node('line',{x1:v.x,y1:v.y,x2:hx,y2:hy,stroke,'stroke-width':1,opacity:.6,'pointer-events':'none'},g);
+            const handle=node('rect',{x:hx-7,y:hy-7,width:14,height:14,rx:3,fill:'#202630',stroke,'stroke-width':2,'data-extension':v.side,'pointer-events':'all',cursor:'ew-resize','aria-label':v.side==='left'?'왼쪽 연장 길이':'오른쪽 연장 길이'},g);
+            node('title',{},handle).textContent=(v.side==='left'?'왼쪽':'오른쪽')+' 점선 끝 · 좌우로 드래그';
+          }
         }
         for(const p of draft){const v=xy(p);if(v)node('circle',{cx:v.x,cy:v.y,r:4,fill:'#218775','pointer-events':'none'});}
         if(hover&&(count[mode]||drag?.handle!=null)){
@@ -268,11 +299,12 @@ window.DrawingTools = (() => {
     function select(id) {mode='select';draft=[];hover=null;snapped=null;reference=null;selected=id;onSelect(id);signature='';}
     function setMode(next) {
       mode=next;draft=[];hover=null;snapped=null;reference=null;drag=null;signature='';
-      onHint(mode==='channel'?'평행 채널: 시작 하단점 → 끝 하단점 → 상단점 순서로 클릭하세요. Esc로 취소.':mode==='riskreward'?'손익비: 진입가 → 손절가 → 목표가 순서로 클릭하세요. 가로 폭은 세 점의 날짜 범위입니다.':count[mode]?`${labels[mode]}: ${count[mode]}개 지점을 차례로 클릭하세요. Esc로 취소.`:'선택한 도형의 원형 점은 끝점 수정, 선·영역은 전체 이동입니다. 빈 영역은 차트 이동·확대에 사용합니다.');
+      onHint(mode==='channel'?'평행 채널: 시작 하단점 → 끝 하단점 → 상단점 순서로 클릭하세요. Esc로 취소.':mode==='riskreward'?'손익비: 진입가 → 손절가 → 목표가 순서로 클릭하세요. 가로 폭은 세 점의 날짜 범위입니다.':count[mode]?`${labels[mode]}: ${count[mode]}개 지점을 차례로 클릭하세요. Esc로 취소.`:'원형 점은 기준점 수정, 사각 손잡이는 점선 연장 길이, 선·영역은 전체 이동입니다. 빈 영역은 차트 이동·확대에 사용합니다.');
     }
     function down(e) {
       if(e.button!==0)return;
-      const p=point(e);if(!p)return;
+      const rawSide=e.target?.getAttribute?.('data-extension'),side=['left','right'].includes(rawSide)?rawSide:null;
+      const p=side?extensionPointer(e):point(e);if(!p)return;
       if(count[mode]) {
         hover=p;
         e.preventDefault();e.stopPropagation();
@@ -284,6 +316,7 @@ window.DrawingTools = (() => {
         if(draft.length===count[mode]) {
           if(getDrawings().length>=drawingLimit){draft=[];onHint(`종목당 최대 ${drawingLimit}개입니다. 필요 없는 도형을 삭제하세요.`);return;}
           const drawing={id:crypto.randomUUID(),kind:mode,points:clone(draft),color:'#218775',width:2,extend:['trend','channel'].includes(mode)};
+          if(drawing.extend)drawing.extension=extensionBounds(drawing,bars,timeframe);
           onChange([...getDrawings(),drawing]);setMode('select');select(drawing.id);
         }else if(mode==='channel')onHint(draft.length===1?'평행 채널: 끝 하단점을 클릭하세요.':'평행 채널: 하단 기준선 위쪽의 상단점을 클릭하세요.');else if(mode==='riskreward')onHint(draft.length===1?'손익비: 손절가를 클릭하세요.':'손익비: 진입가 반대편의 목표가를 클릭하세요.');else onHint(`${labels[mode]}: ${count[mode]-draft.length}개 지점을 더 클릭하세요.`);
       } else {
@@ -291,25 +324,40 @@ window.DrawingTools = (() => {
         if(!id||group.classList.contains('ai-proposal'))return;
         e.preventDefault();e.stopPropagation();select(id);
         const d=getDrawings().find(v=>v.id===id);
-        drag={id,start:p,original:clone(d),all:clone(getDrawings()),handle:e.target.hasAttribute('data-point')?Number(e.target.getAttribute('data-point')):null,moved:false};
+        drag={id,start:p,original:clone(d),all:clone(getDrawings()),extension:['left','right'].includes(side)?side:null,handle:e.target.hasAttribute('data-point')?Number(e.target.getAttribute('data-point')):null,moved:false};
         svg.setPointerCapture(e.pointerId);
       }
     }
     function move(e) {
+      if(drag?.extension){
+        const p=extensionPointer(e);if(!p)return;
+        const d=clone(drag.original),times=d.points.slice(0,2).map(v=>v.time).sort();
+        d.extension=d.extend?extensionBounds(d,bars,timeframe):{left:times[0],right:times[1]};
+        d.extension[drag.extension]=drag.extension==='left'?(p.time<times[0]?p.time:times[0]):(p.time>times[1]?p.time:times[1]);
+        d.extend=true;drag.moved=true;hover=null;snapped=null;reference=null;
+        onChange(drag.all.map(v=>v.id===d.id?d:v),{preview:true});return;
+      }
       const p=point(e);if(!p){hover=null;return;}hover=p;
       if(!drag)return;
       const d=clone(drag.original);
       if(drag.handle!=null)d.points[drag.handle]=p;
       else {
         let delta=Math.round(index(p.time,bars,timeframe)-index(drag.start.time,bars,timeframe));
+        const extension=d.extend&&['trend','channel'].includes(d.kind)?extensionBounds(d,bars,timeframe):d.extension;
         const ids=d.points.map(v=>index(v.time,bars,timeframe));
         if(ids.some(i=>i==null))return;
-        delta=Math.max(-Math.floor(Math.min(...ids)+.4),Math.min(bars.length-1-Math.floor(Math.max(...ids)+.4),delta));
+        const limits=extension?ids.concat(Object.values(extension).map(time=>index(time,bars,timeframe)).filter(i=>i!=null)):ids;
+        delta=Math.max(-Math.floor(Math.min(...limits)+.4),Math.min(bars.length-1-Math.floor(Math.max(...limits)+.4),delta));
         const priceDelta=p.price-drag.start.price;
         d.points=d.points.map((v,i)=>({time:delta===0?v.time:timeAt(ids[i]+delta,bars,timeframe),price:v.price+priceDelta}));
+        if(extension){d.extension={...extension};for(const side of ['left','right']){
+          const logical=index(extension[side],bars,timeframe);
+          if(delta!==0&&logical!=null)d.extension[side]=timeAt(logical+delta,bars,timeframe);
+        }}
       }
       if(d.points.some(v=>v.price<=0)||((d.kind==='trend'||d.kind==='channel')&&d.points[0].time===d.points[1].time))return;
       if(d.kind==='riskreward'&&!riskReward(d.points,currency))return;
+      if(d.extension)d.extension=extensionBounds(d,bars,timeframe);
       drag.moved=true;
       onChange(drag.all.map(v=>v.id===d.id?d:v),{preview:true});
     }
@@ -329,5 +377,5 @@ window.DrawingTools = (() => {
     setMode('select');frame=requestAnimationFrame(render);
     return {setMode,select,cancel,setSnapEnabled(value){snapEnabled=!!value;snapped=null;reference=null;hover=null;signature='';},destroy(){removed=true;cancelAnimationFrame(frame);svg.remove();}};
   }
-  return {attach,measure,riskReward,channel,labels,count,index,timeAt,coordinate,timeline,candleSnap,closeReference,withAnchorTimes,pointIndex};
+  return {attach,measure,riskReward,channel,extensionBounds,labels,count,index,timeAt,coordinate,timeline,candleSnap,closeReference,withAnchorTimes,pointIndex};
 })();

@@ -23,6 +23,10 @@ window.WorkbenchWorkspace = (() => {
       if(historyStatus)historyStatus.textContent='이전 서버 · 일/주/월 작도 공유 미적용 · 대시보드를 새로 실행하세요.';
       return;
     }
+    if(packet.drawing_extensions!=='bounded-v1'){
+      host.innerHTML='<div class="notice error" role="alert">점선 연장 손잡이를 저장하려면 대시보드를 다시 실행하세요. 기존 작도는 저장돼 있습니다.</div>';
+      return;
+    }
     let anchorBars=DrawingTools.withAnchorTimes(bars,frame==='1d'?bars:[],frame),anchorWarning='';
     if(frame!=='1d'){
       try{
@@ -76,7 +80,7 @@ window.WorkbenchWorkspace = (() => {
     function renderEditor() {
       const d=state.drawings.find(x=>x.id===selected),editor=q('.drawing-editor');
       if(!d){editor.innerHTML='<small>차트의 도형이나 목록을 선택하면 날짜·가격·색상을 수정할 수 있습니다.</small>';return;}
-      editor.innerHTML=`<form class="point-form"><strong>${DrawingTools.labels[d.kind]}</strong><div class="point-grid">${d.points.map((p,i)=>`<label>${pointLabel(d,i)} 날짜<input type="date" name="time${i}" value="${safe(p.time)}" required></label><label>${pointLabel(d,i)} 가격 (${currency})<input type="text" inputmode="decimal" name="price${i}" value="${WorkbenchFormat.money(p.price,currency)}" required></label>`).join('')}</div><div class="editor-style"><label>선 색상<input type="color" name="color" value="${d.color}"></label><label>굵기<select name="width">${[1,2,3,4].map(n=>`<option ${d.width===n?'selected':''}>${n}</option>`).join('')}</select></label>${['trend','channel'].includes(d.kind)?`<label><input type="checkbox" name="extend" ${d.extend?'checked':''}>앞뒤 점선 연장</label>`:''}<button>수정 적용</button></div><p class="point-error" role="alert"></p></form>${d.kind==='measure'?`<p class="measurement-result">${safe(DrawingTools.measure(d.points,drawingBars,currency,frame))}</p>`:''}${d.kind==='riskreward'?`<p class="measurement-result">${safe(DrawingTools.riskReward(d.points,currency)?.label)} · 1주 기준 가격 거리, 수수료·슬리피지 제외</p>`:''}`;
+      editor.innerHTML=`<form class="point-form"><strong>${DrawingTools.labels[d.kind]}</strong><div class="point-grid">${d.points.map((p,i)=>`<label>${pointLabel(d,i)} 날짜<input type="date" name="time${i}" value="${safe(p.time)}" required></label><label>${pointLabel(d,i)} 가격 (${currency})<input type="text" inputmode="decimal" name="price${i}" value="${WorkbenchFormat.money(p.price,currency)}" required></label>`).join('')}</div><div class="editor-style"><label>선 색상<input type="color" name="color" value="${d.color}"></label><label>굵기<select name="width">${[1,2,3,4].map(n=>`<option ${d.width===n?'selected':''}>${n}</option>`).join('')}</select></label>${['trend','channel'].includes(d.kind)?`<label><input type="checkbox" name="extend" ${d.extend?'checked':''}>점선 연장 · 양쪽 사각 손잡이로 길이 조절</label>`:''}<button>수정 적용</button></div><p class="point-error" role="alert"></p></form>${d.kind==='measure'?`<p class="measurement-result">${safe(DrawingTools.measure(d.points,drawingBars,currency,frame))}</p>`:''}${d.kind==='riskreward'?`<p class="measurement-result">${safe(DrawingTools.riskReward(d.points,currency)?.label)} · 1주 기준 가격 거리, 수수료·슬리피지 제외</p>`:''}`;
       editor.querySelector('form').onsubmit=e=>{
         e.preventDefault();const f=new FormData(e.target),next=clone(d);
         next.points=d.points.map((p,i)=>({time:f.get('time'+i),price:f.get('price'+i)===WorkbenchFormat.money(p.price,currency)?p.price:Number(String(f.get('price'+i)).replaceAll(',',''))}));
@@ -84,6 +88,7 @@ window.WorkbenchWorkspace = (() => {
         if(['trend','channel'].includes(d.kind)&&next.points[0].time===next.points[1].time){q('.point-error').textContent='첫 두 점은 서로 다른 날짜여야 합니다.';return;}
         if(d.kind==='riskreward'&&!DrawingTools.riskReward(next.points,currency)){q('.point-error').textContent='손절·목표는 진입가의 반대편에 두고, 서로 다른 날짜를 포함해야 합니다.';return;}
         next.color=f.get('color');next.width=Number(f.get('width'));next.extend=f.has('extend');
+        if(['trend','channel'].includes(next.kind))next.extension=DrawingTools.extensionBounds(next,drawingBars,frame);
         commit({...state,drawings:state.drawings.map(x=>x.id===d.id?next:x)});
       };
     }

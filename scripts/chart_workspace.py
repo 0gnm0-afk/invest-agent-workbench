@@ -38,7 +38,8 @@ def validate(state, drawing_limit=100):
         periods.add(n)
         style(average)
     for drawing in drawings:
-        if not isinstance(drawing, dict) or set(drawing) != {'id', 'kind', 'points', 'color', 'width', 'extend'}:
+        required = {'id', 'kind', 'points', 'color', 'width', 'extend'}
+        if not isinstance(drawing, dict) or not required <= set(drawing) or set(drawing) - required - {'extension'}:
             raise ValueError('invalid_drawing')
         ident = drawing['id']
         if not isinstance(ident, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', ident) or ident in ids:
@@ -60,6 +61,17 @@ def validate(state, drawing_limit=100):
                 raise ValueError('invalid_price')
         if kind in ('trend', 'channel') and points[0]['time'] == points[1]['time']:
             raise ValueError('distinct_dates_required')
+        if 'extension' in drawing:
+            extension = drawing['extension']
+            if kind not in ('trend', 'channel') or not isinstance(extension, dict) or set(extension) != {'left', 'right'}:
+                raise ValueError('invalid_extension')
+            for value in extension.values():
+                if not isinstance(value, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
+                    raise ValueError('invalid_extension_date')
+                date.fromisoformat(value)
+            left, right = sorted(p['time'] for p in points[:2])
+            if extension['left'] > left or extension['right'] < right:
+                raise ValueError('extension_must_contain_anchors')
         if kind == 'riskreward':
             entry, stop, target = (p['price'] for p in points)
             if not (stop < entry < target or target < entry < stop):
@@ -161,7 +173,7 @@ class WorkspaceStore:
             if row is None or state is not None:
                 db.execute('INSERT INTO shared_chart_workspaces VALUES (?,?,?,?) ON CONFLICT(identity) DO UPDATE SET revision=excluded.revision,payload=excluded.payload,updated_at=excluded.updated_at',
                            (identity, current, json.dumps(payload, ensure_ascii=False, allow_nan=False), updated))
-        return {'revision': current, 'updated_at': updated, 'drawing_limit': 300, 'drawing_kinds': list(KINDS),
+        return {'revision': current, 'updated_at': updated, 'drawing_limit': 300, 'drawing_kinds': list(KINDS), 'drawing_extensions': 'bounded-v1',
                 'state': {'schema': 1, 'drawings': payload['drawings'], 'averages': payload['averages'][frame]}}
 
 
