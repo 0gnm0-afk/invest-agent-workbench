@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from invest_agent.trading.market_provider import completed_sessions
 from atomic_io import atomic_write
+from run_journal import error_frames
 from invest_agent.trading.store import instance_lock, BusyError
 
 
@@ -127,6 +128,14 @@ class DailyLaunch:
         try:
             # The OS releases this lock on crash; the durable receipt still prevents a rerun.
             with instance_lock(self.folder):
+                # A detached collection worker may outlive the coordinator.
+                # Do not mark it interrupted or launch a second collector.
+                try:
+                    with instance_lock(self.folder/'worker-lock'):
+                        pass
+                except BusyError:
+                    return {**(self.read(day) or {'day':day,'targets':{}}),
+                            'state':'running','reused':True,'following':True}
                 record = self.read(day)
                 scheduled_plan = None
                 if scheduled:
@@ -190,7 +199,7 @@ class DailyLaunch:
                         record.update(state='failed',error='screening_result_missing')
                 except Exception as exc:
                     error = 'market_worker_failed' if str(exc) == 'market_worker_failed' else 'daily_update_unavailable'
-                    record.update(state='failed',error=error)
+                    record.update(state='failed',error=error, error_type=type(exc).__name__, error_frames=error_frames(exc))
                 record['finished_at'] = utc_now().isoformat()
                 self.save(record)
                 return {**record, 'reused':False}
@@ -201,28 +210,42 @@ class DailyLaunch:
         python = Path(sys.executable)
         if python.name.lower() == 'pythonw.exe':
             python = python.with_name('python.exe')
-        command = [str(python), str(self.root/'scripts/daily_market.py'),
+        command = [str(python), '-u', str(Path(__file__).with_name('market_worker.py')),
+                   '--root', str(self.root), '--',
                    '--session-cutoff',plan['cutoff'],'--evaluated-at',plan['evaluated_at']]
         if plan.get('prior_run'):
             command += ['--prior-run', plan['prior_run']]
         log = self.folder/(plan['day']+'-'+datetime.now(timezone.utc).strftime('%H%M%S%f')+'.log')
         result = None
+        # The child writes to a real file, never to a pipe owned by this process.
+        # Losing a dashboard/scheduler cannot break the child's stdout.
         with log.open('w',encoding='utf-8') as stream:
-            with subprocess.Popen(command,cwd=self.root,stdout=subprocess.PIPE,stderr=stream,
-                                  text=True,encoding='utf-8',errors='replace',
+            with subprocess.Popen(command,cwd=self.root,stdout=stream,stderr=stream,
+                                  stdin=subprocess.DEVNULL,
                                   creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0)) as process:
-                for line in process.stdout:
-                    stream.write(line);stream.flush()
-                    try:
-                        event=json.loads(line)
-                    except ValueError:
-                        continue
-                    if 'stage' in event and 'output' in event:
-                        output=Path(event['output']).resolve()
-                        if output.is_relative_to(self.root/'runtime'):
-                            progress({'stage':event['stage'],'run':str(output)})
-                    if event.get('state') in ('succeeded','partial','failed') and 'stages' in event:
-                        result=event
+                with log.open('r',encoding='utf-8',errors='replace') as reader:
+                    pending = ''
+                    while True:
+                        finished = process.poll() is not None
+                        chunk = reader.read()
+                        pending += chunk
+                        while '\n' in pending:
+                            line, pending = pending.split('\n', 1)
+                            try:
+                                event=json.loads(line)
+                            except ValueError:
+                                continue
+                            if not isinstance(event, dict):
+                                continue
+                            if 'stage' in event and 'output' in event:
+                                output=Path(event['output']).resolve()
+                                if output.is_relative_to(self.root/'runtime'):
+                                    progress({'stage':event['stage'],'run':str(output)})
+                            if event.get('state') in ('succeeded','partial','failed') and 'stages' in event:
+                                result=event
+                        if not chunk and finished:
+                            break
+                        time.sleep(.1)
                 process.wait()
                 if result is None or process.returncode not in (0,1,2):
                     raise RuntimeError('market_worker_failed')

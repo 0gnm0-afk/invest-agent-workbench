@@ -9,7 +9,8 @@ import time
 from uuid import uuid4
 
 from daily_launch import DailyLaunch, plan_for
-from invest_agent.trading.runner import atomic_write
+from atomic_io import atomic_write
+from run_journal import RunJournal, error_frames
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -49,7 +50,7 @@ def main():
             result.update(daily.public(record))
             result.update(state=record['state'], run=record.get('run'), scheduled_day=record.get('scheduled_day'))
     except Exception as exc:
-        result.update(state='failed', error='scheduled_job_failed', error_type=type(exc).__name__)
+        result.update(state='failed', error='scheduled_job_failed', error_type=type(exc).__name__, error_frames=error_frames(exc))
     result['finished_at'] = datetime.now(timezone.utc).isoformat()
     body = json.dumps(result, ensure_ascii=True, allow_nan=False)
     name = kind+'-'+now.strftime('%Y%m%dT%H%M%S')+'-'+uuid4().hex[:8]+'.json'
@@ -60,4 +61,7 @@ def main():
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    with RunJournal(ROOT/'runtime/morning-schedule', 'check' if '--check' in sys.argv else 'run') as journal:
+        code = main()
+        journal.complete(code)
+    raise SystemExit(code)
