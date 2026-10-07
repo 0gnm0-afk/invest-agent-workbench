@@ -216,13 +216,21 @@ window.DrawingTools = (() => {
               lines.forEach((value,i)=>{node('tspan',{x,dy:i?15:0},text).textContent=value;});
             }
           } else if(a.x!==b.x) {
-            const slope=(b.y-a.y)/(b.x-a.x), start=d.extend&&b.x<a.x?b:a, end=d.extend?{x:w,y:a.y+slope*(w-a.x)}:b;
-            line(start,end);
+            const slope=(b.y-a.y)/(b.x-a.x);
+            function trendLine(v1,v2,dash='') {
+              // Keep the anchored span distinct from its projection, in either click order.
+              if(d.extend) {
+                const [left,right]=v1.x<v2.x?[v1,v2]:[v2,v1];
+                if(left.x>0)line({x:0,y:left.y-slope*left.x},left,'5 4');
+                if(right.x<w)line(right,{x:w,y:right.y+slope*(w-right.x)},'5 4');
+              }
+              line(v1,v2,dash);
+            }
+            trendLine(a,b);
             if(d.kind==='channel') {
               const q=channel(p), offset=q[3].y-a.y;
-              const upperStart={x:start.x,y:start.y+offset},upperEnd={x:end.x,y:end.y+offset};
-              node('polygon',{points:[start,end,upperEnd,upperStart].map(v=>`${v.x},${v.y}`).join(' '),fill:stroke,'fill-opacity':.10,'pointer-events':mode==='select'?'all':'none'},g);
-              line(upperStart,upperEnd);line({x:start.x,y:start.y+offset/2},{x:end.x,y:end.y+offset/2},'5 4');
+              node('polygon',{points:q.map(v=>`${v.x},${v.y}`).join(' '),fill:stroke,'fill-opacity':.10,'pointer-events':mode==='select'?'all':'none'},g);
+              trendLine(q[3],q[2]);trendLine({x:a.x,y:a.y+offset/2},{x:b.x,y:b.y+offset/2},'5 4');
             }
           }
           if(d.ai){g.setAttribute('opacity','.7');g.querySelectorAll('*').forEach(n=>n.setAttribute('pointer-events','none'));}
@@ -275,7 +283,7 @@ window.DrawingTools = (() => {
         draft.push(p);
         if(draft.length===count[mode]) {
           if(getDrawings().length>=drawingLimit){draft=[];onHint(`종목당 최대 ${drawingLimit}개입니다. 필요 없는 도형을 삭제하세요.`);return;}
-          const drawing={id:crypto.randomUUID(),kind:mode,points:clone(draft),color:'#218775',width:2,extend:false};
+          const drawing={id:crypto.randomUUID(),kind:mode,points:clone(draft),color:'#218775',width:2,extend:['trend','channel'].includes(mode)};
           onChange([...getDrawings(),drawing]);setMode('select');select(drawing.id);
         }else if(mode==='channel')onHint(draft.length===1?'평행 채널: 끝 하단점을 클릭하세요.':'평행 채널: 하단 기준선 위쪽의 상단점을 클릭하세요.');else if(mode==='riskreward')onHint(draft.length===1?'손익비: 손절가를 클릭하세요.':'손익비: 진입가 반대편의 목표가를 클릭하세요.');else onHint(`${labels[mode]}: ${count[mode]-draft.length}개 지점을 더 클릭하세요.`);
       } else {
