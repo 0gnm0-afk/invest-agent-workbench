@@ -53,6 +53,12 @@ function sample(provider='SEC',eps=['basic_eps','eps']){
  assert.match(coloredHtml,/width="720" height="310" style="width:720px;min-width:720px"/);
  assert.match(coloredHtml,/style="width:720px;min-width:720px"/);
  assert.doesNotMatch(coloredHtml,/preserveAspectRatio="none"/);
+ const shares=sample();shares.calculation_version='financial-focus-5';
+ shares.annual.forEach((r,i)=>{r.values.shares={value:(25-i*.2)*1e9,unit:'shares'};});
+ shares.quarterly.at(-1).date='2026-03-31';shares.quarterly.at(-1).values.shares={value:24147000000,unit:'shares'};
+ const sh=harness(shares);await sh.mount();const sht=sh.root.querySelector('#financial-content').innerHTML.split('data-chart-section="shares"')[1].split('</section>')[0];
+ assert.match(sht,/Shares Outstanding/);assert.match(sht,/MRQ/);assert.match(sht,/>24.15<\/text>/);assert.match(sht,/24,147,000,000주/);assert.match(sht,/fill="none"/);
+ const kr=harness(sample('DART'));await kr.mount();assert.doesNotMatch(kr.root.querySelector('#financial-content').innerHTML,/data-chart-section="shares"/);
  const one=harness(sample('SEC',['basic_eps']));await one.mount();assert.doesNotMatch(one.root.querySelector('#financial-content').innerHTML,/희석 EPS/);
  const old=harness({...sample(),calculation_version:'old'});await old.mount();assert.match(old.root.querySelector('#financial-content').innerHTML,/이전 형식/);
  console.log('Toss financial UI: grouped SVG, ratios, tooltip, bottom table, 5/12, QoQ, currency, EPS, immutability PASS');

@@ -161,6 +161,20 @@ class FocusTests(unittest.TestCase):
             out=summarize(n,{})['annual'][-1]['value_movements']['liabilities']
             self.assertEqual(out['trend'],'neutral');self.assertIsNone(out['change']['value'])
 
+    def test_sec_shares_are_instant_not_weighted_and_decrease_is_green(self):
+        n=normal()
+        for row in n['annual']:
+            row['values']['shares']=fact(100,unit='shares',end=row['date'])
+            row['values']['weighted_shares']=fact(999,unit='shares',end=row['date'])
+        n['annual'][-1]['values']['shares']['value']=90
+        out=summarize(n,{})['annual'][-1]
+        self.assertEqual(out['value_movements']['shares']['value'],90)
+        self.assertEqual(out['value_movements']['shares']['trend'],'improved')
+        n['annual'][-1]['values'].pop('shares')
+        out=summarize(n,{})['annual'][-1]
+        self.assertIsNone(out['values']['shares']['value'])
+        self.assertEqual(out['value_movements']['shares']['trend'],'neutral')
+
     def test_http_serves_new_assets_and_identical_result(self):
         import http.client, tempfile, threading
         from types import SimpleNamespace

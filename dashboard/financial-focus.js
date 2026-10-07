@@ -13,6 +13,7 @@ window.WorkbenchFinancials=(()=>{
   }
   function exact(c,currency){
     if(c?.value==null)return value(c,currency);
+    if(c.unit==='shares')return Number(c.value).toLocaleString('ko-KR',{maximumFractionDigits:10})+'주';
     if(c.unit?.startsWith(currency))return Number(c.value).toLocaleString('ko-KR',{minimumFractionDigits:currency==='USD'?2:0,maximumFractionDigits:20})+' '+c.unit;
     return value(c,currency);
   }
@@ -21,6 +22,7 @@ window.WorkbenchFinancials=(()=>{
     if(c?.value==null&&(c?.eps_basis||String(c?.id||'').includes('eps'))&&(!c?.display_text||/미확보/.test(c?.reason||'')))return '값 없음';
     if(c?.display_text)return c.display_text;
     if(c?.value==null)return '자료 없음';
+    if(c.unit==='shares')return compactMoney(c.value,'USD')+'주';
     if(c.unit==='percentage_point')return n(c.value*100)+'%p';
     if(c.kind==='percent')return n(c.value*100)+'%';
     if(c.unit==='multiple'||c.kind==='multiple')return n(c.value)+'배';
@@ -76,7 +78,7 @@ window.WorkbenchFinancials=(()=>{
     el.querySelector('#financial-status').textContent=packet.state==='running'?'공식 자료 수집 중 · '+(packet.attempt?.stage||''):
       [packet.attempt?.error&&'최근 갱신 실패: '+packet.attempt.error,r?'자료 수집 '+new Date(r.collected_at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'})+' · 재무기간 '+r.financial_as_of:'저장된 재무자료가 없습니다.',r?.recalculated_at&&'재계산 '+new Date(r.recalculated_at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'})].filter(Boolean).join(' · ');
     if(!r){el.querySelector('#financial-content').innerHTML='<p class="empty">만들기 버튼으로 선택 종목의 공식 자료를 수집합니다.</p>';return;}
-    if(!['financial-focus-1','financial-focus-2','financial-focus-3','financial-focus-4'].includes(r.calculation_version)){el.querySelector('#financial-content').innerHTML='<p class="empty">이전 형식의 저장 결과입니다. 재무요약 다시 만들기 또는 저장 자료 재계산이 필요합니다. 과거 결과는 보존됩니다.</p>';return;}
+    if(!['financial-focus-1','financial-focus-2','financial-focus-3','financial-focus-4','financial-focus-5'].includes(r.calculation_version)){el.querySelector('#financial-content').innerHTML='<p class="empty">이전 형식의 저장 결과입니다. 재무요약 다시 만들기 또는 저장 자료 재계산이 필요합니다. 과거 결과는 보존됩니다.</p>';return;}
     if(ctx.snapshot===r.snapshot_id)return;ctx.snapshot=r.snapshot_id;ctx.result=r;paint(ctx);
   }
 
@@ -112,6 +114,19 @@ window.WorkbenchFinancials=(()=>{
     rows.forEach((row,i)=>parts.push(`<rect class="financial-hit" data-period="${i}" x="${left+step*i}" y="${top}" width="${step}" height="${bottom-top}" fill="transparent" tabindex="0" role="button" aria-label="${esc(row.label+' '+items.map(m=>m.label+' '+value(cell(row,m.path),currency)).join(' · '))}"/>`));
     parts.push('</svg>');return parts.join('');
   }
+  function sharesPlot(rows){
+    const width=plotWidth(rows),height=260,left=160,right=width-36,top=30,bottom=220,step=(right-left)/Math.max(1,rows.length);
+    const values=rows.map(r=>cell(r,'values.shares').value).filter(v=>v!=null&&v>=0);
+    if(!values.length)return '<p class="empty">SEC 기말 주식수 자료가 없습니다.</p>';
+    const max=Math.max(...values),scale=max>=1e9?1e9:max>=1e6?1e6:max>=1e3?1e3:1,unit=scale===1e9?'B (십억 주)':scale===1e6?'M (백만 주)':scale===1e3?'K (천 주)':'주';
+    const high=(max||1)*1.12,y=v=>bottom-v/high*(bottom-top),parts=[`<svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" style="width:${width}px;min-width:${width}px;height:${height}px" role="img" aria-label="SEC 기말 유통주식수 연간 및 최신 분기 막대차트"><text x="${left}" y="16">Shares Outstanding · ${unit}</text>`];
+    for(let i=0;i<=4;i++){const v=high*i/4,yy=y(v);parts.push(`<line x1="${left}" x2="${right}" y1="${yy}" y2="${yy}" class="financial-grid"/><text x="${right+5}" y="${yy+4}">${esc(n(v/scale))}</text>`);}
+    rows.forEach((r,i)=>{const c=cell(r,'values.shares'),x=left+i*step+4,bw=step-8,v=c.value;
+      if(v!=null&&v>=0)parts.push(`<rect x="${x}" y="${y(v)}" width="${bw}" height="${Math.max(1,bottom-y(v))}" fill="${r.shares_mrq?'none':'#20b7c4'}" stroke="#6dd4dc" stroke-width="${r.shares_mrq?2:0}"/><text class="financial-shares-label" x="${x+bw/2}" y="${Math.min(bottom-5,y(v)+17)}" text-anchor="middle">${esc((v/scale).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}))}</text>`);
+      parts.push(`<text x="${x+bw/2}" y="244" text-anchor="middle">${r.shares_mrq?'MRQ':esc(r.date.slice(0,4)+(r.shares_quarter?'-'+r.date.slice(5,7):''))}</text><rect class="financial-hit" data-period="${i}" x="${left+i*step}" y="${top}" width="${step}" height="${bottom-top}" fill="transparent" tabindex="0" role="button" aria-label="${esc(r.label+' '+exact(c,'USD'))}"/>`);
+    });
+    return parts.join('')+'</svg>';
+  }
   function paint(ctx){
     clear(ctx);ctx.cells=[];ctx.views||={};const r=ctx.result,rows=r[ctx.frame]||[],last=rows.at(-1),mode=ctx.frame==='annual'?'growth':ctx.comparison;
     const perf=mode==='qoq'?'performance_qoq':'performance',metrics=r.performance_metrics||[];
@@ -120,6 +135,7 @@ window.WorkbenchFinancials=(()=>{
       {id:'growth',title:'성장성',subtitle:'영업이익 성장률',items:[series('영업이익','values.operating',palette[3]),series('영업이익률','metrics.operating_margin',palette[4],'line')],extra:[series('영업이익 성장률',mode+'.operating')]},
       {id:'stability',title:'안정성',subtitle:'부채·유동·이자보상비율',items:[],extra:[]},
       ...metrics.filter(m=>m.id.includes('eps')).map(m=>({id:m.id,title:m.label,subtitle:'공시 주당순이익과 성장률',items:[series(m.label,'values.'+m.id,palette[0]),series('성장률',mode+'.'+m.id,palette[2],'line')],extra:[]})),
+      ...(r.provider==='SEC'?[{id:'shares',title:'유통주식수',subtitle:'SEC 기말 보통주 · Shares Outstanding',items:[series('기말 유통주식수','values.shares','#20b7c4')],extra:[]}]:[]),
       {id:'dividend',title:'배당',subtitle:'공시 주당배당금',items:[series('주당배당금','values.dividend',palette[0])],extra:[]}
     ];
     const stability=ctx.stability||'debt_ratio';groups[2].items=stability==='current_ratio'?[series('유동자산','values.current_assets',palette[4]),series('유동부채','values.current_liabilities',palette[1]),series('유동비율','metrics.current_ratio',palette[2],'line')]:stability==='icr'?[series('영업이익','values.operating',palette[3]),series('이자비용','values.interest_expense',palette[1]),series('이자보상배율','metrics.icr',palette[2],'line')]:[series('총자본','values.total_equity',palette[4]),series('총부채','values.liabilities',palette[1]),series('부채비율','metrics.debt_ratio',palette[2],'line')];
@@ -127,15 +143,21 @@ window.WorkbenchFinancials=(()=>{
       const view=ctx.views[g.id]||{frame:ctx.frame,years:ctx.frame==='annual'?5:3};let rr=r[view.frame]||[],fallback=false;
       if(g.id==='dividend'&&view.frame==='quarterly'&&!rr.some(row=>cell(row,'values.dividend').value!=null)){rr=r.annual||[];fallback=true;}
       if(view.frame==='annual'){g.items=g.items.map(m=>({...m,path:m.path.replace('qoq.','growth.')}));g.extra=g.extra.map(m=>({...m,path:m.path.replace('qoq.','growth.')}));}
-      rr=rr.slice(-(view.years*(view.frame==='annual'||fallback?1:4)));g.rows=rr;
+      rr=rr.slice(-(view.years*(view.frame==='annual'||fallback?1:4)));
+      if(g.id==='shares'){
+        rr=rr.map(row=>({...row,shares_quarter:view.frame==='quarterly'}));
+        const mrq=r.quarterly?.at(-1);
+        if(view.frame==='annual'&&mrq&&(!rr.length||mrq.date>rr.at(-1).date))rr=[...rr,{...mrq,label:'MRQ · '+mrq.date,shares_mrq:true}];
+      }
+      g.rows=rr;
       if(g.id==='profit'&&rr.some(row=>cell(row,'values.net_income').value!=null)){
         g.items[1]={...g.items[1],label:'순이익',path:'values.net_income'};
         g.extra=[series('지배주주 순이익','values.income'),...g.extra];
       }
       const items=[...g.items,...g.extra],last=rr.at(-1);
-      return `<section class="financial-toss-section" data-chart-section="${g.id}"><header><h3>${esc(g.title)} <span>${esc(g.subtitle)}</span></h3><p class="financial-story">${last?esc(last.label+' · '+g.items.map(m=>m.label+' '+value(cell(last,m.path),r.currency)).join(' · ')):'공시 자료 없음'}</p></header><div class="financial-selectors">${g.id==='stability'?`<select data-stability aria-label="안정성 지표">${[['debt_ratio','부채비율'],['current_ratio','유동비율'],['icr','이자보상배율']].map(([id,label])=>`<option value="${id}" ${stability===id?'selected':''}>${label}</option>`).join('')}</select>`:''}<select data-chart-years="${g.id}" aria-label="${esc(g.title)} 기간">${[1,3,5].map(y=>`<option value="${y}" ${view.years===y?'selected':''}>${y}년</option>`).join('')}</select><select data-chart-frame="${g.id}" aria-label="${esc(g.title)} 주기"><option value="annual" ${view.frame==='annual'?'selected':''}>연간</option><option value="quarterly" ${view.frame==='quarterly'?'selected':''}>분기</option></select></div>${fallback?'<p class="chart-caption">분기 공시값이 없어 연간 배당 내역을 표시합니다.</p>':''}${g.id==='dividend'?'<p class="chart-caption">사업기간별 주당배당금 · 지급/선언 기준은 각 값에서 확인 · 예상치 제외</p>':''}<div class="financial-toss-chart">${plot(rr,g.items,r.currency)}</div><div class="financial-series-key">${g.items.map(m=>`<span><i style="background:${m.color}"></i>${esc(m.label)}${m.type==='line'?' (선 · 별도 비율 척도)':''}</span>`).join('')}</div><div class="financial-chart-table">${table(ctx,rr,items,'financial-short-table',view.frame==='annual'||fallback?'growth':mode)}</div></section>`;
+      return `<section class="financial-toss-section" data-chart-section="${g.id}"><header><h3>${esc(g.title)} <span>${esc(g.subtitle)}</span></h3><p class="financial-story">${last?esc(last.label+' · '+g.items.map(m=>m.label+' '+value(cell(last,m.path),r.currency)).join(' · ')):'공시 자료 없음'}</p></header><div class="financial-selectors">${g.id==='stability'?`<select data-stability aria-label="안정성 지표">${[['debt_ratio','부채비율'],['current_ratio','유동비율'],['icr','이자보상배율']].map(([id,label])=>`<option value="${id}" ${stability===id?'selected':''}>${label}</option>`).join('')}</select>`:''}<select data-chart-years="${g.id}" aria-label="${esc(g.title)} 기간">${[1,3,5].map(y=>`<option value="${y}" ${view.years===y?'selected':''}>${y}년</option>`).join('')}</select><select data-chart-frame="${g.id}" aria-label="${esc(g.title)} 주기"><option value="annual" ${view.frame==='annual'?'selected':''}>연간</option><option value="quarterly" ${view.frame==='quarterly'?'selected':''}>분기</option></select></div>${fallback?'<p class="chart-caption">분기 공시값이 없어 연간 배당 내역을 표시합니다.</p>':''}${g.id==='shares'?'<p class="chart-caption">기말 보통주 유통주식수 · MRQ는 최신 공시 분기(테두리 막대) · 가중평균주식수 제외 · 확보된 공식 분할 조정 반영 · 감소 초록/증가 빨강</p>':''}${g.id==='dividend'?'<p class="chart-caption">사업기간별 주당배당금 · 지급/선언 기준은 각 값에서 확인 · 예상치 제외</p>':''}<div class="financial-toss-chart">${g.id==='shares'?sharesPlot(rr):plot(rr,g.items,r.currency)}</div><div class="financial-series-key">${g.items.map(m=>`<span><i style="background:${m.color}"></i>${esc(m.label)}${m.type==='line'?' (선 · 별도 비율 척도)':''}</span>`).join('')}</div><div class="financial-chart-table">${table(ctx,rr,items,'financial-short-table',view.frame==='annual'||fallback?'growth':mode)}</div></section>`;
     }).join('');
-    const all=[...metrics.flatMap(m=>[series(m.label,perf+'.'+m.id),series(m.label+' '+(mode==='growth'?'YoY':'QoQ'),mode+'.'+m.id)]),...['net_margin','operating_margin','debt_ratio','current_ratio','icr'].flatMap(id=>{const label=last?.metrics?.[id]?.label||({net_margin:'순이익률',current_ratio:'유동비율'}[id])||id;return [series(label,'metrics.'+id),series(label+' 전년 대비 변화','metrics.'+id+'.change')];}),series('주당배당금','values.dividend')];
+    const all=[...metrics.flatMap(m=>[series(m.label,perf+'.'+m.id),series(m.label+' '+(mode==='growth'?'YoY':'QoQ'),mode+'.'+m.id)]),...['net_margin','operating_margin','debt_ratio','current_ratio','icr'].flatMap(id=>{const label=last?.metrics?.[id]?.label||({net_margin:'순이익률',current_ratio:'유동비율'}[id])||id;return [series(label,'metrics.'+id),series(label+' 전년 대비 변화','metrics.'+id+'.change')];}),series('주당배당금','values.dividend'),...(r.provider==='SEC'?[series('기말 유통주식수','values.shares')]:[])];
     ctx.el.querySelector('#financial-content').innerHTML=`<div class="financial-meta"><span>${esc(r.standard)} · ${esc(r.currency)} · 공시 실적만 표시</span></div><div class="financial-chart-head"><h3>재무</h3><div class="chart-toolbar"><button data-focus-frame="annual" aria-pressed="${ctx.frame==='annual'}">연간</button><button data-focus-frame="quarterly" aria-pressed="${ctx.frame==='quarterly'}">분기</button>${ctx.frame==='quarterly'?`<button data-focus-comparison="growth" aria-pressed="${mode==='growth'}">YoY 전년 대비</button><button data-focus-comparison="qoq" aria-pressed="${mode==='qoq'}">QoQ 전분기 대비</button>`:''}</div></div><p class="chart-caption">연간 5개 · 분기 12개 공시 확보 범위 내 표시 · 금액 원/만/억/조, USD K/M/B/T · 각 기간에 마우스를 올려 수치를 확인하세요. 초록: 개선 · 빨강: 악화 · 회색: 동일/비교 불가. 실적은 선택한 YoY/QoQ, 건전성 비율은 전년 대비입니다.</p><div class="financial-focus-health">${['debt_ratio','current_ratio','icr','operating_margin'].map(id=>{const c=last?.metrics?.[id];return `<article><h4>${esc(c?.label||({current_ratio:'유동비율'}[id])||id)}</h4>${button(ctx,c)}<p>${esc(c?.definition||'공시 원값 미확보')}</p></article>`;}).join('')}</div>${(last?.warnings||[]).map(w=>`<p class="financial-equity-warning">${esc(w.message)} ${button(ctx,w.evidence)}</p>`).join('')}${rendered}<details class="financial-evidence" id="financial-evidence"><summary>공시 원값·계산 근거·결측 사유</summary><div id="financial-evidence-body"></div></details><details><summary>자료 범위와 한계</summary><ul>${(r.limitations||[]).map(x=>`<li>${esc(x)}</li>`).join('')}</ul></details><details class="financial-periods financial-final-table" open><summary>기간별 수치·성장률·건전성</summary>${table(ctx,rows,all,'',mode)}</details><div class="financial-hover" role="tooltip" hidden></div>`;
     ctx.el.querySelectorAll('[data-chart-section]').forEach(section=>{
       const chart=section.querySelector('.financial-toss-chart'),scroll=section.querySelector('.financial-chart-table .scroll');

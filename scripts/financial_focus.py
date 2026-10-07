@@ -2,7 +2,7 @@
 from copy import deepcopy
 from financial_model import VERSION as NORMALIZATION_VERSION, fact, calc, growth, comparable_period, days
 
-VERSION = 'financial-focus-4'
+VERSION = 'financial-focus-5'
 LABELS = {'sales':'매출액', 'operating':'영업이익', 'income':'지배주주 순이익',
           'basic_eps':'기본 EPS', 'eps':'희석 EPS', 'operating_margin':'영업이익률',
           'net_margin':'순이익률', 'current_ratio':'유동비율', 'debt_ratio':'부채비율', 'icr':'이자보상배율 (ICR)'}
@@ -141,6 +141,9 @@ def summarize(normal, stock):
             for key in keys:
                 v.setdefault(key,fact(unit=normal['currency']+('/share' if 'eps' in key else ''),end=row['date']))
                 v[key].update(id=key,label=(v[key].get('account_label') or LABELS[key]) if key=='sales' else LABELS[key],kind='money',source_type=origin(v[key]))
+            if normal['provider']=='SEC':
+                v.setdefault('shares',fact(unit='shares',end=row['date']))
+                v['shares'].update(id='shares',label='기말 유통주식수',kind='shares')
             row['metrics']={key:ratio(v,key) for key in DEFINITIONS}
             equity=v.get('total_equity') or fact(unit=normal['currency'],end=row['date'])
             row['warnings']=[dict(code='NON_POSITIVE_EQUITY',message='자본총계가 0 이하입니다.',evidence=deepcopy(equity))] if equity['value'] is not None and equity['value']<=0 else []
@@ -162,9 +165,10 @@ def summarize(normal, stock):
             prior_quarter=comparable_period(original,row,quarter=True) if frame=='quarterly' else None
             # Display comparisons share the same period/basis validation as performance.
             display_keys=set(keys) | {'net_income','dividend','total_equity','liabilities','current_assets','current_liabilities','interest_expense'}
+            if normal['provider']=='SEC':display_keys.add('shares')
             for target,prior in (('value_movements',previous),('value_movements_qoq',prior_quarter)):
                 row[target]={key:movement(row['values'][key],prior['values'].get(key) if prior else None,
-                    reverse=key in {'liabilities','current_liabilities','interest_expense'})
+                    reverse=key in {'liabilities','current_liabilities','interest_expense','shares'})
                     for key in sorted(display_keys) if key in row['values']}
             for key in keys:
                 row['performance'][key]=movement(row['values'][key],previous['values'].get(key) if previous else None)

@@ -9,3 +9,5 @@
 .financial-chart-table .financial-performance-table{table-layout:fixed}.financial-chart-table .financial-performance-table tr>th:first-child{width:160px}.financial-toss-section{max-width:100%;overflow:hidden}
 
 .financial-chart-table .financial-performance-table tr>:not(:first-child){text-align:center}
+
+.financial-toss-chart .financial-shares-label{fill:#e6faff;font-size:12px;font-weight:600}
