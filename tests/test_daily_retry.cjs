@@ -45,6 +45,8 @@ function setup(initial=failed,hash='#stock/US/AAA'){
  };
 }
 (async()=>{
+ let observer=setup({...failed,observe_only:true,retry_available:false});await observer.start();
+ assert.match(observer.text(),/새 수집 결과 자동 반영/);assert.equal(observer.button('daily-retry'),undefined);
  let h=setup({...failed,view_ready:false,retry_available:false,error:'basis_document_changed_review_required',account_attempted:true,account_state:'received'});await h.start();
  assert.match(h.text(),/오늘의 갱신에 오류/);
  assert.match(h.text(),/공식 문서 변경/);
@@ -63,7 +65,7 @@ function setup(initial=failed,hash='#stock/US/AAA'){
  h=setup();await h.start();
  assert.match(h.text(),/시장 자료 수집 작업이 오류로 종료/);
  assert.equal(h.button('daily-retry').disabled,false);
- assert.equal(h.calls.filter(c=>c[0]==='/api/home').length,0,'stock view waits for explicit result opening');
+ assert.equal(h.calls.filter(c=>c[0]==='/api/home').length,1,'stock view automatically opens the current saved result');
  assert.equal([...h.timers.values()][0].delay,10000,'idle continues to observe another window');
  await h.start();assert.equal(h.timers.size,1,'controller is not duplicated');
 
@@ -81,12 +83,13 @@ function setup(initial=failed,hash='#stock/US/AAA'){
  assert.equal(h.timers.size,1);assert.equal([...h.timers.values()][0].delay,3000);
 
  h.status={...h.status,state:'succeeded',view_ready:true,finished_at:'done',retry_available:false};
- await h.refresh();assert.ok(h.button('daily-result'));assert.equal(h.c.DATA,h.saved);
- h.closeAllowed=false;await h.button('daily-result').onclick();
- assert.equal(h.c.DATA,h.saved,'cancelled unsaved-drawing guard keeps displayed data');
+ const before=h.c.DATA;h.closeAllowed=false;
+ await h.refresh();assert.ok(h.button('daily-result'));assert.equal(h.c.DATA,before);
+ await h.button('daily-result').onclick();
+ assert.equal(h.c.DATA,before,'cancelled unsaved-drawing guard keeps displayed data');
  assert.ok(h.button('daily-result'));
  h.closeAllowed=true;await h.button('daily-result').onclick();assert.equal(h.c.DATA,h.next);
- assert.equal(h.button('daily-result'),undefined);assert.equal(h.calls.filter(c=>c[0]==='route').length,1);
+ assert.equal(h.button('daily-result'),undefined);assert.equal(h.calls.filter(c=>c[0]==='route').length,2);
 
  h=setup(failed,'#home');await h.start();
  assert.equal(h.calls.filter(c=>c[0]==='/api/home').length,1);
@@ -98,21 +101,21 @@ function setup(initial=failed,hash='#stock/US/AAA'){
  await h.refresh();assert.equal(h.calls.filter(c=>c[0]==='/api/home').length,2);
 
 
+ // In-progress drawing edits defer automatic replacement until safe.
+ h=setup();h.c.WorkbenchWorkspace.current=()=>({canAutoRefresh:()=>false});await h.start();
+ assert.equal(h.c.DATA,h.saved);assert.ok(h.button('daily-result'));
+ h.c.WorkbenchWorkspace.current=()=>({canAutoRefresh:()=>true});await h.refresh();
+ assert.equal(h.c.DATA,h.next);
+
  // A display-only retry keeps the market attempt identity but publishes a new view revision.
  for(const hash of ['#home','#stock/US/AAA']){
   h=setup({...failed,error:'dashboard_preparation_failed',revision:0,finished_at:'unchanged-finish'},hash);
   await h.start();
-  if(hash!=='#home')await h.button('daily-result').onclick();
   const previous=h.c.DATA;
   assert.equal(h.calls.filter(c=>c[0]==='/api/home').length,1);
   h.next={marker:'repaired-view'};
   h.status={...h.status,state:'succeeded',error:null,retry_available:false,revision:1};
   await h.refresh();
-  if(hash!=='#home'){
-   assert.equal(h.c.DATA,previous,'stock view remains until revised result is explicitly opened');
-   assert.ok(h.button('daily-result'),'same attempt with new revision offers its result again');
-   await h.button('daily-result').onclick();
-  }
   assert.equal(h.c.DATA,h.next,'new view revision applies fresh home data with unchanged attempt identity');
   assert.equal(h.calls.filter(c=>c[0]==='/api/home').length,2);
   await h.refresh();
@@ -122,7 +125,7 @@ function setup(initial=failed,hash='#stock/US/AAA'){
  h=setup();await h.start();h.readError=true;await h.refresh();
  assert.match(h.text(),/시장 자료 수집 작업이 오류로 종료/,'old status remains visible through network errors');
  assert.match(h.text(),/마지막 확인 상태를 유지/);assert.ok(h.button('daily-status-retry'));
- assert.equal(h.button('daily-retry').disabled,true);assert.equal(h.c.DATA,h.saved);
+ assert.equal(h.button('daily-retry').disabled,true);assert.equal(h.c.DATA,h.next);
  h.readError=false;await h.button('daily-status-retry').onclick();assert.equal(h.button('daily-status-retry'),undefined);
  assert.equal(h.button('daily-retry').disabled,false);
 

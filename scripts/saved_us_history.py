@@ -2,11 +2,56 @@
 import hashlib
 import json
 import math
+from datetime import date
 from pathlib import Path
 
 
 def packed(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False).encode('utf-8')
+
+
+def with_daily(packet, stock, listing):
+    """Compose verified stored inputs only; never mutate either immutable source."""
+    current = stock.get('bars') or []
+    info = packet['history']
+    if not current or current[-1]['date'] <= info.get('requested_end', ''):
+        return packet
+    dates = [b['date'] for b in current]
+    try:
+        if dates != sorted(set(dates)):
+            raise ValueError()
+        for b in current:
+            date.fromisoformat(b['date'])
+            if (any(type(b[k]) not in (int, float) or not math.isfinite(b[k]) or b[k] < 0
+                    for k in ('open', 'high', 'low', 'close', 'volume'))
+                    or not 0 < b['low'] <= min(b['open'], b['close']) <= max(b['open'], b['close']) <= b['high']):
+                raise ValueError()
+    except (ValueError, KeyError, TypeError):
+        return {**packet, 'history': {**info, 'state': 'partial', 'daily_update_reason': 'invalid_daily_bars'}}
+    source = packet.get('series', {})
+    historical = source.get('bars') or []
+    prior = {b['date']: b for b in historical}
+    overlap = [b for b in current if b['date'] in prior]
+    reason = None
+    for old_key, new_key in (('isinCode', 'isin_code'), ('listing_exchange', 'listing_exchange_family')):
+        if listing.get(old_key) and listing[old_key] != stock.get(new_key):
+            reason = 'listing_identity_changed'
+    if not reason and any(source.get(k) != stock.get(k) for k in ('currency', 'provider', 'price_basis')):
+        reason = 'price_basis_changed'
+    if not reason and (not overlap or (historical and historical[-1]['date'] not in dates)):
+        reason = 'history_overlap_unavailable'
+    if not reason and any(not math.isclose(b[k], prior[b['date']][k], rel_tol=1e-8, abs_tol=1e-8)
+                          for b in overlap for k in ('open', 'high', 'low', 'close', 'volume')):
+        reason = 'history_overlap_changed'
+    combined = current if reason else [b for b in historical if b['date'] < dates[0]] + current
+    return {'series': {**stock, 'bars': combined}, 'history': {
+        **info, 'state': 'partial' if reason or info['state'] == 'partial' else 'complete',
+        'archive_requested_end': info.get('requested_end'), 'requested_end': dates[-1],
+        'daily_as_of': dates[-1], 'daily_update_mode': 'daily_only' if reason else 'merged',
+        'daily_update_reason': reason, 'overlap_count': len(overlap),
+        'screening_newer_than_history': False,
+        'screening_price_difference': reason in ('price_basis_changed', 'history_overlap_changed'),
+    }}
 
 
 class SavedHistory:
@@ -84,9 +129,9 @@ class SavedHistory:
             if d['state'] == 'empty':
                 if bars or record['first'] is not None or record['last'] is not None:
                     raise ValueError('invalid_empty_series')
-                return {'series': dict(source, bars=[]), 'history': dict(info,
+                return with_daily({'series': dict(source, bars=[]), 'history': dict(info,
                         state='unavailable', reason='saved_history_empty_before_cutoff',
-                        stored_count=0, source_first=None, source_last=None)}
+                        stored_count=0, source_first=None, source_last=None)}, stock, self.listings[symbol])
             dates = [b['date'] for b in bars]
             if (not dates or dates != sorted(set(dates)) or dates[0] != record['first']
                     or dates[-1] != record['last'] or dates[-1] > self.config['end']):
@@ -109,13 +154,13 @@ class SavedHistory:
             quality = {k: record[k] for k in ('invalid_ohlc', 'non_sessions', 'missing_sessions', 'latest_session_missing')}
             quality['excluded_dates'] = sorted(excluded)
             quality['calendar_policy'] = 'retain_with_warning' if self.market == 'KR' else 'exclude_non_sessions'
-            flagged = bool(excluded or record['non_sessions'] or record['missing_sessions'] or record['latest_session_missing'] or newer_screen)
+            flagged = bool(excluded or record['non_sessions'] or record['missing_sessions'] or record['latest_session_missing'])
             info.update(state='partial' if flagged else 'complete', reason='saved_history_quality_flags' if flagged else 'saved_history_verified',
                         stored_count=len(bars), source_first=dates[0], source_last=dates[-1], quality=quality,
                         screening_as_of=screening_end, screening_price_difference=different,
                         screening_newer_than_history=newer_screen)
             source = {k: d.get(k) for k in ('market','symbol','currency','provider','price_basis','collected_at')}
-            return {'series': dict(source, bars=displayed), 'history': info}
+            return with_daily({'series': dict(source, bars=displayed), 'history': info}, stock, self.listings[symbol])
         except (OSError, ValueError, KeyError, TypeError):
             return {'history': dict(info, state='failed', reason='saved_' + self.market.lower() + '_history_verification_failed')}
 

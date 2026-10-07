@@ -12,12 +12,13 @@ window.WorkbenchStockChart = (() => {
       const ipDenied=['market_authentication_http_403_ip_not_allowed','market_http_403_ip_not_allowed'].includes(h.reason);
       status.textContent=`${local?(h.state==='complete'?'저장 장기 이력 · 검증 완료':h.state==='partial'?'저장 장기 이력 · 자료 주의':h.state==='unavailable'?(h.reason==='saved_history_empty_before_cutoff'?'수집 목표일 이전 제공 자료 없음':'이 종목의 장기 자료 없음 · 기존 이력 표시'):'저장 장기 이력 검증 실패 · 기존 이력 표시'):(labels[h.state]||h.state)} · ${h.first||'미확인'} ~ ${h.last||'미확인'} · 일봉 ${h.daily_count.toLocaleString('ko-KR')}개 → ${({'1d':'일봉','1w':'주봉','1mo':'월봉'})[frame]} ${value.bars.length.toLocaleString('ko-KR')}개 · ${value.provider||'공급자 미확인'} · ${value.price_basis||'조정 기준 미확인'} · 수집 ${h.collected_at||'미확인'}${h.state==='partial'&&!local?' · 2016년까지 제공되지 않은 구간은 채우지 않습니다.':''}${h.state==='failed'?' · '+(ipDenied?'Toss 허용 IP 거절(403) · Toss API 허용 IP 설정 확인 필요':h.reason==='market_authentication_http_403'?'Toss 인증 거절(403) · API 접근 권한 확인 필요':h.reason):''}${h.screening_price_difference?' · 주의: 새 수정주가와 원 스크리닝 가격이 다릅니다. 기존 피벗·작도와 비교 전 조정 기준을 확인하세요.':''} · 주/월 봉 날짜는 기간 시작일, 첫·마지막 봉은 확보된 거래일만 집계합니다. 작도는 일·주·월봉에 공유하며 SMA 설정은 주기별로 저장합니다.`;
       retry.hidden=h.can_retry===false||!['failed','pending'].includes(h.state);
+      if(h.daily_update_mode)status.textContent += h.daily_update_mode==='merged'?' · 일일 수집 가격 연결 완료 ('+h.daily_as_of+')':' · 최신 일일 가격 표시 · 과거 이력 연결 보류 ('+({listing_identity_changed:'종목 식별정보 변경',price_basis_changed:'가격 기준 불일치',history_overlap_unavailable:'겹치는 기간 없음',history_overlap_changed:'과거 가격·거래량 변경'}[h.daily_update_reason]||h.daily_update_reason)+')';
       const last=value.bars.at(-1), price=document.querySelector('#history-price');
       if(price)price.textContent=`차트 종가 ${last?WorkbenchFormat.money(last.close,currency)+' '+currency:'표시 가능한 가격 없음'} · 실제 가격일 ${last?(last.last_session||last.date):'없음'}${local?' · 수집 목표일 '+h.requested_end+' · 저장 원본 '+(h.source_first||'미확인')+' ~ '+(h.source_last||'미확인'):''}${h.screening_newer_than_history?' · 주의: 스크리닝 자료가 이 장기 이력보다 최신입니다.':''}`;
       const quote=document.querySelector('#stock-quote-price'), quoteDate=document.querySelector('#stock-quote-date');
       if(quote)quote.textContent=last?WorkbenchFormat.money(last.close,currency):'결측';
       if(quoteDate)quoteDate.textContent='저장 종가 '+(last?(last.last_session||last.date):'없음');
-      document.querySelector('.history-info')?.classList.toggle('history-warning',h.state==='failed'||h.state==='partial'||h.screening_price_difference||h.screening_newer_than_history);
+      document.querySelector('.history-info')?.classList.toggle('history-warning',h.state==='failed'||h.state==='partial'||h.screening_price_difference||h.screening_newer_than_history||h.daily_update_mode==='daily_only');
       const details=document.querySelector('#history-quality');
       if(details){
         const q=h.quality;details.hidden=!q;

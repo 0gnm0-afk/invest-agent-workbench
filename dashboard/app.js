@@ -242,8 +242,8 @@ async function pollDaily() {
   const running=u?.state==='running',preparing=!!u&&!u.view_ready&&!running,locked=busy(u),bad=u&&(['failed','interrupted'].includes(u.state)||['failed','partial'].includes(u.account_state));
   host.classList.toggle('error',!!bad||statusFailed);
   if(u?.enabled){
-   const label=running?'오늘의 종가·계좌 갱신 중':({succeeded:'오늘의 갱신 완료',partial:'오늘의 갱신 완료 · 일부 자료 결측',failed:'오늘의 갱신에 오류가 있습니다',interrupted:'오늘의 갱신이 중단됐습니다'})[u.state]||'오늘의 저장 결과';
-   const reason=u.manual_retry?'수동 재시도':u.reused?'오늘 기록 재사용':'하루 첫 실행';
+   const label=u.observe_only&&!running?'저장 결과 · 새 수집 결과 자동 반영':running?'오늘의 종가·계좌 갱신 중':({succeeded:'오늘의 갱신 완료',partial:'오늘의 갱신 완료 · 일부 자료 결측',failed:'오늘의 갱신에 오류가 있습니다',interrupted:'오늘의 갱신이 중단됐습니다'})[u.state]||'오늘의 저장 결과';
+   const reason=u.observe_only?'저장 자료 조회':u.manual_retry?'수동 재시도':u.reused?'오늘 기록 재사용':'하루 첫 실행';
    const ipDenied=['market_authentication_http_403_ip_not_allowed','market_http_403_ip_not_allowed'].includes(u.error);
    const display=u.display_updated?'이후 저장 결과 표시':u.display_stale?'이전 저장 자료 표시':'';
    const p=u.progress;
@@ -251,7 +251,7 @@ async function pollDaily() {
    host.innerHTML='<details '+((open??(running||bad))?'open':'')+'><summary><strong>'+esc(label)+'</strong> · '+reason+(u.account_attempted?' · 계좌 '+({received:'갱신 완료',partial:'일부 조회 실패',failed:'조회 실패'}[u.account_state]||'확인 중'):'')+(ipDenied?' · Toss 허용 IP 거절403':u.error==='market_authentication_http_403'?' · Toss 인증403':'')+(display?' · '+display:'')+' · 상세</summary><span>'+esc(u.day)+' · 목표 종가 KR '+esc(u.targets?.KR||'확인 중')+' / US '+esc(u.targets?.US||'확인 중')+'<br>'+(preparing?'저장 화면 준비 중 · 시장 처리는 종료됨':running?esc(stages[u.stage]||'갱신 중')+(p?.requested?' · '+num(p.completed,0)+' / '+num(p.requested,0)+'종목':''):(u.manual_retry?'수동 재시도 처리':u.reused?'오늘 실행 기록 재사용 · 수집·스크리닝 재실행 없음':'하루 첫 실행 처리'))+(u.finished_at?' · '+stamp(u.finished_at):'')+(u.error?'<br>'+esc(errors[u.error]||'갱신 중 오류가 발생했습니다. 아래 재시도 버튼과 실제 자료 기준일을 확인하세요.'):'')+(accountError?'<br>'+esc(accountError):'')+(u.display_updated?'<br>갱신 오류 이후에 저장된 결과를 표시합니다. 위 오류는 당시 실행 기록이며 아래 실제 자료 기준일을 확인하세요.':u.display_stale?'<br>갱신 전 저장 결과를 표시합니다. 아래 실제 자료 기준일을 확인하세요.':'')+(bad||u.state==='partial'?'<br>같은 날에는 자동으로 재시도하지 않습니다.':'')+'</span></details>';
   }else host.innerHTML='<strong>갱신 상태 확인 필요</strong>';
   const actions=document.createElement('div');actions.className='daily-actions';
-  if(u?.enabled&&(u.retry_available||locked||submitting))button(actions,'daily-retry',submitting?'재시도 요청 중…':running?'갱신 진행 중…':preparing?'화면 준비 중…':'오늘의 갱신 재시도',retry,locked||submitting||statusFailed);
+  if(u?.enabled&&!u.observe_only&&(u.retry_available||locked||submitting))button(actions,'daily-retry',submitting?'재시도 요청 중…':running?'갱신 진행 중…':preparing?'화면 준비 중…':'오늘의 갱신 재시도',retry,locked||submitting||statusFailed);
   if(u?.enabled&&u.view_ready&&!running&&key(u)!==publishedKey)button(actions,'daily-result',applying?'결과 여는 중…':'갱신 결과 열기',()=>apply(key(latest)),applying||submitting);
   if(statusNote){const note=document.createElement('span');note.className='daily-message';note.setAttribute?.('role','status');note.textContent=statusNote;actions.append(note);}
   if(statusFailed)button(actions,'daily-status-retry','상태 다시 확인',check,submitting);
@@ -270,7 +270,7 @@ async function pollDaily() {
  }
  async function accept(u){
   latest=u;render();
-  if(u.enabled&&u.view_ready&&!busy(u)&&key(u)!==publishedKey&&key(u)!==offeredKey&&(!location.hash||location.hash==='#home'))await apply(key(u));
+  if(u.enabled&&u.view_ready&&!busy(u)&&key(u)!==publishedKey&&key(u)!==offeredKey&&WorkbenchWorkspace.current?.()?.canAutoRefresh?.()!==false&&!document.activeElement?.matches?.('input,textarea,select,[contenteditable=true]'))await apply(key(u));
  }
  async function check(){
   if(stopped||submitting)return;

@@ -12,16 +12,18 @@ class RetryConflict(ValueError):
 
 
 class DashboardDaily:
-    def __init__(self, daily, views, builder, base_run, *, saved_accounts=True, now=None):
+    def __init__(self, daily, views, builder, base_run, *, saved_accounts=True, now=None, observe_only=False):
         self.daily, self.views, self.builder = daily, views, builder
         self.display_run = base_run
         self.saved_accounts = saved_accounts
+        self.observe_only = observe_only
         self.clock = now or (lambda: datetime.now(timezone.utc))
         self.lock = threading.RLock()
         self.thread = None
         self.active = False
         self.ready = False
-        self.record = {'day': self.day(), 'state': 'running', 'stage': 'starting', 'targets': {}}
+        self.record = {'day': self.day(), 'state': 'saved' if observe_only else 'running',
+                       'stage': 'finished' if observe_only else 'starting', 'targets': {}}
         self.seen = None
         self.revision = 0
         self.view_error = None
@@ -41,17 +43,19 @@ class DashboardDaily:
     def start(self, retry=False):
         with self.lock:
             if not self.active:
-                self._start(initial=True, retry=retry)
+                self._start(initial=not self.observe_only, retry=retry)
 
     def _prepare(self, *, initial=False, retry=False, expected=None):
         try:
             now = self.clock()
-            record = self.daily.once(now, retry=retry, expected_attempt=expected)
-            while record.get('following'):
+            record = (self.daily.once(now, retry=retry, expected_attempt=expected) if initial or retry
+                      else self.daily.read(self.day()) or self.record)
+            while record.get('following') or record.get('state') == 'running':
                 with self.lock:
                     self.record = record
                 time.sleep(.5)
-                record = self.daily.once(now)
+                record = (self.daily.once(now) if initial or retry else
+                          self.daily.read(record['day']) or {**record, 'state': 'unavailable', 'following': False})
             with self.lock:
                 self.record = record
             # A later saved recalculation is valid display evidence, not a successful retry.
@@ -86,15 +90,19 @@ class DashboardDaily:
                 persisted = self.daily.read(self.day())
             except (OSError, ValueError):
                 persisted = None
-            if not self.active and persisted and self.signature(persisted) != self.seen:
+            display = self.daily.display_run()
+            if not self.active and ((persisted and self.signature(persisted) != self.seen)
+                                    or (display and display != self.display_run and not self.view_error)):
                 # Follow another dashboard's receipt; this path never requests a retry.
                 self._start()
             record = persisted if self.active and persisted else self.record
+            if record.get('state') == 'saved':
+                record = {**record, 'run': self.display_run}
             value = self.daily.public({**record, 'display_run': self.display_run})
             if self.view_error:
                 value.update(state='failed', error=self.view_error)
-            value.update(enabled=True, view_ready=self.ready, revision=self.revision, reused=self.record.get('reused', False),
-                         retry_available=self.ready and value['day'] == self.day() and (value['state'] in ('failed', 'interrupted', 'partial') or value.get('account_state') in ('failed','partial')))
+            value.update(enabled=True, observe_only=self.observe_only, view_ready=self.ready, revision=self.revision, reused=self.record.get('reused', False),
+                         retry_available=not self.observe_only and self.ready and value['day'] == self.day() and (value['state'] in ('failed', 'interrupted', 'partial') or value.get('account_state') in ('failed','partial')))
             return value
 
     def retry(self, expected_attempt):

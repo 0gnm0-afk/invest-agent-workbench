@@ -317,7 +317,9 @@ def main():
             saved_notice = dict(saved_only=True, latest_state='unavailable', display_stale=True)
     output, data, stocks = build(refresh=not args.saved_accounts and not daily, market_run=base_run, daily_update=saved_notice)
     views = {'view':(data, stocks)}
-    controller = DashboardDaily(daily, views, build, base_run, saved_accounts=args.saved_accounts) if daily else None
+    controller = (DashboardDaily(daily or DailyLaunch(ROOT), views, build, base_run,
+                                 saved_accounts=args.saved_accounts, observe_only=not daily)
+                  if not args.offline else None)
     if args.build_only:
         print(json.dumps({'output': str(output), 'market_state': data['market']['state'],
                           'account_query_state': data['accounts']['query_state']}))
@@ -354,7 +356,7 @@ def main():
     print(json.dumps(ready), flush=True)
     if args.open_browser:
         webbrowser.open(ready['url'])
-    if daily:
+    if controller:
         controller.start(retry=args.retry_market)
     server.serve_forever()
 

@@ -229,6 +229,27 @@ class DashboardRetry(RetryFixture):
         self.assertEqual(len(self.calls), 1)
         self.assertFalse(self.builds[0]['refresh'])
 
+    def test_new_saved_result_after_midnight_without_receipt_does_not_collect(self):
+        controller=self.controller()
+        controller.clock=lambda: datetime(2026,10,4,15,tzinfo=timezone.utc)
+        result=saved_run(self.root,'new-direct-daily')
+        controller.status();self.wait(controller)
+        self.assertEqual(self.views['view'][0]['generation'],result['output'])
+        self.assertEqual(self.calls,[])
+        self.assertFalse(self.builds[0]['refresh'])
+        self.assertIsNone(self.gate.read('2026-10-05'))
+
+    def test_saved_market_observer_publishes_without_collection_or_account_query(self):
+        controller=DashboardDaily(self.gate,self.views,self.builder,self.old,now=lambda:NOW,observe_only=True)
+        self.controllers.append(controller);controller.start();self.wait(controller)
+        result=saved_run(self.root,'observer-result')
+        controller.status();self.wait(controller)
+        self.assertEqual(self.views['view'][0]['generation'],result['output'])
+        self.assertFalse(controller.status()['retry_available'])
+        self.assertTrue(controller.status()['observe_only'])
+        self.assertEqual(self.calls,[])
+        self.assertFalse(self.builds[0]['refresh'])
+
     def test_failed_collection_preserves_saved_view_and_sanitized_error(self):
         controller = self.controller()
         previous = self.views['view']

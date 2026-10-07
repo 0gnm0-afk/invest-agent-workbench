@@ -146,12 +146,51 @@ class SavedHistoryTests(unittest.TestCase):
         factory.assert_not_called()
         self.assertFalse(self.path.exists())
 
-    def test_newer_screen_is_explicit(self):
+    def test_newer_screen_without_compatible_overlap_uses_current_only(self):
         self.fixture()
         value=HistoryStore(self.path,self.no_network).view(dict(self.stock,bars=[bar('2026-10-01')]))
-        self.assertTrue(value['history']['screening_newer_than_history'])
+        self.assertFalse(value['history']['screening_newer_than_history'])
         self.assertEqual(value['history']['state'],'partial')
-        self.assertEqual(value['history']['last'],'2026-09-30')
+        self.assertEqual(value['history']['last'],'2026-10-01')
+        self.assertEqual(value['history']['daily_update_mode'],'daily_only')
+
+    def test_daily_merged_for_both_markets_frames_and_sma_without_source_mutation(self):
+        for market in ('KR', 'US'):
+            self.fixture(market=market)
+            before=(self.folder/self.series).read_bytes()
+            stock=dict(self.stock, provider='Toss', price_basis='adjusted',
+                       bars=[bar('2026-09-30'),bar('2026-10-01',20),bar('2026-10-02',30)])
+            original=copy.deepcopy(stock)
+            store=HistoryStore(self.path,self.no_network)
+            for frame in ('1d','1w','1mo'):
+                value=store.view(stock,frame)
+                self.assertEqual(value['history']['last'],'2026-10-02')
+                self.assertEqual(value['history']['first'],'1990-01-02')
+                self.assertEqual(value['history']['daily_update_mode'],'merged')
+                self.assertEqual(value['bars'][-1]['close'],31)
+            self.assertEqual(moving_averages(store.view(stock),[2])['2'][-1]['value'],26)
+            self.assertEqual(before,(self.folder/self.series).read_bytes())
+            self.assertEqual(stock,original)
+
+    def test_adjusted_prices_volume_and_identity_changes_do_not_splice_history(self):
+        self.fixture()
+        stock=dict(self.stock,provider='Toss',price_basis='adjusted',bars=[bar('2026-09-30'),bar('2026-10-01',20)])
+        for field in ('close','volume'):
+            changed=copy.deepcopy(stock);changed['bars'][0][field]+=1
+            value=HistoryStore(self.path,self.no_network).view(changed)
+            self.assertEqual(value['history']['daily_update_reason'],'history_overlap_changed')
+            self.assertEqual(value['bars'],changed['bars'])
+        from saved_us_history import with_daily
+        packet=HistoryStore(self.path,self.no_network).saved.packet(self.stock)
+        result=with_daily(packet,dict(stock,isin_code='NEW'),{'isinCode':'OLD'})
+        self.assertEqual(result['history']['daily_update_reason'],'listing_identity_changed')
+
+    def test_new_listing_after_empty_archive_uses_current_daily(self):
+        self.fixture(market='KR',empty=True)
+        stock=dict(self.stock,bars=[bar('2026-10-01')])
+        value=HistoryStore(self.path,self.no_network).ensure(stock)
+        self.assertEqual(value['bars'],stock['bars'])
+        self.assertEqual(value['history']['last'],'2026-10-01')
 
     def test_kr_calendar_flags_retained_ohlc_excluded_and_sma(self):
         rows=[bar('1975-01-04',10),bar('1994-01-03',20),dict(bar('2001-01-16'),open=99),bar('2026-09-30',30)]
@@ -194,6 +233,29 @@ class SavedHistoryTests(unittest.TestCase):
         value=HistoryStore(self.path,self.no_network).ensure(self.stock)
         self.assertEqual(value['history']['state'],'failed')
         self.assertEqual(value['history']['reason'],'saved_kr_history_verification_failed')
+
+    def test_http_new_daily_view_updates_chart_and_sma_on_same_server(self):
+        self.fixture()
+        views={'view':({}, {'US:AAA':self.stock})}
+        server=ThreadingHTTPServer(('127.0.0.1',0),handler_for({}, {}, self.root,'token',self.root/'workspace.sqlite3',views=views))
+        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        try:
+            def get(path):
+                conn=http.client.HTTPConnection('127.0.0.1',server.server_port)
+                conn.request('GET',path);r=conn.getresponse();v=json.loads(r.read());conn.close()
+                self.assertEqual(r.status,200);return v
+            self.assertEqual(get('/api/chart/US:AAA')['history']['last'],'2026-09-30')
+            current=dict(self.stock,provider='Toss',price_basis='adjusted',bars=[bar('2026-09-30'),bar('2026-10-01',20),bar('2026-10-02',30)])
+            views['view']=({'generation':'new'}, {'US:AAA':current})
+            self.assertEqual(get('/api/home')['generation'],'new')
+            self.assertEqual(get('/api/stock/US:AAA')['bars'][-1]['close'],31)
+            for frame in ('1d','1w','1mo'):
+                chart=get('/api/chart/US:AAA?timeframe='+frame)
+                self.assertEqual(chart['history']['last'],'2026-10-02')
+                self.assertEqual(chart['bars'][-1]['close'],31)
+            self.assertEqual(get('/api/averages/US:AAA?periods=2')['2'][-1]['value'],26)
+        finally:
+            server.shutdown();server.server_close();thread.join()
 
     def test_http_new_symbol_available_without_screening_mutation(self):
         self.fixture();stocks={}

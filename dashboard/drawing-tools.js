@@ -375,7 +375,7 @@ window.DrawingTools = (() => {
     svg.addEventListener('pointercancel',cancel);
     svg.addEventListener('pointerleave',()=>{if(!drag){hover=null;snapped=null;reference=null;}});
     setMode('select');frame=requestAnimationFrame(render);
-    return {setMode,select,cancel,setSnapEnabled(value){snapEnabled=!!value;snapped=null;reference=null;hover=null;signature='';},destroy(){removed=true;cancelAnimationFrame(frame);svg.remove();}};
+    return {isEditing:()=>!!drag||draft.length>0||mode!=='select',setMode,select,cancel,setSnapEnabled(value){snapEnabled=!!value;snapped=null;reference=null;hover=null;signature='';},destroy(){removed=true;cancelAnimationFrame(frame);svg.remove();}};
   }
   return {attach,measure,riskReward,channel,extensionBounds,labels,count,index,timeAt,coordinate,timeline,candleSnap,closeReference,withAnchorTimes,pointIndex};
 })();
