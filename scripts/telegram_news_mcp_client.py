@@ -18,6 +18,15 @@ TOOLS={'status':'telegram_news_status','dialogs':'telegram_news_dialogs','search
 async def call(op,args):
     if op not in TOOLS:
         return {'error':'read_only_operation'}
+    # Start the persistent connector before creating the temporary MCP job.
+    # The Windows MCP SDK kills its entire child job when this one-shot call ends.
+    # A connector created inside that job would lose its in-memory room lookup.
+    from telegram_news_bridge import ensure_health
+    from urllib.request import build_opener, ProxyHandler
+    try:
+        await asyncio.to_thread(ensure_health, build_opener(ProxyHandler({})))
+    except (OSError, ValueError):
+        pass  # The MCP tool returns the normal unavailable/identity error.
     params=StdioServerParameters(command=sys.executable,args=['-B','-X','utf8',str(ROOT/'scripts/analysis_mcp.py')],cwd=str(ROOT))
     async with stdio_client(params) as (read,write):
         async with ClientSession(read,write) as session:
