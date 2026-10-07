@@ -2,7 +2,7 @@
 from copy import deepcopy
 from financial_model import VERSION as NORMALIZATION_VERSION, fact, calc, growth, comparable_period, days
 
-VERSION = 'financial-focus-3'
+VERSION = 'financial-focus-4'
 LABELS = {'sales':'매출액', 'operating':'영업이익', 'income':'지배주주 순이익',
           'basic_eps':'기본 EPS', 'eps':'희석 EPS', 'operating_margin':'영업이익률',
           'net_margin':'순이익률', 'current_ratio':'유동비율', 'debt_ratio':'부채비율', 'icr':'이자보상배율 (ICR)'}
@@ -69,6 +69,7 @@ def movement(cell, previous, *, reverse=False, ratio=False):
                           previous=deepcopy(previous))
     direction=0 if delta is None or delta==0 else (1 if delta>0 else -1)*(-1 if reverse else 1)
     result['trend']='improved' if direction>0 else 'worsened' if direction<0 else 'neutral'
+    result['change']['trend']=result['trend']
     result['source_type']=origin(result)
     return result
 
@@ -159,6 +160,12 @@ def summarize(normal, stock):
             row['metrics']={key:movement(cell,previous['metrics'][key] if previous else None,reverse=key=='debt_ratio',ratio=True) for key,cell in row['metrics'].items()}
             row['performance']={};row['performance_qoq']={}
             prior_quarter=comparable_period(original,row,quarter=True) if frame=='quarterly' else None
+            # Display comparisons share the same period/basis validation as performance.
+            display_keys=set(keys) | {'net_income','dividend','total_equity','liabilities','current_assets','current_liabilities','interest_expense'}
+            for target,prior in (('value_movements',previous),('value_movements_qoq',prior_quarter)):
+                row[target]={key:movement(row['values'][key],prior['values'].get(key) if prior else None,
+                    reverse=key in {'liabilities','current_liabilities','interest_expense'})
+                    for key in sorted(display_keys) if key in row['values']}
             for key in keys:
                 row['performance'][key]=movement(row['values'][key],previous['values'].get(key) if previous else None)
                 row['performance_qoq'][key]=movement(row['values'][key],prior_quarter['values'].get(key) if prior_quarter else None)

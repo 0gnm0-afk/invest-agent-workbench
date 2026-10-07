@@ -41,6 +41,18 @@ function sample(provider='SEC',eps=['basic_eps','eps']){
  gaps.annual[2].growth.basic_eps={value:null,id:'basic_eps_yoy',display_text:'비교불가',reason:'필수 공시 원값 미확보'};
  const gh=harness(gaps);await gh.mount();const gapHtml=gh.root.querySelector('#financial-content').innerHTML.split('data-chart-section="basic_eps"')[1].split('</section>')[0];
  assert.match(gapHtml,/값 없음/);assert.equal((gapHtml.match(/<rect x=/g)||[]).length,4);assert.equal((gapHtml.match(/<circle /g)||[]).length,4);assert.equal((gapHtml.match(/stroke-width="2"\/>/g)||[]).length,6);
+ const colored=sample();colored.calculation_version='financial-focus-4';
+ for(const row of colored.annual){
+  row.value_movements={sales:{...row.values.sales,value:88,trend:'worsened'},liabilities:{value:999,unit:'USD',trend:'improved'},dividend:{...row.values.dividend,trend:'worsened'}};
+  row.metrics.debt_ratio={...row.metrics.debt_ratio,trend:'worsened',change:{value:.12,unit:'percentage_point'}};
+ }
+ const ch=harness(colored);await ch.mount();const coloredHtml=ch.root.querySelector('#financial-content').innerHTML;
+ assert.match(coloredHtml,/financial-value worsened[^>]*>88.00<\/button>/);
+ assert.match(coloredHtml,/financial-value improved[^>]*>999.00<\/button>/);
+ assert.match(coloredHtml,/financial-value worsened[^>]*>12%p<\/button>/);
+ assert.match(coloredHtml,/width="720" height="310" style="width:720px;min-width:720px"/);
+ assert.match(coloredHtml,/style="width:720px;min-width:720px"/);
+ assert.doesNotMatch(coloredHtml,/preserveAspectRatio="none"/);
  const one=harness(sample('SEC',['basic_eps']));await one.mount();assert.doesNotMatch(one.root.querySelector('#financial-content').innerHTML,/희석 EPS/);
  const old=harness({...sample(),calculation_version:'old'});await old.mount();assert.match(old.root.querySelector('#financial-content').innerHTML,/이전 형식/);
  console.log('Toss financial UI: grouped SVG, ratios, tooltip, bottom table, 5/12, QoQ, currency, EPS, immutability PASS');

@@ -137,6 +137,30 @@ class FocusTests(unittest.TestCase):
         v=normal()['annual'][-1]['values'];v['interest_expense'].update(value=None,inputs=[{'tag':None},{'tag':'InterestExpense'}])
         self.assertIsNone(ratio(v,'icr')['value'])
 
+    def test_display_value_colors_in_both_period_modes(self):
+        for frame in ('annual','quarterly'):
+            for delta in (-10,0,10):
+                n=normal()
+                for row in n[frame]:
+                    for key in ('net_income','dividend','current_assets','current_liabilities'):
+                        row['values'][key]=dict(row['values']['sales'],value=100)
+                row=n[frame][-1]
+                for key in ('liabilities','interest_expense','net_income','dividend','current_assets','current_liabilities'):
+                    row['values'][key]['value']+=delta
+                out=summarize(n,{})[frame][-1]
+                for group in ('value_movements','value_movements_qoq') if frame=='quarterly' else ('value_movements',):
+                    for key in ('liabilities','interest_expense','net_income','dividend','current_assets','current_liabilities'):
+                        sign=delta*(-1 if key in ('liabilities','interest_expense','current_liabilities') else 1)
+                        expected='improved' if sign>0 else 'worsened' if sign<0 else 'neutral'
+                        self.assertEqual(out[group][key]['trend'],expected,(frame,group,key,delta))
+                        self.assertEqual(out[group][key]['change']['trend'],expected)
+
+    def test_display_color_missing_or_incompatible_stays_neutral(self):
+        for update in ({'value':None},{'accounting_basis':'separate'}):
+            n=normal();n['annual'][-1]['values']['liabilities'].update(update)
+            out=summarize(n,{})['annual'][-1]['value_movements']['liabilities']
+            self.assertEqual(out['trend'],'neutral');self.assertIsNone(out['change']['value'])
+
     def test_http_serves_new_assets_and_identical_result(self):
         import http.client, tempfile, threading
         from types import SimpleNamespace
