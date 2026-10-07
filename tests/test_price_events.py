@@ -26,14 +26,6 @@ class PriceEventsTests(unittest.TestCase):
         self.mock=patch('price_events.sessions',return_value=tuple(self.days));self.mock.start();self.addCleanup(self.mock.stop)
     def run_events(self,bars=None,financial=None):
         return build(dict(market='US',symbol='TEST',provider='fixture',price_basis='adjusted',bars=bars if bars is not None else self.bars),financial)
-    def test_actual_good_friday_confirmation_is_thursday(self):
-        self.mock.stop()
-        days=sessions('US','2024-02-01','2024-04-05')
-        bars=[dict(date=d,open=100,high=102,low=98,close=100,volume=1000) for d in days]
-        next(b for b in bars if b['date']=='2024-03-12')['high']=120
-        p=self.run_events(bars)
-        e=next(e for e in p['events'] if e['kind']=='high' and e['timeframe']=='1w')
-        self.assertEqual(e['confirmed_at'],'2024-03-28')
 
     def test_exact_gap_threshold_and_full_gap(self):
         self.bars[30].update(open=103,high=105,low=103,close=104,volume=2000)
@@ -45,25 +37,6 @@ class PriceEventsTests(unittest.TestCase):
         self.bars[30].update(open=97,high=100,low=96,close=98)
         e=next(e for e in self.run_events()['events'] if e['event_date']==self.days[30] and e['kind']=='gap')
         self.assertAlmostEqual(e['gap_pct'],-3);self.assertFalse(e['full_gap'])
-    def test_weekly_real_day_and_confirmation(self):
-        self.bars[12]['high']=120
-        e=next(e for e in self.run_events()['events'] if e['kind']=='high' and e['timeframe']=='1w')
-        self.assertEqual(e['event_date'],self.days[12]);self.assertEqual(e['confirmed_at'],self.days[24])
-        e=next(e for e in self.run_events(self.bars[:24])['events'] if e['kind']=='high' and e['timeframe']=='1w')
-        self.assertEqual(e['status'],'provisional');self.assertIsNone(e['confirmed_at'])
-    def test_invalidated_provisional_removed(self):
-        self.bars[12]['high']=120;self.bars[23]['high']=130
-        self.assertFalse(any(e['event_date']==self.days[12] and e['timeframe']=='1w' for e in self.run_events()['events']))
-    def test_monthly_extreme_high_priority(self):
-        bars=[dict(date=d,open=100,high=102,low=98,close=100,volume=1000) for d in self.days[:140]]
-        bars[52]['high']=130
-        p=self.run_events(bars);e=next(e for e in p['events'] if e['kind']=='high' and e['timeframe']=='1mo')
-        self.assertEqual(e['event_date'],self.days[52]);self.assertEqual(e['confirmed_at'],'2024-05-31')
-        g=next(g for g in p['groups'] if e['id'] in g['event_ids']);self.assertEqual(g['priority'],'high')
-    def test_same_day_original_events_preserved(self):
-        self.bars[32].update(open=108,high=130,low=105,close=110)
-        p=self.run_events();rows=[e for e in p['events'] if e['event_date']==self.days[32]]
-        self.assertGreaterEqual(len(rows),2);self.assertEqual(len({e['group_id'] for e in rows}),1)
     def test_bundles_do_not_chain(self):
         for i in [30,32,34]:self.bars[i].update(open=104,high=106,low=98,close=100)
         p=self.run_events();es=[e for e in p['events'] if e['kind']=='gap']
@@ -73,21 +46,6 @@ class PriceEventsTests(unittest.TestCase):
         self.bars[30].update(open=104,high=106,volume=None)
         e=next(e for e in self.run_events()['events'] if e['kind']=='gap')
         self.assertIsNone(e['metrics']['volume_change_pct']);self.assertIsNone(e['metrics']['volume_ratio_20'])
-    def test_missing_trading_day_does_not_confirm_gap_or_pivot(self):
-        self.bars[12]['high']=120;self.bars[30].update(open=104,high=106)
-        bars=[b for i,b in enumerate(self.bars) if i not in (22,29)]
-        p=self.run_events(bars)
-        for e in p['events']:
-            if e['event_date'] in (self.days[12],self.days[30]): self.assertEqual(e['status'],'provisional')
-    def test_low_small_return_and_medium_volume(self):
-        self.bars[12]['high']=103
-        p=self.run_events();g=next(g for g in p['groups'] if g['start']==self.days[12]);self.assertEqual(g['priority'],'low')
-        self.bars[32]['high']=103;self.bars[32]['volume']=2000
-        p=self.run_events();g=next(g for g in p['groups'] if g['start']==self.days[32]);self.assertEqual(g['priority'],'medium')
-    def test_disclosure_filing_not_fetch_time(self):
-        self.bars[32]['high']=103
-        f={'result':{'annual':[{'cell':{'filed':self.days[32],'sources':['official.json']}}]}}
-        g=next(g for g in self.run_events(financial=f)['groups'] if g['start']==self.days[32]);self.assertEqual(g['priority'],'medium')
     def test_followup_is_labeled_ex_post_and_strong(self):
         self.bars[30].update(open=104,high=105,low=99,close=100)
         for i in range(31,51):self.bars[i].update(open=120,high=121,low=119,close=120)
@@ -110,6 +68,102 @@ class PriceEventsTests(unittest.TestCase):
         bars[20].update(open=104,high=106);bars[1750].update(open=104,high=106)
         with patch('price_events.sessions',return_value=tuple(days)):
             p=self.run_events(bars);self.assertTrue(all(e['event_date']>=p['start'] for e in p['events']));self.assertFalse(any(e['event_date']==days[20] for e in p['events']))
+
+
+class WeeklySwingTests(unittest.TestCase):
+    def setUp(self):
+        self.days=weekdays(count=400)
+        self.bars=[dict(date=d,open=100,high=101,low=99,close=100,volume=1000) for d in self.days[:250]]
+        for week,kind,value in [(6,'high',130),(14,'low',70),(22,'high',140),(30,'low',60)]:
+            self.bars[week*5+1][kind]=value
+        self.mock=patch('price_events.sessions',return_value=tuple(self.days));self.mock.start();self.addCleanup(self.mock.stop)
+
+    def packet(self,bars=None):
+        return build(dict(market='US',symbol='SYNTH',bars=self.bars if bars is None else bars))
+
+    def pivots(self,bars=None):
+        return [e for e in self.packet(bars)['events'] if e['kind']!='gap']
+
+    def test_alternation_real_dates_and_separate_confirmation(self):
+        rows=self.pivots()
+        self.assertEqual([e['kind'] for e in rows],['high','low','high','low'])
+        self.assertEqual(rows[0]['event_date'],self.days[31])
+        self.assertEqual(rows[0]['local_confirmed_at'],self.days[49])
+        self.assertEqual(rows[0]['confirmed_at'],self.days[89])
+        self.assertEqual(rows[-1]['status'],'provisional')
+        self.assertTrue(all(e['timeframe']=='1w' for e in rows))
+        self.assertTrue(all(e['confirmation_rule']=='weekly-swing-2' for e in rows))
+
+    def test_small_fluctuations_removed_even_with_volume(self):
+        for b in self.bars:b.update(high=101,low=99)
+        self.bars[31].update(high=108,volume=100000)
+        self.assertEqual(self.pivots(),[])
+
+    def test_exact_ten_percent_threshold(self):
+        for b in self.bars:b.update(high=90,low=89,open=90,close=90)
+        self.bars[31]['high']=100
+        self.bars[41]['low']=90  # baseline 89 already supplies >10%; set flanks exactly90.
+        for i in range(15,50):
+            if i!=31:self.bars[i].update(high=90,low=90)
+        rows=self.pivots()
+        self.assertEqual(rows[0]['event_date'],self.days[31])
+        self.assertAlmostEqual(rows[0]['prominence_left_pct'],10)
+        self.bars[31]['high']=99.99
+        self.assertFalse(any(e['event_date']==self.days[31] for e in self.pivots()))
+
+    def test_weaker_repeated_high_removed_and_plateau_earliest(self):
+        self.bars[51]['high']=125
+        self.bars[32]['high']=130
+        rows=self.pivots()
+        self.assertEqual(rows[0]['event_date'],self.days[31])
+        self.assertFalse(any(e['event_date']==self.days[51] for e in rows))
+
+    def test_stronger_repeated_high_replaces_only_open_leg(self):
+        self.bars[51]['high']=135
+        rows=self.pivots()
+        self.assertEqual(rows[0]['event_date'],self.days[51])
+        self.assertEqual(rows[0]['status'],'confirmed')
+
+    def test_missing_session_never_confirms_affected_local_window(self):
+        rows=self.pivots([b for i,b in enumerate(self.bars) if i!=46])
+        self.assertFalse(any(e['event_date']==self.days[31] and e['status']=='confirmed' for e in rows))
+
+    def test_missing_week_between_swings_never_closes_leg(self):
+        rows=self.pivots([b for i,b in enumerate(self.bars) if not 50<=i<55])
+        high=next(e for e in rows if e['event_date']==self.days[31])
+        self.assertEqual(high['status'],'provisional');self.assertEqual(high['selection_state'],'data_gap')
+
+    def test_prefix_replay_never_changes_closed_extrema(self):
+        final={e['id']:e for e in self.pivots() if e['status']=='confirmed'}
+        for end in range(45,251,5):
+            for e in self.pivots(self.bars[:end]):
+                if e['status']=='confirmed':
+                    self.assertIn(e['id'],final)
+                    self.assertEqual(e['confirmed_at'],final[e['id']]['confirmed_at'])
+                    self.assertLessEqual(e['confirmed_at'],self.bars[end-1]['date'])
+
+    def test_same_day_gap_preserved_and_swing_research_priority(self):
+        self.bars[31].update(open=104,close=104,low=103)
+        packet=self.packet();rows=[e for e in packet['events'] if e['event_date']==self.days[31]]
+        self.assertEqual({e['kind'] for e in rows},{'gap','high'})
+        self.assertEqual(len({e['group_id'] for e in rows}),1)
+        group=next(g for g in packet['groups'] if g['id']==rows[0]['group_id'])
+        self.assertEqual(group['priority'],'high')
+
+    def test_calendar_failure_does_not_fabricate_swings(self):
+        with patch('price_events.sessions',side_effect=ValueError('missing_calendar')):
+            self.assertEqual(self.pivots(),[])
+
+    def test_holiday_local_confirmation_uses_actual_last_session(self):
+        self.mock.stop()
+        days=sessions('US','2024-02-01','2024-05-31')
+        bars=[dict(date=d,open=100,high=101,low=99,close=100,volume=1000) for d in days]
+        next(b for b in bars if b['date']=='2024-03-05')['high']=130
+        next(b for b in bars if b['date']=='2024-04-16')['low']=70
+        e=next(e for e in self.pivots(bars) if e['kind']=='high')
+        self.assertEqual(e['local_confirmed_at'],'2024-03-28')
+        self.assertEqual(e['confirmed_at'],'2024-05-10')
+
 
 
 class ResearchSnapshotTests(base_tests.AnalysisSkillLinkTests):

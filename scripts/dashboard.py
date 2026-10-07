@@ -73,7 +73,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
             except ValueError:
                 return self.send(b'{"error":"invalid_timeframe"}', status=400)
             if path == '/health':
-                return self.send(json.dumps({'app': 'invest-workbench', 'token': token, 'analysis_protocol': 1, 'price_events_protocol': 1, 'collaboration_protocol': 1, 'offline': offline, 'workspace': str(ROOT)}).encode(), cookie=self.headers.get('Sec-Fetch-Site') == 'same-origin')
+                return self.send(json.dumps({'app': 'invest-workbench', 'token': token, 'analysis_protocol': 1, 'price_events_protocol': 1, 'pivot_rule': 'weekly-swing-2', 'collaboration_protocol': 1, 'offline': offline, 'workspace': str(ROOT)}).encode(), cookie=self.headers.get('Sec-Fetch-Site') == 'same-origin')
             if path == '/api/daily-update':
                 return self.send(json.dumps(daily_status() if daily_status else {'enabled':False}, ensure_ascii=False).encode('utf-8'))
             if path == '/api/market-exclusions':

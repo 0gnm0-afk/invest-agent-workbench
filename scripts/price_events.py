@@ -7,7 +7,7 @@ import json
 import math
 
 VERSION = 'price-events-1'
-POLICY = dict(gap_pct=3, large_gap_pct=5, pivot_left=2, pivot_right=2,
+POLICY = dict(gap_pct=3, large_gap_pct=5, pivot_left=3, pivot_right=3, swing_pct=10, pivot_rule='weekly-swing-2',
               group_max_sessions=3, followup_sessions=20, trend_pct=15,
               range_shift_pct=10, meaningful_move_pct=5, volume_ratio=1.5)
 
@@ -40,6 +40,86 @@ def pct(a, b):
     return (r - 1) * 100 if r is not None else None
 
 
+def weekly_swings(periods, bars, expected_labels):
+    """Causal selection of alternating, prominent seven-week extrema.
+
+    A local extreme qualifies after three complete right weeks. The active
+    extreme is replaceable until an opposite qualifying extreme closes its leg.
+    Closed extrema never change when more complete weeks are appended.
+    """
+    radius = POLICY['pivot_left']
+    threshold = POLICY['swing_pct']
+    expected_pos = {label: i for i, label in enumerate(expected_labels)}
+    candidates = []
+    for j in range(radius, len(periods)):
+        center = periods[j]
+        left, right = periods[j-radius:j], periods[j+1:j+radius+1]
+        n = expected_pos.get(center['label'], -1)
+        observed = left + [center] + right
+        adjacent = n >= radius and [p['label'] for p in observed] == expected_labels[n-radius:n+1+len(right)]
+        # Missing historical weeks/sessions are not a normal unfinished tail.
+        if not adjacent or not all(p['complete'] for p in left + [center]):
+            continue
+        complete_right = [p for p in right if p['complete']]
+        if any(not p['complete'] for p in right[:-1]):
+            continue
+        for kind in ('high', 'low'):
+            value = center[kind]
+            if not all(value > p[kind] if kind == 'high' else value < p[kind] for p in left):
+                continue
+            if not all(value >= p[kind] if kind == 'high' else value <= p[kind] for p in right):
+                continue
+            def prominence(side):
+                if not side:
+                    return None
+                opposite = min(p['low'] for p in side) if kind == 'high' else max(p['high'] for p in side)
+                return abs(value - opposite) / value * 100
+            lp, rp = prominence(left), prominence(complete_right)
+            full = len(complete_right) == radius
+            if lp + 1e-10 < threshold or full and rp + 1e-10 < threshold:
+                continue
+            index = next(i for i in center['indices'] if bars[i][kind] == value)
+            candidates.append(dict(kind=kind, index=index, week_index=j, extreme_price=value,
+                period_start=center['label'], prominence_left_pct=lp, prominence_right_pct=rp,
+                local_confirmed_at=right[-1]['close_date'] if full else None,
+                right_bars_available=len(complete_right)))
+    # Intraday ordering cannot be recovered when both extremes occur on one day.
+    ambiguous = {c['index'] for c in candidates if sum(x['index'] == c['index'] for x in candidates) > 1}
+    candidates = sorted((c for c in candidates if c['index'] not in ambiguous), key=lambda c: c['index'])
+    chosen, active = [], None
+    for candidate in candidates:
+        if active is None:
+            active = candidate
+            continue
+        between = periods[active['week_index']:candidate['week_index']+1]
+        labels = [p['label'] for p in between]
+        n = expected_pos[labels[0]]
+        if not all(p['complete'] for p in between) or labels != expected_labels[n:n+len(labels)]:
+            chosen.append({**active, 'confirmed_at':None, 'selection_state':'data_gap'})
+            active = candidate
+            continue
+        if candidate['kind'] == active['kind']:
+            better = candidate['extreme_price'] > active['extreme_price'] if candidate['kind'] == 'high' else candidate['extreme_price'] < active['extreme_price']
+            if better:
+                active = candidate
+        else:
+            move = abs(candidate['extreme_price'] / active['extreme_price'] - 1) * 100
+            if move + 1e-10 < threshold:
+                continue
+            if candidate['local_confirmed_at'] and active['local_confirmed_at']:
+                chosen.append({**active, 'confirmed_at':candidate['local_confirmed_at'],
+                    'selection_state':'closed', 'opposite_event_date':bars[candidate['index']]['date'],
+                    'leg_change_pct':move})
+                active = candidate
+            elif not candidate['local_confirmed_at']:
+                # No historical confirmation from an unfinished right window.
+                chosen.append({**active, 'confirmed_at':None, 'selection_state':'awaiting_opposite_confirmation'})
+                active = candidate
+    if active:
+        chosen.append({**active, 'confirmed_at':None, 'selection_state':'open_leg'})
+    return chosen
+
+
 def build(daily, financial=None):
     """All events over five calendar years ending at the last saved completed day.
 
@@ -68,9 +148,9 @@ def build(daily, financial=None):
                   financial_snapshot_id=(financial.get('result') or {}).get('snapshot_id'))
     if not bars:
         return {**packet, 'state':'unavailable', 'reason':'saved_daily_prices_missing'}
-    # Two months of buffer on either side cover pivot closure and search windows.
-    buffered = (date.fromisoformat(start) - timedelta(days=100)).isoformat()
-    bars = [b for b in bars if b['date'] >= buffered]
+    # Seed swing selection from all saved history so the rolling cutoff cannot
+    # change the active leg. Only output events are restricted to five years.
+    buffered = bars[0]['date']
     dates = [b['date'] for b in bars]
     try:
         calendar = list(sessions(daily.get('market'), buffered,
@@ -118,7 +198,9 @@ def build(daily, financial=None):
         day=dates[i]
         if day not in positions: confirmed_at=None
         if day < start: return
-        eid='pe_'+fingerprint([daily.get('market'),daily.get('symbol'),kind,frame,day])[:24]
+        identity=[daily.get('market'),daily.get('symbol'),kind,frame,day]
+        if kind != 'gap': identity.append(POLICY['pivot_rule'])
+        eid='pe_'+fingerprint(identity)[:24]
         packet['events'].append(dict(id=eid,kind=kind,timeframe=frame,event_date=day,
             confirmed_at=confirmed_at,status='confirmed' if confirmed_at else 'provisional',
             metrics=metrics(i),news_window=window(day,3 if kind=='gap' else 10,2 if kind=='gap' else 10),
@@ -134,7 +216,7 @@ def build(daily, financial=None):
               previous_session=p['date'],previous_session_verified=consecutive and calendar_state=='exchange_calendar',
               direction='up' if change>0 else 'down')
 
-    for frame in ('1w','1mo'):
+    for frame in ('1w',):
         groups={}
         for i,b in enumerate(bars): groups.setdefault(period(b['date'],frame),[]).append(i)
         expected={}
@@ -146,20 +228,13 @@ def build(daily, financial=None):
             periods.append(dict(label=label,indices=indices,complete=complete,
                 close_date=days[-1] if complete else None,
                 high=max(bars[i]['high'] for i in indices),low=min(bars[i]['low'] for i in indices)))
-        for j in range(2,len(periods)):
-            p=periods[j]; left=periods[j-2:j]; right=periods[j+1:j+3]
-            for kind in ('high','low'):
-                # Earliest equal plateau wins: strict on left, equality on right.
-                valid=all(p[kind]>x[kind] if kind=='high' else p[kind]<x[kind] for x in left) and all(
-                          p[kind]>=x[kind] if kind=='high' else p[kind]<=x[kind] for x in right)
-                if not valid: continue
-                i=next(i for i in p['indices'] if bars[i][kind]==p[kind])
-                labels=list(expected); n=labels.index(p['label']) if p['label'] in labels else -1
-                adjacent=n>=2 and [x['label'] for x in left+[p]+right]==labels[n-2:n+3]
-                confirmed=len(right)==2 and adjacent and all(x['complete'] for x in left+[p]+right)
-                event(kind,frame,i,right[-1]['close_date'] if confirmed else None,
-                      period_start=p['label'],extreme_price=p[kind],right_bars_available=len(right),
-                      confirmation_rule='two_complete_left_and_right_periods')
+        for swing in weekly_swings(periods, bars, list(expected)):
+            swing = dict(swing)
+            kind, i, confirmed = swing.pop('kind'), swing.pop('index'), swing.pop('confirmed_at')
+            swing.pop('week_index')
+            event(kind, frame, i, confirmed, **swing,
+                  confirmation_rule=POLICY['pivot_rule'],
+                  selected_as_of=as_of)
 
     packet['events'].sort(key=lambda e:(e['event_date'],e['timeframe'],e['kind']))
     # Non-chaining bundles: span includes at most three exchange sessions.
@@ -183,9 +258,8 @@ def build(daily, financial=None):
     sources=list({fingerprint(s):s for s in sources}.values())
     for _,events in bundles:
         confirmed=[e for e in events if e['status']=='confirmed']
-        reasons=[]; priority='low'; frames={e['timeframe'] for e in confirmed}
-        if '1mo' in frames: reasons.append('monthly_extreme')
-        if {'1w','1mo'}<=frames: reasons.append('weekly_monthly_overlap')
+        reasons=[]; priority='low'
+        if any(e['kind'] != 'gap' for e in confirmed): reasons.append('confirmed_weekly_swing')
         if any(e['kind']!='gap' for e in confirmed) and any(abs(e.get('gap_pct',0))>=5 for e in confirmed): reasons.append('extreme_with_large_gap')
         if any(abs(e['metrics']['followup_return_20_pct'] or 0)>=15 or abs(e['metrics']['range_midpoint_shift_20_pct'] or 0)>=10 for e in confirmed): reasons.append('strong_followup_or_range_shift')
         if reasons: priority='high'
