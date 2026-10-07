@@ -11,6 +11,12 @@ REVIEWED_REVISIONS = frozenset({(
     CONTRACT, FAQ_URL,
     '0dd9ad07af2bdf4b333a8ba902ede5b727e5f87cf95d77d7b5786119159d216b',
     '65a904ebe773284d42639a1f8d1eaeaf7fb19526572372d68cf7bd8bc3c986dc',
+), (
+    # Full diff reviewed 2026-10-07. Adjustment trigger thresholds/history coverage
+    # clarified; provider-adjusted values and non-total-return contract unchanged.
+    CONTRACT, FAQ_URL,
+    '0dd9ad07af2bdf4b333a8ba902ede5b727e5f87cf95d77d7b5786119159d216b',
+    '89198a71f91c88d672fc2e55fc363015e5c99069378c93c35460203e19177b4e',
 )})
 
 

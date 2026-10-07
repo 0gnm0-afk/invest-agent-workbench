@@ -45,7 +45,22 @@ function setup(initial=failed,hash='#stock/US/AAA'){
  };
 }
 (async()=>{
- let h=setup();await h.start();
+ let h=setup({...failed,view_ready:false,retry_available:false,error:'basis_document_changed_review_required',account_attempted:true,account_state:'received'});await h.start();
+ assert.match(h.text(),/오늘의 갱신에 오류/);
+ assert.match(h.text(),/공식 문서 변경/);
+ assert.match(h.text(),/계좌 갱신 완료/);
+ assert.match(h.text(),/저장 화면 준비 중/);
+ assert.doesNotMatch(h.text(),/오늘의 종가·계좌 갱신 중|갱신 진행 중…/);
+ assert.equal(h.button('daily-retry').textContent,'화면 준비 중…');
+ assert.equal(h.button('daily-retry').disabled,true);
+ h.status={...h.status,view_ready:true,retry_available:true};await h.refresh();
+ assert.equal(h.button('daily-retry').disabled,false);
+ assert.equal(h.button('daily-retry').textContent,'오늘의 갱신 재시도');
+ h=setup({...failed,state:'succeeded',error:null,view_ready:false,retry_available:false});await h.start();
+ assert.match(h.text(),/오늘의 갱신 완료/);
+ assert.doesNotMatch(h.text(),/오늘의 종가·계좌 갱신 중/);
+ assert.equal(h.button('daily-retry').disabled,true);
+ h=setup();await h.start();
  assert.match(h.text(),/시장 자료 수집 작업이 오류로 종료/);
  assert.equal(h.button('daily-retry').disabled,false);
  assert.equal(h.calls.filter(c=>c[0]==='/api/home').length,0,'stock view waits for explicit result opening');
