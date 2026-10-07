@@ -2,7 +2,7 @@
 from copy import deepcopy
 from financial_model import VERSION as NORMALIZATION_VERSION, fact, calc, growth, comparable_period, days
 
-VERSION = 'financial-focus-2'
+VERSION = 'financial-focus-3'
 LABELS = {'sales':'매출액', 'operating':'영업이익', 'income':'지배주주 순이익',
           'basic_eps':'기본 EPS', 'eps':'희석 EPS', 'operating_margin':'영업이익률',
           'net_margin':'순이익률', 'current_ratio':'유동비율', 'debt_ratio':'부채비율', 'icr':'이자보상배율 (ICR)'}
@@ -73,6 +73,28 @@ def movement(cell, previous, *, reverse=False, ratio=False):
     return result
 
 
+def select_interest(values, industry):
+    """Resolve the explicit expense against its numerator before alias priority.
+
+    A populated legacy tag must not hide a compatible current-filing alias.
+    Financial companies do not inherit the general-company nonoperating alias.
+    Never fall back to finance costs, cash interest, or an incompatible filing.
+    """
+    operating=values.get('operating')
+    keys=['interest_expense']+(['interest_nonoperating'] if industry=='general' else [])
+    candidates=[(key,values.get(key)) for key in keys]
+    for key,candidate in candidates:
+        if compatible(operating,candidate,same_period=True) is None:
+            selected=deepcopy(candidate)
+            if industry=='general' and selected.get('tag') in ('InterestExpense','InterestExpenseNonoperating'):
+                selected['interest_definition']='general_explicit_interest_expense'
+            selected['comparison_note']='영업이익과 기간·통화·회계 범위·공시 버전을 검증한 명시 이자비용. 금융비용·현금 이자지급액 아님.'
+            selected['selection_key']=key
+            return selected
+    # Keep the failed candidate and its provenance so ratio() explains rejection.
+    return deepcopy(values.get('interest_expense') or fact(reason='같은 기간·공시의 명시 이자비용 미확보'))
+
+
 def ratio(values, key):
     formula,explanation,kind=DEFINITIONS[key]
     numerator,denominator={'net_margin':('net_income' if values.get('net_income',{}).get('value') is not None else 'income','sales'),'current_ratio':('current_assets','current_liabilities'),'operating_margin':('operating','sales'),'debt_ratio':('liabilities','total_equity'),
@@ -86,7 +108,7 @@ def ratio(values, key):
     direct=values.get(key)
     if direct and direct.get('value') is not None and direct.get('definition')==formula and direct.get('unit')==cell['unit'] and direct.get('source_type') in ('company_reported','opendart_indicator') and direct.get('definition_verified') is True and (direct.get('start'),direct.get('end'))==((a or {}).get('start'),(a or {}).get('end')):
         cell=deepcopy(direct)
-    if key=='icr':cell['comparison_key']='icr:'+str(sorted({denominator_tag} if denominator_tag else {x.get('tag') or '' for x in (b or {}).get('inputs',[])}))
+    if key=='icr':cell['comparison_key']='icr:'+((b or {}).get('interest_definition') or str(sorted({denominator_tag} if denominator_tag else {x.get('tag') or '' for x in (b or {}).get('inputs',[])})))
     if key=='net_margin':
         cell['comparison_key']='net_margin:'+numerator+':'+str((b or {}).get('comparison_key'))
         if numerator=='income':explanation='지배주주/공시 순이익 ÷ 매출액. 분자의 귀속 범위는 공시 근거에서 확인.'
@@ -114,9 +136,7 @@ def summarize(normal, stock):
             if normal['provider']=='SEC' and v.get('total_equity',{}).get('tag')=='StockholdersEquity':
                 # Parent equity is not total equity. Derive only from one balance sheet.
                 v['total_equity']=total_equity(v,normal['currency'])
-            if normal.get('industry_model','general')=='general' and v.get('interest_expense',{}).get('value') is None and v.get('interest_nonoperating',{}).get('value') is not None:
-                v['interest_expense']=deepcopy(v['interest_nonoperating'])
-                v['interest_expense']['comparison_note']='일반기업의 명시 영업외 이자비용 공시. 금융비용·이자지급액 아님.'
+            v['interest_expense']=select_interest(v,normal.get('industry_model','general'))
             for key in keys:
                 v.setdefault(key,fact(unit=normal['currency']+('/share' if 'eps' in key else ''),end=row['date']))
                 v[key].update(id=key,label=(v[key].get('account_label') or LABELS[key]) if key=='sales' else LABELS[key],kind='money',source_type=origin(v[key]))

@@ -37,6 +37,10 @@ function sample(provider='SEC',eps=['basic_eps','eps']){
   h.root.querySelector('[data-stability]').onchange({target:{value:'current_ratio'}});assert.match(h.root.querySelector('#financial-content').innerHTML,/유동자산/);
   assert.equal(JSON.stringify(r),before);
  }
+ const gaps=sample();gaps.annual[2].values.basic_eps={value:null,id:'basic_eps',unit:'USD/share',reason:'해당 기간 직접 공시 EPS 미확보'};
+ gaps.annual[2].growth.basic_eps={value:null,id:'basic_eps_yoy',display_text:'비교불가',reason:'필수 공시 원값 미확보'};
+ const gh=harness(gaps);await gh.mount();const gapHtml=gh.root.querySelector('#financial-content').innerHTML.split('data-chart-section="basic_eps"')[1].split('</section>')[0];
+ assert.match(gapHtml,/값 없음/);assert.equal((gapHtml.match(/<rect x=/g)||[]).length,4);assert.equal((gapHtml.match(/<circle /g)||[]).length,4);assert.equal((gapHtml.match(/stroke-width="2"\/>/g)||[]).length,6);
  const one=harness(sample('SEC',['basic_eps']));await one.mount();assert.doesNotMatch(one.root.querySelector('#financial-content').innerHTML,/희석 EPS/);
  const old=harness({...sample(),calculation_version:'old'});await old.mount();assert.match(old.root.querySelector('#financial-content').innerHTML,/이전 형식/);
  console.log('Toss financial UI: grouped SVG, ratios, tooltip, bottom table, 5/12, QoQ, currency, EPS, immutability PASS');

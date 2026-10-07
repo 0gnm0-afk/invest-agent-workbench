@@ -18,6 +18,7 @@ window.WorkbenchFinancials=(()=>{
   }
   const dividendBasis=c=>({paid:'지급 기준',declared:'선언 기준',annual_common_cash:'사업연도 보통주 현금배당'}[c?.dividend_basis]||'공시 기준');
   function value(c,currency){
+    if(c?.value==null&&(c?.eps_basis||String(c?.id||'').includes('eps'))&&(!c?.display_text||/미확보/.test(c?.reason||'')))return '값 없음';
     if(c?.display_text)return c.display_text;
     if(c?.value==null)return '자료 없음';
     if(c.unit==='percentage_point')return n(c.value*100)+'%p';
@@ -75,7 +76,7 @@ window.WorkbenchFinancials=(()=>{
     el.querySelector('#financial-status').textContent=packet.state==='running'?'공식 자료 수집 중 · '+(packet.attempt?.stage||''):
       [packet.attempt?.error&&'최근 갱신 실패: '+packet.attempt.error,r?'자료 수집 '+new Date(r.collected_at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'})+' · 재무기간 '+r.financial_as_of:'저장된 재무자료가 없습니다.',r?.recalculated_at&&'재계산 '+new Date(r.recalculated_at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'})].filter(Boolean).join(' · ');
     if(!r){el.querySelector('#financial-content').innerHTML='<p class="empty">만들기 버튼으로 선택 종목의 공식 자료를 수집합니다.</p>';return;}
-    if(!['financial-focus-1','financial-focus-2'].includes(r.calculation_version)){el.querySelector('#financial-content').innerHTML='<p class="empty">이전 형식의 저장 결과입니다. 재무요약 다시 만들기 또는 저장 자료 재계산이 필요합니다. 과거 결과는 보존됩니다.</p>';return;}
+    if(!['financial-focus-1','financial-focus-2','financial-focus-3'].includes(r.calculation_version)){el.querySelector('#financial-content').innerHTML='<p class="empty">이전 형식의 저장 결과입니다. 재무요약 다시 만들기 또는 저장 자료 재계산이 필요합니다. 과거 결과는 보존됩니다.</p>';return;}
     if(ctx.snapshot===r.snapshot_id)return;ctx.snapshot=r.snapshot_id;ctx.result=r;paint(ctx);
   }
 

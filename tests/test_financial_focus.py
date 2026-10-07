@@ -31,6 +31,38 @@ class FocusTests(unittest.TestCase):
         self.assertEqual([m['id'] for m in r['performance_metrics']],['sales','operating','income'])
         self.assertEqual(r['quarterly'][-1]['metrics']['debt_ratio']['value'],1.5)
         self.assertEqual(r['quarterly'][-1]['metrics']['icr']['value'],13)
+    def test_interest_alias_is_selected_by_compatible_filing_not_presence(self):
+        for frame in ('annual','quarterly'):
+            n=normal();v=n[frame][-1]['values']
+            v['operating']['accession']='current'
+            v['interest_expense'].update(tag='InterestExpense',accession='old',value=99)
+            v['interest_nonoperating']=dict(v['interest_expense'],tag='InterestExpenseNonoperating',accession='current',value=2)
+            before=copy.deepcopy(n);row=summarize(n,{})[frame][-1]
+            self.assertEqual(row['metrics']['icr']['value'],13)
+            self.assertEqual(row['values']['interest_expense']['selection_key'],'interest_nonoperating')
+            self.assertEqual(row['metrics']['icr']['inputs'][1]['accession'],'current')
+            self.assertEqual(n,before)
+
+    def test_interest_alias_cannot_bypass_validation_or_financial_scope(self):
+        for field,bad in [('accession','other'),('start','2025-02-01'),('unit','KRW'),('accounting_basis','separate')]:
+            n=normal();v=n['annual'][-1]['values'];v['operating']['accession']='current'
+            v['interest_nonoperating']=dict(v['interest_expense'],tag='InterestExpenseNonoperating',accession='current')
+            v['interest_expense']['accession']='old';v['interest_nonoperating'][field]=bad
+            self.assertIsNone(summarize(n,{})['annual'][-1]['metrics']['icr']['value'])
+        n=normal();n['industry_model']='bank';v=n['annual'][-1]['values']
+        v['interest_nonoperating']=v.pop('interest_expense')
+        self.assertIsNone(summarize(n,{})['annual'][-1]['metrics']['icr']['value'])
+
+    def test_compatible_primary_wins_and_alias_change_keeps_definition(self):
+        n=normal()
+        for row in n['annual']:
+            row['values']['interest_expense']['tag']='InterestExpense'
+        v=n['annual'][-1]['values'];v['interest_nonoperating']=dict(v['interest_expense'],tag='InterestExpenseNonoperating',value=4)
+        self.assertEqual(summarize(n,{})['annual'][-1]['metrics']['icr']['value'],13)
+        v['operating']['accession']='new';v['interest_expense']['accession']='old';v['interest_nonoperating']['accession']='new'
+        row=summarize(n,{})['annual'][-1]
+        self.assertIsNotNone(row['metrics']['icr']['change']['value'])
+
     def test_added_toss_ratios(self):
         n=normal();v=n['quarterly'][-1]['values']
         v['current_assets']=fact(80,unit='USD',end=v['assets']['end'],filed=v['assets']['filed'])
