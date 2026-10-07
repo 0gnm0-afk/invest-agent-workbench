@@ -7,7 +7,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from nh_market_auth import BASE, NHMarketError, NoRedirect, token
+from nh_market_auth import BASE, NHMarketError, NoRedirect, token, http_error, provider_code
 
 PERIOD = '/gbstock/quote/v1/period'
 KR_PERIOD = '/krstock/quote/v1/period'
@@ -53,6 +53,7 @@ class MarketClient:
         if self.evidence_root:
             raise NHMarketError('requested_evidence_not_saved')
         current_token = token()
+        refreshed = False
         for attempt in range(1,4):
             time.sleep(max(0,.35-(time.monotonic()-self.last)))
             self.last = time.monotonic()
@@ -68,6 +69,15 @@ class MarketClient:
                     payload = json.load(response)
                     headers = {k:v for k,v in response.headers.items()
                                if k.lower() in ('cts','cts_flag','retry-after') or 'limit' in k.lower()}
+                code = provider_code(payload)
+                if code:
+                    event.update(status=200, provider_code=code)
+                    error = NHMarketError('market_provider_' + code, provider_code=code)
+                    if error.authentication_rejected and not refreshed and attempt < 3:
+                        current_token = token(rejected_token=current_token)
+                        refreshed = True
+                        continue
+                    raise error
                 event['status'] = 200
                 result = {'path':path,'inputs':inputs,'payload':payload,
                           'headers':headers,'fetched_at':event['at']}
@@ -75,16 +85,21 @@ class MarketClient:
                 cached.write_text(json.dumps(result,ensure_ascii=False,sort_keys=True),encoding='utf-8')
                 return result, cached
             except urllib.error.HTTPError as exc:
-                event['status'] = exc.code
+                error = http_error(exc, 'market_http_')
+                event.update(status=exc.code, provider_code=error.provider_code)
+                if error.authentication_rejected:
+                    if refreshed or attempt == 3:
+                        raise error from None
+                    current_token = token(rejected_token=current_token)
+                    refreshed = True
+                    continue
                 if exc.code in (400,404):
                     # Persist request/status evidence, never credentials or arbitrary error bodies.
                     cached.parent.mkdir(parents=True,exist_ok=True)
                     cached.write_text(json.dumps({'path':path,'inputs':inputs,'http_status':exc.code,
                         'fetched_at':event['at']},sort_keys=True),encoding='utf-8')
-                if exc.code == 401 and attempt == 1:
-                    current_token = token(rejected_token=current_token)
-                elif exc.code not in (429,500,502,503,504) or attempt == 3:
-                    raise NHMarketError('market_http_'+str(exc.code)) from None
+                if exc.code not in (429,500,502,503,504) or attempt == 3:
+                    raise error from None
                 else:
                     try:
                         delay = max(2*attempt,float(exc.headers.get('Retry-After',0)))

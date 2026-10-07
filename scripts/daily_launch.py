@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from uuid import uuid4
 
 from invest_agent.trading.market_provider import completed_sessions
-from invest_agent.trading.runner import atomic_write
+from atomic_io import atomic_write
 from invest_agent.trading.store import instance_lock, BusyError
 
 
@@ -164,7 +164,7 @@ class DailyLaunch:
                     record.update(plan)
                     self.save(record)
                     run = self.runner({**plan,'prior_run':record['display_run']}, progress)
-                    record.update(run=run.get('output'), state=run['state'], stage='finished', telegram_state=run.get('telegram_state'), trailing_state=run.get('trailing_state'), account_attempted=run.get('account_attempted',False), account_state=run.get('account_state'))
+                    record.update(run=run.get('output'), state=run['state'], stage='finished', telegram_state=run.get('telegram_state'), trailing_state=run.get('trailing_state'), account_attempted=run.get('account_attempted',False), account_state=run.get('account_state'), account_error=run.get('account_error'))
                     display = self.usable_run(run.get('output'))
                     if display:
                         record['display_run'] = display
@@ -231,9 +231,12 @@ class DailyLaunch:
             result['account_attempted'] = True
             try:
                 from dashboard_data import refresh_account_snapshot
-                result['account_state'] = refresh_account_snapshot(self.root)['query_state']
+                account = refresh_account_snapshot(self.root)
+                result['account_state'] = account['query_state']
+                result['account_error'] = account.get('reason')
             except Exception:
                 result['account_state'] = 'failed'
+                result['account_error'] = 'account_refresh_internal_error'
         if result.get('account_state') == 'failed':
             result['trailing_state'] = 'unavailable'
         elif result.get('state') in ('succeeded', 'partial'):
@@ -253,7 +256,7 @@ class DailyLaunch:
         return result
 
     def public(self, record):
-        result={k:record.get(k) for k in ('day','state','stage','targets','started_at','finished_at','error','reused','manual_retry','telegram_state','trailing_state','account_attempted','account_state')}
+        result={k:record.get(k) for k in ('day','state','stage','targets','started_at','finished_at','error','reused','manual_retry','telegram_state','trailing_state','account_attempted','account_state','account_error')}
         result['attempt_id'] = attempt_id(record)
         result['display_updated'] = False
         result['display_stale'] = bool(record.get('display_run') and record.get('display_run') != record.get('run'))

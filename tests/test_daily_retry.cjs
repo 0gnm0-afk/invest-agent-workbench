@@ -133,6 +133,13 @@ function setup(initial=failed,hash='#stock/US/AAA'){
  assert.equal(h.timers.size,1);
 
  h=setup({...failed,error:'dashboard_preparation_failed'});await h.start();assert.match(h.text(),/화면 자료를 준비하지 못/);
+ h=setup({...failed,account_state:'failed',account_error:'http_400_IGW40043'});await h.start();
+ assert.match(h.text(),/NH 인증 복구 후에도 토큰이 거절/);
+ assert.match(h.text(),/IGW40043/);
+ h=setup({...failed,account_state:'failed',account_error:'http_400_IGW40012'});await h.start();
+ assert.match(h.text(),/NH가 계좌 요청을 거절/);
+ h=setup({...failed,state:'running',view_ready:false,stage:'adr_metadata'});await h.start();
+ assert.match(h.text(),/ADR 시총·업종 보강/);
  h=setup({enabled:false});await h.start();assert.equal(h.host.hidden,true);
  console.log('PASS: daily retry, authentication header, duplicate requests/pollers, repeated completion, unsaved drawings, network recovery, 409/503, cross-window state and error messages.');
 })().catch(e=>{console.error(e);process.exitCode=1;});

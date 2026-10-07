@@ -33,7 +33,7 @@ def read(path):
 
 
 def write(path, value):
-    from invest_agent.trading.runner import atomic_write
+    from atomic_io import atomic_write
     atomic_write(Path(path), json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False))
 
 
@@ -155,18 +155,25 @@ def collect(snapshot, output, *, cache=None, workers=2):
             result.update(state='unavailable', reason=str(exc) if isinstance(exc,ValueError) else type(exc).__name__)
         return result
     results = []
+    progress_write_failures = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = [pool.submit(one,row) for row in rows]
         for future in as_completed(futures):
             results.append(future.result())
-            write(output/'progress.json', {'requested':len(rows), 'completed':len(results),
-                'available':sum(r['state']=='available' for r in results),
-                'failures':[{k:r.get(k) for k in ('symbol','reason')} for r in results if r['state']!='available']})
+            try:
+                write(output/'progress.json', {'requested':len(rows), 'completed':len(results),
+                    'available':sum(r['state']=='available' for r in results),
+                    'failures':[{k:r.get(k) for k in ('symbol','reason')} for r in results if r['state']!='available']})
+            except PermissionError:
+                # Progress is advisory; only the final evidence bundle commits results.
+                # A locked progress display must not discard successful collection.
+                progress_write_failures += 1
             if len(results)%25 == 0 or len(results)==len(rows):
                 print(json.dumps({'adr_completed':len(results),'requested':len(rows),
                                  'available':sum(r['state']=='available' for r in results)}),flush=True)
     manifest = output/'bundle.json'
-    write(manifest, {'schema':1, 'session':session, 'observed_at':datetime.now(timezone.utc).isoformat(),
+    write(manifest, {'schema':1, 'session':session, 'progress_write_failures':progress_write_failures,
+        'observed_at':datetime.now(timezone.utc).isoformat(),
         'records':sorted(results,key=lambda r:r['symbol'])})
     return {'path':str(manifest), 'sha256':sha(manifest)}
 

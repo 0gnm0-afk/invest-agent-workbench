@@ -14,7 +14,7 @@ from daily_launch import capped_sessions
 from invest_agent.trading.contracts import digest
 from invest_agent.trading.market import check_bars, usable_tail
 from invest_agent.trading.market_provider import completed_sessions
-from invest_agent.trading.runner import atomic_write
+from atomic_io import atomic_write
 from invest_agent.trading.store import instance_lock
 from toss_market_client import TossMarketClient
 from market_quality import error_disposition, history_usability
