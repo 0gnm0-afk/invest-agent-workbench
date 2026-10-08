@@ -7,7 +7,7 @@ import json
 import math
 
 VERSION = 'price-events-1'
-POLICY = dict(gap_pct=3, large_gap_pct=5, pivot_left=3, pivot_right=3, swing_pct=10, pivot_rule='weekly-swing-2',
+POLICY = dict(gap_pct=3, large_gap_pct=5, pivot_left=3, pivot_right=3, swing_pct=10, pivot_rule='weekly-swing-2', tail_rule='observed-week-preview-1',
               group_max_sessions=3, followup_sessions=20, trend_pct=15,
               range_shift_pct=10, meaningful_move_pct=5, volume_ratio=1.5)
 
@@ -58,10 +58,10 @@ def weekly_swings(periods, bars, expected_labels):
         observed = left + [center] + right
         adjacent = n >= radius and [p['label'] for p in observed] == expected_labels[n-radius:n+1+len(right)]
         # Missing historical weeks/sessions are not a normal unfinished tail.
-        if not adjacent or not all(p['complete'] for p in left + [center]):
+        if not adjacent or not all(p['complete'] for p in left) or not (center['complete'] or center.get('tail_preview')):
             continue
         complete_right = [p for p in right if p['complete']]
-        if any(not p['complete'] for p in right[:-1]):
+        if any(not p['complete'] and not p.get('tail_preview') for p in right):
             continue
         for kind in ('high', 'low'):
             value = center[kind]
@@ -75,14 +75,14 @@ def weekly_swings(periods, bars, expected_labels):
                 opposite = min(p['low'] for p in side) if kind == 'high' else max(p['high'] for p in side)
                 return abs(value - opposite) / value * 100
             lp, rp = prominence(left), prominence(complete_right)
-            full = len(complete_right) == radius
+            full = center['complete'] and len(complete_right) == radius
             if lp + 1e-10 < threshold or full and rp + 1e-10 < threshold:
                 continue
             index = next(i for i in center['indices'] if bars[i][kind] == value)
             candidates.append(dict(kind=kind, index=index, week_index=j, extreme_price=value,
                 period_start=center['label'], prominence_left_pct=lp, prominence_right_pct=rp,
                 local_confirmed_at=right[-1]['close_date'] if full else None,
-                right_bars_available=len(complete_right)))
+                right_bars_available=len(complete_right), period_complete=center['complete']))
     # Intraday ordering cannot be recovered when both extremes occur on one day.
     ambiguous = {c['index'] for c in candidates if sum(x['index'] == c['index'] for x in candidates) > 1}
     candidates = sorted((c for c in candidates if c['index'] not in ambiguous), key=lambda c: c['index'])
@@ -94,7 +94,7 @@ def weekly_swings(periods, bars, expected_labels):
         between = periods[active['week_index']:candidate['week_index']+1]
         labels = [p['label'] for p in between]
         n = expected_pos[labels[0]]
-        if not all(p['complete'] for p in between) or labels != expected_labels[n:n+len(labels)]:
+        if not all(p['complete'] or p.get('tail_preview') for p in between) or labels != expected_labels[n:n+len(labels)]:
             chosen.append({**active, 'confirmed_at':None, 'selection_state':'data_gap'})
             active = candidate
             continue
@@ -225,7 +225,10 @@ def build(daily, financial=None):
         for label,indices in groups.items():
             days=expected.get(label,[])
             complete=bool(days) and calendar_state=='exchange_calendar' and days[-1]<=as_of and all(d in known for d in days)
-            periods.append(dict(label=label,indices=indices,complete=complete,
+            # Only the current calendar week's fully observed prefix may be previewed.
+            # A missing past session/week is never treated as an unfinished tail.
+            tail_preview = bool(days) and calendar_state=='exchange_calendar' and label==period(as_of,frame) and days[-1]>as_of and all(d in known for d in days if d<=as_of)
+            periods.append(dict(label=label,indices=indices,complete=complete,tail_preview=tail_preview,
                 close_date=days[-1] if complete else None,
                 high=max(bars[i]['high'] for i in indices),low=min(bars[i]['low'] for i in indices)))
         for swing in weekly_swings(periods, bars, list(expected)):

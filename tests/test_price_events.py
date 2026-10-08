@@ -94,6 +94,39 @@ class WeeklySwingTests(unittest.TestCase):
         self.assertTrue(all(e['timeframe']=='1w' for e in rows))
         self.assertTrue(all(e['confirmation_rule']=='weekly-swing-2' for e in rows))
 
+    def test_in_progress_week_is_preview_without_confirming_previous_leg(self):
+        bars=self.bars[:112]  # Wednesday's data is not required to preview Tuesday.
+        rows=self.pivots(bars)
+        tail=next(e for e in rows if e['event_date']==self.days[111])
+        self.assertEqual(tail['status'],'provisional')
+        self.assertFalse(tail['period_complete'])
+        self.assertIsNone(tail['local_confirmed_at'])
+        self.assertEqual(tail['right_bars_available'],0)
+        previous=next(e for e in rows if e['event_date']==self.days[71])
+        self.assertEqual(previous['status'],'provisional')
+        self.assertEqual(previous['selection_state'],'awaiting_opposite_confirmation')
+        self.assertEqual(rows[0]['status'],'confirmed')
+
+    def test_missing_session_in_current_week_is_not_a_preview(self):
+        rows=self.pivots(self.bars[:110]+self.bars[111:112])
+        self.assertFalse(any(e['event_date']==self.days[111] for e in rows))
+
+    def test_preview_retracts_when_later_same_week_price_invalidates_it(self):
+        bars=copy.deepcopy(self.bars[:112])
+        self.assertTrue(any(e['event_date']==self.days[111] for e in self.pivots(bars)))
+        bars.append({**self.bars[112], 'high':150})
+        rows=self.pivots(bars)
+        self.assertFalse(any(e['event_date']==self.days[111] for e in rows))
+        self.assertTrue(any(e['event_date']==self.days[112] and e['status']=='provisional' for e in rows))
+
+    def test_daily_prefixes_preserve_closed_extrema(self):
+        final={e['id']:e for e in self.pivots() if e['status']=='confirmed'}
+        for end in range(45,251):
+            for e in self.pivots(self.bars[:end]):
+                if e['status']=='confirmed':
+                    self.assertIn(e['id'],final)
+                    self.assertEqual(e['confirmed_at'],final[e['id']]['confirmed_at'])
+
     def test_small_fluctuations_removed_even_with_volume(self):
         for b in self.bars:b.update(high=101,low=99)
         self.bars[31].update(high=108,volume=100000)

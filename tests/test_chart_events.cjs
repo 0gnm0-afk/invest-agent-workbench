@@ -23,3 +23,19 @@ for(const frame of ['1d','1w','1mo']){
  cleanup();assert.equal(removed,true);assert.equal(sub,unsub);
 }
 console.log('chart event projection/grouping/cleanup: PASS (daily, weekly, monthly)');
+
+// The recent provisional leg is visible in every frame, without promoting it.
+for(const frame of ['1d','1w','1mo']){
+ const pending={...events[2],status:'provisional',confirmed_at:null,selection_state:'open_leg',period_complete:false};
+ assert.equal(context.window.WorkbenchEvents.preview(pending),true);
+ assert.equal(context.window.WorkbenchEvents.preview({...pending,selection_state:'data_gap'}),false);
+ assert.match(context.window.WorkbenchEvents.label(pending),/진행 중인 주/);
+ const bars=frame==='1d'?[{date:'2024-01-03'}]:[{date:'2024-01-01',first_session:'2024-01-02',last_session:'2024-01-05'}];
+ let primitive,strokes=0,fills=0,dashes;
+ const chart={timeScale:()=>({logicalToCoordinate:n=>100+n*20}),subscribeCrosshairMove(){},unsubscribeCrosshairMove(){}};
+ const series={attachPrimitive:p=>primitive=p,detachPrimitive(){}};
+ const cleanup=context.window.WorkbenchEvents.attach({chart,series,plot:el(),bars,frame,packet:{events:[pending,{...pending,event_date:'2024-01-04',selection_state:'data_gap'}],policy:{pivot_rule:'weekly-swing-2'}}});
+ primitive.paneViews()[0].renderer().draw({useMediaCoordinateSpace:f=>f({mediaSize:{width:800,height:300},context:{save(){},restore(){},fillRect(){fills++},setLineDash(a){dashes=[...a]},beginPath(){},moveTo(){},lineTo(){},stroke(){strokes++}}})});
+ assert.equal(strokes,1,frame);assert.equal(fills,0);assert.deepEqual(dashes,[4,4]);cleanup();
+}
+console.log('recent provisional dashed markers: PASS (daily, weekly, monthly)');
