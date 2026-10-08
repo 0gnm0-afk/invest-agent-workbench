@@ -16,7 +16,7 @@ class Warnings(unittest.TestCase):
   self.bundle={'as_of':self.now.isoformat(),'query_state':'received','accounts':[{'alias':'a','holdings_complete':True,'positions':[{'market':'US','symbol':'S','currency':'USD','quantity':'2','average_cost':'90'}]}]}
   self.bars=[{'date':(datetime(2026,9,1)+timedelta(days=i)).date().isoformat(),'high':102,'low':98,'close':100} for i in range(15)]
  def run_update(self):
-  return self.store.update(self.bundle,{'US:S':{'currency':'USD','price_basis':'adjusted','bars':self.bars}}, {'US':self.bars[-1]['date']}, self.now, sessions={'US':[b['date'] for b in self.bars]})
+  return self.store.update(self.bundle,{'US:S':{'currency':'USD','price_basis':'adjusted','bars':self.bars}}, {'US':self.bars[-1]['date'] if self.bars else '2026-09-15'}, self.now, sessions={'US':[b['date'] for b in self.bars]})
  def add(self,close,high=None,low=None):
   self.bars.append(dict(date=(datetime.fromisoformat(self.bars[-1]['date'])+timedelta(days=1)).date().isoformat(),close=close,high=high or close+1,low=low or close-1))
  def test_formula_intraday_and_persistence(self):
@@ -61,6 +61,20 @@ class Warnings(unittest.TestCase):
  def test_correction_blocked_and_state_preserved(self):
   old=self.run_update()['positions'][0];self.bars[-1]['high']=103;self.add(80)
   p=self.run_update()['positions'][0];self.assertEqual(p['issue'],'processed_price_history_changed');self.assertEqual(p['line'],old['line'])
+ def test_cost_updates_even_when_price_missing(self):
+  self.run_update();self.bundle['accounts'][0]['positions'][0]['average_cost']='92'
+  self.bars=[]
+  p=self.run_update()['positions'][0]
+  self.assertEqual(p['price_average_cost'],90);self.assertEqual(p['average_cost'],92);self.assertEqual(p['issue'],'completed_price_stale_or_missing')
+ def test_removed_then_reentered_with_price_missing_is_held(self):
+  self.run_update();position=self.bundle['accounts'][0]['positions'].pop()
+  self.assertEqual(self.run_update()['positions'][0]['status'],'closed')
+  self.bundle['accounts'][0]['positions'].append(position);self.bars=[]
+  p=self.run_update()['positions'][0]
+  self.assertEqual(p['status'],'waiting_profit');self.assertFalse(p['active']);self.assertEqual(p['quantity'],2)
+ def test_quote_symbol_preserved(self):
+  self.bundle['accounts'][0]['positions'][0].update(symbol='provider-S',quote_symbol='S')
+  self.assertEqual(self.run_update()['positions'][0]['quote_symbol'],'S')
  def test_full_exit_and_reentry(self):
   self.run_update();self.bundle['accounts'][0]['positions'][0]['quantity']='0'
   self.assertFalse(self.run_update()['positions'][0]['active'])

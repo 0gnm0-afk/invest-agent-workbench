@@ -130,6 +130,13 @@ class TrailingStore:
                             state.update(active=False, status='closed', quantity=0, account_as_of=bundle['as_of'])
                         else:
                             cost = number(p.get('average_cost'))
+                            previous_cost = state.get('price_average_cost', state.get('average_cost', cost))
+                            state.setdefault('price_average_cost', previous_cost)
+                            # Confirmed holdings remain usable even when price validation is deferred.
+                            state.update(quantity=qty, average_cost=cost, account_as_of=bundle['as_of'],
+                                         quote_symbol=p.get('quote_symbol') or p['symbol'])
+                            if state.get('status') == 'closed':
+                                state['status'] = 'waiting_profit'
                             stock = stocks.get(p['market']+':'+p.get('quote_symbol',p['symbol']))
                             if not stock or stock.get('currency') != p.get('currency'):
                                 raise ValueError('market_identity_unconfirmed')
@@ -154,8 +161,7 @@ class TrailingStore:
                                     raise ValueError('processed_price_history_changed')
                             if state.get('last_date') and bars[-1]['date'] < state['last_date']:
                                 raise ValueError('price_date_regressed')
-                            previous_cost = state.get('average_cost', cost)
-                            state.update(quantity=qty, average_cost=cost, account_as_of=bundle['as_of'], identity=identity)
+                            state['identity'] = identity
                             latest = bars[-1]
                             if not state['active']:
                                 state['status'] = 'waiting_profit'
@@ -198,6 +204,7 @@ class TrailingStore:
                                 elif pending:
                                     state['cost_pending'] = False
                                 state['status'] = 'warning' if state['below'] else 'monitoring'
+                            state['price_average_cost'] = cost
                             state['prices'] = [dict(date=b['date'],close=b['close']) for b in bars[-126:]]
                     except (ValueError, KeyError, TypeError, OverflowError) as exc:
                         issue = str(exc) if isinstance(exc,ValueError) and str(exc).replace('_','').isalnum() else 'invalid_input'

@@ -122,3 +122,5 @@ body.workbench-dark{--bg:#141820;--ink:#e0e6ef;--muted:#9da9ba;--line:#343d4b;--
 @media(max-width:900px){.workbench-dark .sidebar{display:flex;flex-wrap:wrap}.workbench-dark .sidebar nav{order:2;width:100%}.stock-search{width:300px}.workbench-dark .brand{margin:0}}
 @media(max-width:520px){.workbench-dark .sidebar{padding:12px 15px;gap:10px}.stock-search{order:3;width:100%;margin:0}.stock-search-panel{left:0;right:auto;width:100%;max-width:100%}.stock-search-field input{font-size:16px}.stock-search-note{font-size:10px}#stock-search-results{max-height:min(350px,calc(100dvh - 250px))}}
 .trailing-price-legend{flex-direction:column;gap:2px}.trailing-price-legend span{background:#202630cc;width:max-content;padding:0 3px;font-variant-numeric:tabular-nums}
+
+.holding-price-legend{display:flex;flex-wrap:wrap;gap:4px 18px;padding:8px 12px;font-size:11px;line-height:1.6;font-variant-numeric:tabular-nums}
