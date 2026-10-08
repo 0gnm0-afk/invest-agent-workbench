@@ -147,10 +147,11 @@ async function stockDetail(market, symbol, version) {
  $('#stock-tools-toggle').onclick=()=>{const host=$('#chart-workspace');host.hidden=!host.hidden;$('#stock-tools-toggle').setAttribute('aria-expanded',String(!host.hidden));};
  $('#stock-chart-expand').onclick=()=>{const panel=$('#stock-price'),expanded=panel.classList.toggle('expanded');$('#stock-chart-expand').setAttribute('aria-pressed',String(expanded));$('#stock-chart-expand').innerHTML=expanded?'⛶ 기본 크기':'⛶ 차트 확대';};
  WorkbenchFinancials.mount({market,symbol,isCurrent:()=>version===routeVersion});
- const analysis=await WorkbenchAnalysis.initial();
+ const analysis=await WorkbenchAnalysis.initial({market,symbol});
  if(analysis&&analysis.case.stock_key!==market+':'+symbol)throw Error('분석건 종목이 일치하지 않습니다.');
  const controller=await WorkbenchStockChart.mount({stock:s,market,symbol,currency,isCurrent:()=>version===routeVersion,context:analysis?.case.context});
  if(version===routeVersion)await WorkbenchAnalysis.mount({market,symbol,currency,controller,isCurrent:()=>version===routeVersion,initialDetail:analysis});
+ if(version===routeVersion&&window.WorkbenchScenarios)await WorkbenchScenarios.mountStock({market,symbol,currency,controller,isCurrent:()=>version===routeVersion});
 }
 function accountWorkspace(title='나의 계좌',withAccounts=true) {return `<div id="risk-account" data-title="${esc(title)}">${block(title,withAccounts?accountCards():'<div class="panel-body">저장된 계획을 확인합니다.</div>')}</div>`;}
 function accounts() {$('#main').innerHTML=heading('나의 계좌','READ-ONLY ACCOUNTS','NH 국내·미국 잔고 조회. 주문·미체결·예약 조회는 포함하지 않습니다.')+accountWorkspace('계좌 정보와 계획')+`<div class="notice"><span>조회 시도 ${stamp(DATA.accounts.attempted_at)} · 새로 조회하려면 dashboard.ps1을 실행하세요. 브라우저 새로고침은 저장된 화면만 다시 엽니다.</span></div>`;}

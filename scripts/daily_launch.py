@@ -173,7 +173,7 @@ class DailyLaunch:
                     record.update(plan)
                     self.save(record)
                     run = self.runner({**plan,'prior_run':record['display_run']}, progress)
-                    record.update(run=run.get('output'), state=run['state'], stage='finished', telegram_state=run.get('telegram_state'), trailing_state=run.get('trailing_state'), account_attempted=run.get('account_attempted',False), account_state=run.get('account_state'), account_error=run.get('account_error'))
+                    record.update(run=run.get('output'), state=run['state'], stage='finished', telegram_state=run.get('telegram_state'), trailing_state=run.get('trailing_state'), scenario_state=run.get('scenario_state'), account_attempted=run.get('account_attempted',False), account_state=run.get('account_state'), account_error=run.get('account_error'))
                     display = self.usable_run(run.get('output'))
                     if display:
                         record['display_run'] = display
@@ -269,17 +269,27 @@ class DailyLaunch:
                 result['trailing_state'] = 'evaluated'
             except Exception:
                 result['trailing_state'] = 'unavailable'
-        if self.accounts and result.get('trailing_state') == 'evaluated':
+        if result.get('state') in ('succeeded', 'partial'):
+            try:
+                from scenario_monitor import refresh_saved as refresh_scenarios
+                scenario = refresh_scenarios(self.root, result['output'], plan['targets'],
+                                             account_failed=result.get('account_state') == 'failed')
+                result['scenario_state'] = 'evaluated' if any(m['active'] for m in scenario['monitors']) else 'not_configured'
+            except Exception:
+                result['scenario_state'] = 'unavailable'
+        if self.accounts and (result.get('trailing_state') == 'evaluated' or result.get('scenario_state') == 'evaluated'):
             try:
                 from telegram_warnings import dispatch
-                result['telegram_state'] = dispatch(self.root, plan['targets'])['state']
+                result['telegram_state'] = dispatch(self.root, plan['targets'],
+                                                    include_trailing=result.get('trailing_state') == 'evaluated',
+                                                    include_scenarios=result.get('scenario_state') == 'evaluated')['state']
             except Exception:
                 # Delivery failure must not change a successful market/account result.
                 result['telegram_state'] = 'unavailable'
         return result
 
     def public(self, record):
-        result={k:record.get(k) for k in ('day','state','stage','targets','started_at','finished_at','error','reused','manual_retry','telegram_state','trailing_state','account_attempted','account_state','account_error')}
+        result={k:record.get(k) for k in ('day','state','stage','targets','started_at','finished_at','error','reused','manual_retry','telegram_state','trailing_state','scenario_state','account_attempted','account_state','account_error')}
         result['attempt_id'] = attempt_id(record)
         result['display_updated'] = False
         result['display_stale'] = bool(record.get('display_run') and record.get('display_run') != record.get('run'))

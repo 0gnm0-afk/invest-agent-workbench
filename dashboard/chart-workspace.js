@@ -131,7 +131,7 @@ window.WorkbenchWorkspace = (() => {
           const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-Workbench-Token':packet.token},body:JSON.stringify({revision,state:snapshot})});
           if(r.status===409){conflict=true;throw Error('다른 창에서 저장했습니다. 새로고침 후 다시 편집하세요.');}
           if(!r.ok)throw Error('저장 실패 · 저장 버튼으로 재시도하세요.');
-          const result=await r.json();revision=result.revision;lastSaved=JSON.stringify(snapshot);status('저장됨 · '+new Date(result.updated_at).toLocaleTimeString('ko-KR'));return true;
+          const result=await r.json();revision=result.revision;lastSaved=JSON.stringify(snapshot);window.dispatchEvent(new Event('workbench-drawing-saved'));status('저장됨 · '+new Date(result.updated_at).toLocaleTimeString('ko-KR'));return true;
         } catch(e){status(e.message,true);return false;}
       })();
       const ok=await saving;saving=null;

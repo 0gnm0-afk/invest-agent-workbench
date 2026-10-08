@@ -1,7 +1,7 @@
 window.WorkbenchCollaboration = (() => {
   const esc = x => String(x ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const labels = {identity_basis:'종목·자료 기준',business_evidence:'기업·투자 근거',judgment_invalidation:'현재 판단·반증 조건',purpose_plan:'보유 목적·계획',responses:'조건별 대응',scenario_assumptions:'계산 가정',discussion_history:'논의·변경 이유'};
-  const names = {daily_close:'완료 일봉 종가',weekly_close:'완료 주봉 종가',intraday:'장중',lt:'미만',lte:'이하',gt:'초과',gte:'이상',reduce:'축소',buy:'매수',add:'추가매수',hold:'유지',review:'재검토',initial_fraction:'최초 배정 물량 비율',remaining_fraction:'잔여 물량 비율',units:'주',initial:'최초 물량(주)',current_remaining:'잔여 물량(주)'};
+  const names = {daily_close:'완료 일봉 종가',weekly_close:'완료 주봉 종가',intraday:'장중',lt:'미만',lte:'이하',gt:'초과',gte:'이상',reduce:'축소',buy:'매수',add:'추가매수',hold:'유지',holding:'보유 시나리오',review:'재검토',initial_fraction:'최초 배정 물량 비율',remaining_fraction:'잔여 물량 비율',units:'주',initial:'최초 물량(주)',current_remaining:'잔여 물량(주)'};
   const label = x => esc(names[x] || x || '미정');
   function missing(value) {
     const terms={identity:'종목',stable_id:'안정 식별자',currency:'통화',plan:'계획',purpose:'목적',account_alias:'적용 계좌',allocation:'배정 물량',quantity:'수량',basis:'물량 기준',condition:'조건',manual_assessment_required:'정성 판단 필요',evaluation:'판정 시점',operator:'비교 기준',priority:'적용 순서',price_or_drawing:'가격 또는 작도',value:'물량',execution_price:'가정 체결가격',scenarios:'계산 시나리오',scenario:'시나리오',evaluation_at:'평가 시점',assumed_price:'가정 가격',response:'대응 여부',cost:'총비용',fx_to_base:'환율',fx_as_of:'환율 기준일',price_path:'가격 경로'};
@@ -10,7 +10,17 @@ window.WorkbenchCollaboration = (() => {
   const money = (x, currency) => x == null ? '미정' : currency ? esc(WorkbenchFormat.money(x, currency)) + ' ' + esc(currency) : esc(x) + ' (통화 미정)';
   function planHTML(r) {
     const p = r.plan, currency = r.identity.currency;
-    return `<h4>${esc(p.title)} · v${r.plan_version}</h4><p>목적 ${esc(p.purpose || '미정')} · 계좌 ${esc(p.account_alias || '미정')} · 배정 ${esc(p.allocation.quantity ?? '미정')} ${label(p.allocation.basis)}</p>
+    if (r.monitoring_only === true) {
+      const lineNames = {low:'하단',high:'상단',line:'기준선',other_line:'평행선',entry:'진입',stop:'무효화',target:'목표'};
+      const refs = [...new Map(p.conditions.filter(c=>c.drawing_ref).map(c=>[c.drawing_ref.drawing_id,c.drawing_ref])).values()];
+      const responses = [...new Set(p.conditions.map(c=>c.statement).filter(Boolean))];
+      return `<h4>${esc(p.title)} · v${r.plan_version}</h4><p>목적 ${label(p.purpose)} · ${p.account_alias?'확인 계좌 '+esc(p.account_alias):'전체 계좌에서 실제 보유 확인'}</p>
+        ${refs.map(ref=>`<p>저장 작도 <strong>${esc(ref.drawing_id)}</strong> · v${ref.workspace_revision}<br>시간축 ${esc(ref.timeframe)} · 가격 기준 ${esc(ref.price_basis)} · 경계 ${p.conditions.filter(c=>c.drawing_ref?.drawing_id===ref.drawing_id).map(c=>esc(lineNames[c.drawing_ref.line]||c.drawing_ref.line)).join(' / ')}</p>`).join('')}
+        <p><strong>확정할 대응</strong><br>${responses.map(esc).join('<br>')||'대응 기준 미정'}</p>
+        <p>최신 완료 거래일 종가로 접근·도달·돌파·이탈을 구분합니다. 기울어진 경계는 해당 거래일의 선 값으로 비교합니다.</p>
+        <details><summary>계획 ID · 고정 입력</summary><p>자료 ${esc(r.data_as_of.chart_last||'미확인')} · 입력 ${esc(r.snapshot_id)}<br>계획 ${esc(r.plan_id)} · 기록 ${esc(r.id)}<br>계획 SHA-256 ${esc(r.plan_sha256)}<br>입력 SHA-256 ${esc(r.snapshot_sha256)}</p><pre class="analysis-document">${esc(JSON.stringify(p,null,2))}</pre></details>`;
+    }
+    return `<h4>${esc(p.title)} · v${r.plan_version}</h4><p>목적 ${label(p.purpose)} · 계좌 ${esc(p.account_alias || '미정')} · 배정 ${esc(p.allocation.quantity ?? '미정')} ${label(p.allocation.basis)}</p>
       ${p.conditions.map(c => `<p><strong>${label(c.action)}</strong> · ${esc(c.statement)}<br>${c.kind === 'qualitative' ? '정성 판단 필요' : `${label(c.evaluation)} · ${c.drawing_ref ? `고정 작도 ${esc(c.drawing_ref.drawing_id)} v${c.drawing_ref.workspace_revision} (${esc(c.drawing_ref.timeframe)}, ${esc(c.drawing_ref.line)}, ${esc(c.drawing_ref.price_basis)})` : money(c.price, c.currency)} ${label(c.operator)}`} · 적용 순서 ${esc(c.priority ?? '미정')}<br>수량 ${esc(c.quantity.value ?? '미정')} (${label(c.quantity.basis)}) · 가정 체결 ${money(c.execution_price,c.currency)}</p>`).join('') || '<p>조건 미정</p>'}
       ${p.scenarios.map(s => `<p>시나리오 ${esc(s.id)} · 평가 ${esc(s.evaluation_at || '미정')} · 가정 가격 ${money(s.assumed_price,s.currency)} · ${s.response === 'plan' ? '계획 대응' : s.response === 'none' ? '무대응' : '대응 미정'} · 환율 ${esc(s.fx_to_base ?? '미정')} (${esc(s.fx_as_of || '기준일 미정')}) · 총비용 ${money(s.cost,s.currency)}<br>가격 경로: ${s.price_path?.map(point=>`${esc(point.at)} → ${money(point.price,s.currency)}`).join(" · ") || "미정"}</p>`).join('')}
       <details><summary>고정 입력과 전체 계획</summary><p>계획 SHA-256 ${esc(r.plan_sha256)}<br>입력 SHA-256 ${esc(r.snapshot_sha256)}</p><pre class="analysis-document">${esc(JSON.stringify(r.plan,null,2))}</pre></details><p>자료 ${esc(r.data_as_of.chart_last || '미정')} · 입력 ${esc(r.snapshot_id)}<br>계획 ID ${esc(r.plan_id)} · 기록 ${esc(r.id)}</p>

@@ -299,7 +299,11 @@ def validate_research(rows, packet):
         if gid not in groups or gid in seen: raise ValueError('unknown_or_duplicate_research_group')
         seen.add(gid)
         if status not in ('unresearched','failed','cause_unconfirmed','evidence_found'): raise ValueError('invalid_research_status')
-        if status!='unresearched' and not groups[gid]['confirmed_event_ids']: raise ValueError('provisional_not_historical_research')
+        if status != 'unresearched' and not groups[gid]['confirmed_event_ids']:
+            members = [e for e in (packet or {}).get('events', []) if e['id'] in groups[gid]['event_ids']]
+            # Research a candidate's surrounding news without promoting the pivot to confirmed.
+            if not any(e.get('timeframe') == '1w' and e.get('kind') != 'gap' for e in members):
+                raise ValueError('provisional_not_historical_research')
         if not isinstance(row.get('finding',''),str) or len(row.get('finding',''))>8000: raise ValueError('invalid_research_finding')
         windows=row.get('searched_windows',[]); sources=row.get('sources',[])
         if not isinstance(windows,list) or not isinstance(sources,list) or len(windows)>30 or len(sources)>30: raise ValueError('invalid_research_evidence')

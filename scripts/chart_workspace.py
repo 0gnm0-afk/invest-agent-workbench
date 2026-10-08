@@ -132,6 +132,7 @@ class WorkspaceStore:
         with closing(self.connect()) as db, db:
             db.execute('BEGIN IMMEDIATE')
             db.execute('CREATE TABLE IF NOT EXISTS shared_chart_workspaces (identity TEXT PRIMARY KEY, revision INTEGER NOT NULL, payload TEXT NOT NULL, updated_at TEXT)')
+            db.execute('CREATE TABLE IF NOT EXISTS chart_workspace_versions (identity TEXT NOT NULL, revision INTEGER NOT NULL, payload TEXT NOT NULL, updated_at TEXT, PRIMARY KEY(identity, revision))')
             row = db.execute('SELECT revision,payload,updated_at FROM shared_chart_workspaces WHERE identity=?', (identity,)).fetchone()
             if row:
                 current, payload, updated = row[0], json.loads(row[1]), row[2]
@@ -167,9 +168,13 @@ class WorkspaceStore:
             if state is not None:
                 if current != revision:
                     raise Conflict('workspace_changed_elsewhere')
+                db.execute('INSERT OR IGNORE INTO chart_workspace_versions VALUES (?,?,?,?)',
+                           (identity, current, json.dumps(payload, ensure_ascii=False, allow_nan=False), updated))
                 payload['drawings'] = state['drawings']
                 payload['averages'][frame] = state['averages']
                 current += 1; updated = datetime.now(timezone.utc).isoformat()
+                db.execute('INSERT INTO chart_workspace_versions VALUES (?,?,?,?)',
+                           (identity, current, json.dumps(payload, ensure_ascii=False, allow_nan=False), updated))
             if row is None or state is not None:
                 db.execute('INSERT INTO shared_chart_workspaces VALUES (?,?,?,?) ON CONFLICT(identity) DO UPDATE SET revision=excluded.revision,payload=excluded.payload,updated_at=excluded.updated_at',
                            (identity, current, json.dumps(payload, ensure_ascii=False, allow_nan=False), updated))

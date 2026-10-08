@@ -97,9 +97,10 @@ class AnalysisService:
         else:
             prompt=(f"${QUALITATIVE_SKILL} 스킬을 사용해 투자 워크벤치 분석건 {cid} ({case['stock_key']})의 정성분석을 수행하고 "
                     "같은 분석건에 리포트를 저장해줘.\n"
-                    "스킬의 goal·조사·최대 2회 자체 검증 절차를 따른다. invest_analysis MCP의 analysis_read(analysis_key)로 "
+                    "스킬의 goal·조사·최대 2회 자체 검증 절차를 따른다. 먼저 analysis_collaboration_read와 analysis_history로 기존 보고서·사용자 답·미정·채택 계획 버전을 확인하고, analysis_read(analysis_key)로 "
                     "현재 저장 입력을 읽고 반환 snapshot_id를 고정해 events·research_groups·news_inputs와 재무 요약·연간/분기 실적·출처를 읽어줘. "
-                    "코드의 최근5년 사건과 우선순위를 재계산하지 말고 confirmed의 high는 상세, medium은 간단 조사하고 low/provisional은 기록만 유지해줘. "
+                    "내부 MCP의 계산 재무에서 의미 있는 변화와 사업 맥락을 해석해줘. 코드의 최근5년 주봉 고점·저점 전후 사건만 조사하고 확정·잠정 구분과 우선순위를 유지해줘. 시가 갭·월봉 독립 조사는 이번 범위 밖이다. "
+                    "Telegram 검색과 함께 필요한 공시·공식 자료·일반 웹 뉴스를 적극 활용하고, business/risk/new/tsr는 종목에 따라 portfolio/growth 등으로 추가·대체할 수 있다. 발표된 미래 주주환원 계획과 실제 집행을 구분해줘. "
                     "각 news_window부터 실제 뉴스를 검색하고 근거 부족 시 확대하며 근접일을 같은 원인으로 단정하지 마. "
                     "analysis_save_record의 event_research에 group_id, 조사상태(unresearched/failed/cause_unconfirmed/evidence_found), 검색범위·출처를 저장해줘. "
                     "필요한 배열은 next_offset이 null이 될 때까지 같은 snapshot_id로 읽고, analysis_history의 기존 보고서·사용자 의견을 확인해줘. "
@@ -115,7 +116,9 @@ class AnalysisService:
                   "기존 보고서는 기업 조사 근거다. 7항목을 한꺼번에 묻지 말고 차트·보유 이유·반증·대응에서 이번 판단을 바꾸는 모호함만 자연스럽게 논의해줘. "
                   "새 조사 필요 때만 stock-qualitative-analysis를 사용하고 미정 판단을 대신 채택하지 마. "
                   "확보한 발언 원문과 합의·미정을 analysis_save_discussion으로 저장하고 계획은 analysis_save_plan으로 초안 버전을 남겨줘. "
-                  "가격 경고는 저장 일봉의 트레일링·MA5 자동 판정이다. 폐기한 시나리오 계산 도구를 호출하지 말고 과거 계획·위험 검토는 기록으로 보존해줘. "
+                  "사용자 직접 작도 또는 analysis_propose의 박스·평행 채널·손익비 초안을 활용하고 저장/채택/실제 체결을 구분해줘. "
+                  "가격 경고는 트레일링·MA5와 별도 보유/매수 시나리오의 최신 완료 거래일 종가 판정이다. 접근 기본값은 조정 가능한 0.5×ATR14이며 기울어진 선은 해당 거래일 값으로 비교한다. "
+                  "감시 연결은 사용자가 화면에서 확정 시나리오와 저장 작도·허용폭을 확인한다. 저장된 작도 수정은 활성 참조만 갱신하며 당시 snapshot/계획 원본은 보존한다. 폐기한 구 위험 계산 도구는 복구하지 마. "
                   "snapshot_id와 expected_revision을 고정하며 충돌은 재조회해 조정한다. 저장 뒤 ID·버전·재조회 일치와 복귀 링크를 확인해줘. "
                   f"계획 채택은 사용자가 화면에서 정확한 버전을 확인한다. 대시보드: {dashboard}")
         return {'analysis_key':cid,'dashboard_url':dashboard,'reopen_command':f'.\\analysis.ps1 -AnalysisKey {cid}',
@@ -190,6 +193,8 @@ class AnalysisService:
                 if not added: raise ValueError('empty_proposal')
                 before=deepcopy(payload); payload['drawings']+=added
                 validate({'schema':1,'drawings':payload['drawings'],'averages':payload['averages'][case['context']['timeframe']]},drawing_limit=300)
+                db.execute('INSERT OR IGNORE INTO chart_workspace_versions VALUES (?,?,?,?)', (case['stock_key'],revision,packed(before),updated))
+                db.execute('INSERT INTO chart_workspace_versions VALUES (?,?,?,?)', (case['stock_key'],revision+1,packed(payload),now()))
                 db.execute('UPDATE shared_chart_workspaces SET revision=?,payload=?,updated_at=? WHERE identity=?',(revision+1,packed(payload),now(),case['stock_key']))
             else: before=None
             return self.append(case['id'],'decision',{'proposal_id':proposal_id,'action':action,'reason':reason,'author':'user',
@@ -246,6 +251,11 @@ class AnalysisService:
         if op in ('risk_overview','risk_calculate','risk_save','risk_review_save','calculate'):
             raise ValueError('retired_risk_operation')
         if not isinstance(a,dict): raise ValueError('object_required')
+        from scenario_api import OPS as MONITOR_OPS, dispatch as monitor_dispatch
+        if op in MONITOR_OPS:
+            return monitor_dispatch(self, op, a, origin, principal, session)
+        if op == 'scenario_draft':
+            return self.collaboration.scenario_draft(a, self.case(a['analysis_key']), principal, session, origin)
         if op in COLLABORATION_OPS:
             return self.collaboration.dispatch(op, a, origin, principal, session)
         if principal == 'risk' and op not in ('list','detail','holding_links','calculate','read'):
@@ -257,7 +267,14 @@ class AnalysisService:
         if op=='list':
             cases=self.rows('analysis_cases')
             if a.get('stock_key'): cases=[c for c in cases if c['stock_key']==a['stock_key']]
-            return {'cases':cases}
+            results=[]
+            for c in cases:
+                items=self.rows('analysis_items', c['id'])
+                latest=items[-1] if items else None
+                results.append({**c, 'updated_at':latest['created_at'] if latest else c['created_at'],
+                    'report_count':sum(i['kind']=='report' for i in items),
+                    'latest_record_id':latest['id'] if latest else None, 'links':self.links(c,origin)})
+            return {'cases':results}
         if op=='create':
             k=a['stock_key']; _,stocks=self.view()
             if k not in stocks and k not in self.histories.saved.stocks: raise ValueError('unknown_stock')

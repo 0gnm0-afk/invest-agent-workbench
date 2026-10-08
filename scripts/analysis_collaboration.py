@@ -128,12 +128,13 @@ def validate_plan(plan, snapshot):
             fields(ref, names, names)
             integer(ref['workspace_revision']); text(ref['drawing_id'], 64)
             drawing = next((d for d in snapshot['workspace']['state']['drawings'] if d['id'] == ref['drawing_id']), None)
-            if not drawing or drawing['kind'] not in ('trend', 'channel', 'horizontal'): raise ValueError('unsupported_plan_drawing')
+            if not drawing or drawing['kind'] not in ('trend', 'channel', 'horizontal', 'box', 'riskreward'): raise ValueError('unsupported_plan_drawing')
             if (ref['workspace_revision'] != snapshot['workspace']['revision'] or ref['timeframe'] != snapshot['chart']['timeframe']
                     or ref['price_basis'] != snapshot['chart'].get('price_basis') or ref['geometry_version'] != GEOMETRY_VERSION):
                 raise ValueError('drawing_basis_mismatch')
-            choice(ref['line'], ('line', 'other_line'), False)
-            if ref['line'] == 'other_line' and drawing['kind'] != 'channel': raise ValueError('channel_required')
+            lines = {'trend': ('line',), 'horizontal': ('line',), 'channel': ('line', 'other_line'),
+                     'box': ('low', 'high'), 'riskreward': ('entry', 'stop', 'target')}
+            choice(ref['line'], lines[drawing['kind']], False)
             if c['price'] is not None: raise ValueError('drawing_condition_cannot_freeze_constant_price')
     ids = set()
     for s in array(plan['scenarios']):
@@ -195,6 +196,50 @@ class Collaboration:
     def migrate(self):
         with closing(self.s.store.connect()) as db, db:
             db.execute('CREATE TABLE IF NOT EXISTS analysis_collaboration_heads (case_id TEXT PRIMARY KEY, revision INTEGER NOT NULL)')
+
+    def scenario_draft(self, a, case, principal, session, origin):
+        """Turn an explicitly selected saved drawing into a reviewable plan draft."""
+        if principal != 'browser' or not session:
+            raise Forbidden('local_browser_confirmation_required')
+        required = ('analysis_key', 'expected_revision', 'drawing_id', 'workspace_revision', 'title', 'purpose', 'response')
+        fields(a, required + ('plan_id', 'expected_plan_version'), required)
+        integer(a['expected_revision']); integer(a['workspace_revision'])
+        text(a['drawing_id'], 64); text(a['title'], 200)
+        text(a['purpose'], 4000, True); text(a['response'], 4000, True)
+        if a.get('plan_id') is not None:
+            with closing(self.s.store.connect()) as db:
+                prior = [r for r in self.read_rows(case['id'], db)
+                         if r.get('kind') == 'plan_version' and r.get('plan_id') == a['plan_id']]
+            if not prior or not prior[-1].get('monitoring_only'):
+                raise ValueError('full_plan_requires_full_editor')
+        snap = self.s.capture(case)
+        if snap['workspace']['revision'] != a['workspace_revision']:
+            raise Conflict('workspace_changed_elsewhere')
+        drawing = next((d for d in snap['workspace']['state']['drawings'] if d['id'] == a['drawing_id']), None)
+        lines = {'box': ('low', 'high'), 'channel': ('line', 'other_line'),
+                 'riskreward': ('entry', 'stop', 'target'), 'horizontal': ('line',), 'trend': ('line',)}
+        if drawing is None or drawing['kind'] not in lines:
+            raise ValueError('unsupported_plan_drawing')
+        response = a['response'] or None
+        conditions = []
+        for n, line in enumerate(lines[drawing['kind']], 1):
+            conditions.append(dict(id='drawing_' + line, kind='price', statement=response or '대응 기준 미정',
+                action='review', evaluation='daily_close', operator=None, price=None,
+                currency=identity(snap)['currency'], quantity=dict(value=None, basis=None), priority=n,
+                execution_price=None, drawing_ref=dict(drawing_id=drawing['id'], workspace_revision=a['workspace_revision'],
+                    timeframe=snap['chart']['timeframe'], price_basis=snap['chart'].get('price_basis'),
+                    geometry_version=GEOMETRY_VERSION, line=line)))
+        plan = dict(title=a['title'] or '차트 시나리오', purpose=a['purpose'] or None, account_alias=None,
+                    allocation=dict(quantity=None, basis=None), conditions=conditions, scenarios=[])
+        args = dict(plan_id=a.get('plan_id'), expected_plan_version=a.get('expected_plan_version', 0))
+        integer(args['expected_plan_version'])
+        if args['plan_id'] is not None:
+            from analysis_service import key
+            key(args['plan_id'], 'pl_')
+        return self.append(case, snap, a['expected_revision'], 'plan_version',
+            dict(plan=validate_plan(plan, snap), monitoring_only=True, references=[dict(kind='utterance', reference=None,
+                 text=a['response'], speaker='user')] if response else []),
+            principal, origin, plan_args=args)
 
     def read_rows(self, cid, db):
         return [json.loads(r[0]) for r in db.execute('SELECT payload FROM analysis_items WHERE case_id=? ORDER BY rowid', (cid,))]
@@ -338,7 +383,9 @@ class Collaboration:
                          data_as_of={'captured_at': snap['captured_at'], 'market': snap['market'], 'accounts': snap['accounts'].get('as_of'),
                                      'chart_last': snap['chart']['bars'][-1]['date'] if snap['chart']['bars'] else None},
                          created_at=now(), test_record=case['test_record'], authority='record_only_not_execution_or_risk_policy')
-                if kind == 'plan_version': r['blockers'] = blockers(r)
+                if kind == 'plan_version':
+                    r['blockers'] = ([f'identity.{k}' for k in ('stable_id', 'currency', 'price_basis') if not r['identity'].get(k)]
+                                     if r.get('monitoring_only') else blockers(r))
                 content = self.markdown(r)
                 path = self.s.root / 'judgments' / 'analyses' / case['id'] / (r['id'] + '.md')
                 r['markdown_path'] = path.relative_to(self.s.root).as_posix()
