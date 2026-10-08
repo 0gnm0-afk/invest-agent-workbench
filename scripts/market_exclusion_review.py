@@ -29,8 +29,16 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
+def read_bytes(path):
+    for attempt in range(20):
+        try: return Path(path).read_bytes()
+        except PermissionError:
+            if attempt==19: raise
+            time.sleep(.05)
+
+
 def load(path):
-    return json.loads(Path(path).read_text(encoding='utf-8'))
+    return json.loads(read_bytes(path))
 
 
 def save(path, value):
@@ -53,7 +61,7 @@ def registry(path=None):
     path = Path(path or REGISTRY)
     if not path.exists():
         return {'schema':1,'records':[],'jobs':[]}, b''
-    raw = path.read_bytes(); value = json.loads(raw)
+    raw = read_bytes(path); value = json.loads(raw)
     if value.get('schema') != 1 or not isinstance(value.get('records'),list) or not isinstance(value.get('jobs'),list):
         raise ValueError('invalid_user_exclusions')
     seen = set()
@@ -77,6 +85,10 @@ def explanation(code):
     """Only curated messages reach the browser; raw provider errors stay private."""
     code = str(code or '')
     messages = {
+        'manual_retry_pending':'새로 확인된 결측입니다. NH 재수집이 필요합니다.',
+        'toss_retry_identity_mismatch':'Toss 종목 식별자·거래소·통화가 일치하지 않습니다.',
+        'toss_retry_identity_unverified':'Toss 종목 식별 정보를 확인하지 못했습니다.',
+        'toss_retry_market_cap_unavailable':'Toss 시가총액 자료를 확보하지 못했습니다.',
         'unavailable_market_cap':'시가총액을 확보하지 못했습니다.',
         'historical_price_gaps':'가격 이력에 빈 거래일이 있습니다.',
         'stale_or_invalid_last_session':'최근 완료 거래일의 가격이 없거나 유효하지 않습니다.',
@@ -140,7 +152,7 @@ def inventory(snapshot, quality, reports=None):
             continue
         item = {k:row.get(k) for k in ('market','symbol','name','isin_code','provider_symbol')}
         item.update(exchange=row.get('listing_exchange_family'),field='시가총액' if is_cap else '가격 이력',
-                    toss_code=code,nh_code=report.get('reason'),toss_reason=explanation(code),
+                    toss_code=code,nh_code=report.get('reason'),toss_reason=explanation(code)+((' · Toss 재수집: '+explanation(report['toss_retry'].get('reason'))) if report.get('toss_retry',{}).get('state')=='unavailable' else ''),
                     nh_reason=explanation(report.get('reason')),nh_attempted=True)
         item['id'] = digest([identity(item),code,item['nh_code']])
         item['exclude_allowed'] = bool(all(identity(item)))
@@ -149,6 +161,27 @@ def inventory(snapshot, quality, reports=None):
     return {'schema':1,'universe_count':len(listings),'sessions':{k:v[-1] for k,v in snapshot['sessions'].items()},
             'identities':[{k:r.get(k) for k in ('market','symbol','isin_code','listing_exchange_family')} for r in listings.values()],
             'issues':list(issues.values())}
+
+
+def retry_key(row, sessions):
+    return digest([identity(row), sessions.get(row['market'])])
+
+
+def retry_permissions(row, sessions, jobs):
+    key = retry_key(row, sessions)
+    attempted = {j.get('provider') for j in jobs if j.get('kind')=='recollect'
+                 and key in j.get('retry_keys',[]) and j.get('collection_started_at')
+                 and j['state'] in ('completed','failed')}
+    return {'toss': 'toss' not in attempted,
+            'nh': 'toss' in attempted and 'nh' not in attempted,
+            'exclude': {'toss','nh'} <= attempted,
+            'attempted': sorted(attempted)}
+
+
+def pending_job(job, current_run):
+    return job['state'] in ('approved','applying','computed') or (
+        job.get('kind')=='recollect' and job.get('result_source') and job['state']=='failed'
+        and current_run in (job.get('source_run'),job.get('result_run')))
 
 
 def checked(path, expected):
@@ -267,11 +300,16 @@ class ExclusionReview:
             public = None
             if job:
                 state = 'interrupted' if interrupted else 'applying' if active else job['state']
+                if job.get('kind')=='recollect' and state=='failed' and review['source_run'] not in (job.get('source_run'),job.get('result_run')):
+                    state='superseded'
                 public = {k:job.get(k) for k in ('id','count','approved_at','finished_at')}
-                public.update(state=state,error=job.get('error'),retry_available=not active and state in ('failed','interrupted'))
+                public.update(state=state,error=job.get('error'),kind=job.get('kind','exclude'),provider=job.get('provider'),
+                    retry_available=not active and state in ('failed','interrupted') and (job.get('kind')!='recollect' or bool(job.get('result_source')) or state=='interrupted'))
             fields = ('id','market','symbol','name','field','toss_reason','nh_reason','exclude_allowed','block_reason')
             return {k:review[k] for k in ('review_id','run_id','sessions')} | {
-                'issues':[{k:r.get(k) for k in fields} for r in review['issues']],
+                'issues':[{**{k:r.get(k) for k in fields}, 'retry':retry_permissions(r,review['sessions'],value['jobs']),
+                    'exclude_allowed':r['exclude_allowed'] and retry_permissions(r,review['sessions'],value['jobs'])['exclude'],
+                    'block_reason':r['block_reason'] or ('' if retry_permissions(r,review['sessions'],value['jobs'])['exclude'] else 'Toss와 NH 재수집 후에도 남은 종목만 제외할 수 있습니다.')} for r in review['issues']],
                 'job':public,'busy':active,'view_ready':not active}
 
     def approve(self, review_id, issue_ids):
@@ -289,7 +327,9 @@ class ExclusionReview:
                     if any(i not in available for i in issue_ids): raise ValueError('invalid_exclusion_selection')
                     if len(issue_ids)>=current['universe_count']: raise ValueError('empty_market_scope')
                     value,_ = registry(self.path)
-                    if value['jobs'] and value['jobs'][-1]['state'] in ('approved','applying','computed'):
+                    if any(not retry_permissions(available[i],current['sessions'],value['jobs'])['exclude'] for i in issue_ids):
+                        raise ReviewConflict('provider_retries_required')
+                    if value['jobs'] and pending_job(value['jobs'][-1],current['source_run']):
                         raise ReviewConflict('exclusion_apply_running')
                     job_id = uuid4().hex; at = now()
                     for identifier in issue_ids:
@@ -304,6 +344,33 @@ class ExclusionReview:
                     save(self.path,value)
             except BusyError:
                 raise ReviewConflict('market_update_running') from None
+            self._start(job_id)
+            return self.status()
+
+    def recollect(self, review_id, issue_ids, provider):
+        if (provider not in ('toss','nh') or not isinstance(review_id,str) or not isinstance(issue_ids,list)
+                or not 0<len(issue_ids)<=500 or any(not isinstance(i,str) for i in issue_ids) or len(set(issue_ids))!=len(issue_ids)):
+            raise ValueError('invalid_exclusion_request')
+        with self.lock:
+            if self._busy(): raise ReviewConflict('market_update_running')
+            try:
+                with instance_lock(self.root/'runtime/dashboard-daily'),instance_lock(self.root/'runtime'),instance_lock(self.path.parent):
+                    self.cached=None
+                    current=self._review()
+                    if current['review_id']!=review_id: raise ReviewConflict('exclusion_review_changed')
+                    available={r['id']:r for r in current['issues']}
+                    if any(i not in available for i in issue_ids): raise ValueError('invalid_exclusion_selection')
+                    value,_=registry(self.path)
+                    if value['jobs'] and pending_job(value['jobs'][-1],current['source_run']):
+                        raise ReviewConflict('market_update_running')
+                    if any(not retry_permissions(available[i],current['sessions'],value['jobs'])[provider] for i in issue_ids):
+                        raise ReviewConflict('provider_retry_consumed_or_out_of_order')
+                    job_id=uuid4().hex
+                    value['jobs'].append(dict(id=job_id,kind='recollect',provider=provider,state='approved',approved_at=now(),
+                        count=len(issue_ids),source_run=current['source_run'],review_id=review_id,
+                        issues=[available[i] for i in issue_ids],retry_keys=[retry_key(available[i],current['sessions']) for i in issue_ids]))
+                    save(self.path,value)
+            except BusyError: raise ReviewConflict('market_update_running') from None
             self._start(job_id)
             return self.status()
 
@@ -331,7 +398,13 @@ def update_job(path, job_id, **fields):
 
 
 def apply_job(job_id):
-    """Child process: no network, same daily/runtime locks as normal collection."""
+    """Explicit provider retry or offline exclusion; shared daily/runtime locks."""
+    value,_=registry()
+    job=value["jobs"][-1]
+    if job["id"]!=job_id: raise ReviewConflict("exclusion_job_changed")
+    if job.get("kind")=="recollect":
+        from market_provider_retry import apply_retry
+        return apply_retry(ROOT,REGISTRY,job_id)
     import socket
     from unittest.mock import patch
     import daily_market

@@ -218,12 +218,17 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                     if query or not isinstance(body,dict):
                         return self.send(b'{"error":"invalid_exclusion_request"}', status=400)
                     action = body.get('action')
-                    if not (action == 'approve' and set(body)=={'action','review_id','issue_ids'} or action == 'retry' and set(body)=={'action','job_id'} and isinstance(body['job_id'],str)):
+                    if not (action == 'approve' and set(body)=={'action','review_id','issue_ids'} or action == 'retry' and set(body)=={'action','job_id'} and isinstance(body['job_id'],str) or action == 'recollect' and set(body)=={'action','review_id','issue_ids','provider'} and body['provider'] in ('toss','nh')):
                         return self.send(b'{"error":"invalid_exclusion_request"}', status=400)
+                    if action=='recollect' and offline:
+                        return self.send(b'{"error":"offline_collection_disabled"}', status=403)
                     if not exclusion_review:
                         return self.send(b'{"error":"exclusion_review_unavailable"}', status=503)
                     try:
-                        result = exclusion_review.approve(body['review_id'],body['issue_ids']) if action=='approve' else exclusion_review.retry(body['job_id'])
+                        if action=='recollect':
+                            result=exclusion_review.recollect(body['review_id'],body['issue_ids'],body['provider'])
+                        else:
+                            result = exclusion_review.approve(body['review_id'],body['issue_ids']) if action=='approve' else exclusion_review.retry(body['job_id'])
                     except ReviewConflict:
                         return self.send(b'{"error":"exclusion_review_changed"}', status=409)
                     except ValueError as exc:

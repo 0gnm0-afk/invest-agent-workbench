@@ -75,6 +75,9 @@ class Inventory(unittest.TestCase):
 
 class ReviewFixture(unittest.TestCase):
     def setUp(self):
+        # These legacy tests exercise approval/publication after provider retries.
+        guard=patch.object(m,'retry_permissions',return_value={'toss':False,'nh':False,'exclude':True,'attempted':['toss','nh']})
+        guard.start();self.addCleanup(guard.stop)
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.root=Path(self.temp.name);self.run=saved(self.root,'before')
         self.calls=[];self.views=[];self.services=[]

@@ -207,7 +207,7 @@ def completed_cap(listing, bar, payload, exchange):
             'market_cap_price_basis':'nh_dated_regular_session_close'}
 
 
-def recover(source, output, config, *, evidence_root=None, prior_source=None):
+def recover(source, output, config, *, evidence_root=None, prior_source=None, only_keys=None, allow_auto_exclusions=True):
     source, output = Path(source).resolve(), Path(output).resolve()
     if output.exists():
         raise ValueError('nh_fallback_output_already_exists')
@@ -222,6 +222,9 @@ def recover(source, output, config, *, evidence_root=None, prior_source=None):
         if cap_missing(row) and not str(row.get('market_cap_quality','')).startswith('unavailable'):
             row['market_cap_quality'] = 'unavailable_market_cap'
     targets = fallback_targets(original)
+    if only_keys is not None:
+        targets = [t for t in targets if (t["market"],t["symbol"]) in only_keys]
+    retained_reports = [t for t in original.get("nh_fallback",{}).get("results",[]) if only_keys is not None and (t["market"],t["symbol"]) not in only_keys]
     inputs = {}
     us_path, kr_path = Path(config['nh_us_master']), Path(config['nh_kr_master'])
     us_master = load_checked(us_path,config['nh_us_master_sha256'])
@@ -329,7 +332,7 @@ def recover(source, output, config, *, evidence_root=None, prior_source=None):
         except (Exception, SystemExit) as exc:
             report.update(state='observed_not_adopted' if report.get('nh_price_observed') else 'unavailable',
                           reason=str(exc) if isinstance(exc,(ValueError,NHMarketError)) else type(exc).__name__+': '+str(exc))
-        if report['state'] != 'adopted' and policy.get('dual_provider',{}).get('enabled'):
+        if allow_auto_exclusions and report['state'] != 'adopted' and policy.get('dual_provider',{}).get('enabled'):
             reason = report.get('reason','')
             missing_prices = {'stale_or_invalid_last_session','no_completed_session_bars','historical_price_gaps','market_http_400','market_http_404'}
             absent = {'market_http_400','market_http_404','nh_period_empty','nh_period_completed_session_missing','nh_period_history_incomplete'}
@@ -374,7 +377,7 @@ def recover(source, output, config, *, evidence_root=None, prior_source=None):
         original['providers'][market] = 'Toss adjusted candles; qualified NH PLUG period for adopted rows'
     original['nh_fallback'] = {'attempted':len(targets),'adopted':len(recovered)+len(metadata_recovered),
                                'observed_not_adopted':sum(r['state']=='observed_not_adopted' for r in results),
-                               'original_source':str(source),'excluded':len(new_exclusions),'results':results}
+                               'original_source':str(source),'excluded':len(new_exclusions),'results':retained_reports+results}
     if new_exclusions:
         frozen = {**policy,'records':policy['records']+new_exclusions}
         write_json(output/'scope-policy.json',frozen)
