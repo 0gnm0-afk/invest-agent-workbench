@@ -16,6 +16,8 @@ from analysis_collaboration import Collaboration, OPS as COLLABORATION_OPS, Forb
 
 from price_events import build as price_events, validate_research
 
+from analysis_report import readable, FOLLOWUP
+
 QUALITATIVE_SKILL = 'stock-qualitative-analysis'
 
 
@@ -107,20 +109,20 @@ class AnalysisService:
                     "저장 자료의 기준일·회계기간·결측·실패와 이전 성공 자료 사용 여부를 보존하고, 스킬에 따라 추가 조사한 공식 공시·IR·뉴스는 "
                     "출처와 공개일을 별도로 기록해줘. 저장 입력을 실시간 자료로 부르거나 과거 입력에 새 근거가 있었던 것처럼 쓰지 마.\n"
                     f"완성한 보고서는 analysis_save_record(analysis_key='{cid}', snapshot_id=고정한_ID, kind='report', author='llm')로 "
-                    "본문·출처·LLM 의견을 명시 저장해줘. 사용자 발언을 만들지 말고 user_response에는 실제 확인된 발언만 넣어줘. "
-                    "저장 성공 응답의 기록 ID와 links.dashboard_url을 확인한 뒤 핵심 결과와 복귀 링크를 알려줘. "
+                    "해석형 본문과 주장 가까이 연결한 출처를 저장해줘. 첫머리는 기업의 변화와 판단 쟁점으로 시작하고 핵심 숫자의 사업/이익/현금/주당 가치 의미와 반대 근거를 설명해줘. 주봉 사건은 이전 추세·기대→새 정보→후속 가격→전환/강화/일시반응 해석을 연결하고 전체 국면을 종합해줘. 본문에 담은 해석을 llm_opinion에 중복하지 마. 사용자 발언을 만들지 말고 user_response에는 실제 확인된 발언만 넣어줘. "
+                    "저장 성공의 ID와 history 일치를 확인해줘. "
                     "저장 실패를 완료로 표시하지 마. 작도는 없어도 되며 이 정성분석에서 작도 제안·계좌 조회·주문·위험 기준 변경은 하지 마. "
-                    f"분석 키: {cid}\n대시보드: {dashboard}")
+                    + FOLLOWUP + f"분석 키: {cid}\n대시보드: {dashboard}")
         resume = (f"투자 워크벤치 {cid} ({case['stock_key']})의 후속 논의를 이어가줘. "
                   "프로젝트 AGENTS의 후속 협업 규칙을 읽고 analysis_collaboration_read로 현재 판단·채택한 정확한 계획 버전·미정 질문·원문 참조를 먼저 확인해줘. "
-                  "기존 보고서는 기업 조사 근거다. 7항목을 한꺼번에 묻지 말고 차트·보유 이유·반증·대응에서 이번 판단을 바꾸는 모호함만 자연스럽게 논의해줘. "
+                  "analysis_history에서 최신 보고서 본문과 원 출처를 읽고 analysis_report_document로 현재 세션에 열 문서를 얻어줘. 기존 근거를 재사용하며 새로운 사실이 필요한 부분만 조사해줘. 기술적인 처리 내역부터 설명하지 말고 기업의 변화·가격 국면·핵심 쟁점과 반대 근거부터 해석해줘. 7항목을 한꺼번에 묻지 말고 차트·보유 이유·반증·대응에서 이번 판단을 바꾸는 모호함만 자연스럽게 논의해줘. "
                   "새 조사 필요 때만 stock-qualitative-analysis를 사용하고 미정 판단을 대신 채택하지 마. "
                   "확보한 발언 원문과 합의·미정을 analysis_save_discussion으로 저장하고 계획은 analysis_save_plan으로 초안 버전을 남겨줘. "
                   "사용자 직접 작도 또는 analysis_propose의 박스·평행 채널·손익비 초안을 활용하고 저장/채택/실제 체결을 구분해줘. "
                   "가격 경고는 트레일링·MA5와 별도 보유/매수 시나리오의 최신 완료 거래일 종가 판정이다. 접근 기본값은 조정 가능한 0.5×ATR14이며 기울어진 선은 해당 거래일 값으로 비교한다. "
                   "감시 연결은 사용자가 화면에서 확정 시나리오와 저장 작도·허용폭을 확인한다. 저장된 작도 수정은 활성 참조만 갱신하며 당시 snapshot/계획 원본은 보존한다. 폐기한 구 위험 계산 도구는 복구하지 마. "
                   "snapshot_id와 expected_revision을 고정하며 충돌은 재조회해 조정한다. 저장 뒤 ID·버전·재조회 일치와 복귀 링크를 확인해줘. "
-                  f"계획 채택은 사용자가 화면에서 정확한 버전을 확인한다. 대시보드: {dashboard}")
+                  + FOLLOWUP + f"계획 채택은 사용자가 화면에서 정확한 버전을 확인한다. 대시보드: {dashboard}")
         return {'analysis_key':cid,'dashboard_url':dashboard,'reopen_command':f'.\\analysis.ps1 -AnalysisKey {cid}',
                 'resume_prompt':resume, 'resume_codex_url':'codex://new?'+urlencode({'path':str(self.root),'prompt':resume}),
                 'copy_text':f'분석건 {cid}\n이 분석건의 현재 차트를 다시 봐줘.\n{dashboard}\n포트 변경/서버 종료 시 워크벤치에서 .\\analysis.ps1 -AnalysisKey {cid}',
@@ -219,12 +221,12 @@ class AnalysisService:
             for v in s.values(): short(v,2000)
         research=validate_research(a.get('event_research',[]),snap.get('price_events'))
         iid=ident('it_'); path=self.root/'judgments'/'analyses'/case['id']/(iid+'.md')
-        text=f"---\nanalysis_key: {case['id']}\nrecord_id: {iid}\nsnapshot_id: {snap['id']}\ntest_record: {str(case['test_record']).lower()}\n---\n\n# {title}\n\n{'[연결 검증용 — 실제 투자 분석 아님]' if case['test_record'] else '[명시 저장 기록]'}\n\n{body}\n\n## LLM 의견\n{opinion}\n\n## 사용자 응답\n"+'\n'.join(f'- {k}: {v}' for k,v in user.items())+'\n\n## 출처\n'+ '\n'.join(f"- {s.get('label','')}: {s.get('url','')} (기준 {s.get('as_of','미확인')})" for s in sources)+f"\n\n입력 SHA-256: {digest(snap)}\n작도 revision: {snap['workspace']['revision']}\n"
-        if research: text+='\n## 사건 조사 상태\n\n```json\n'+packed(research)+'\n```\n'
         value={'event_research':research,'id':iid,'case_id':case['id'],'kind':kind,'snapshot_id':snap['id'],'created_at':now(),'title':title,'body':body,'author':a['author'],
                'llm_opinion':opinion,'user_response':user,'sources':sources,'test_record':case['test_record'],
                'authority':'narrative_only_not_verified_identity_or_plan_adoption',
-               'markdown_path':str(path.relative_to(self.root)).replace('\\','/'),'markdown_sha256':hashlib.sha256(text.encode()).hexdigest()}
+               'markdown_path':str(path.relative_to(self.root)).replace('\\','/'),'reading_format':2}
+        text=readable(value,digest(snap),snap['workspace']['revision'])
+        value['markdown_sha256']=hashlib.sha256(text.encode()).hexdigest()
         path.parent.mkdir(parents=True,exist_ok=True)
         with path.open('x',encoding='utf-8',newline='\n') as f: f.write(text)
         try:
@@ -233,6 +235,26 @@ class AnalysisService:
             path.unlink(missing_ok=True)
             raise
         return value
+
+    def report_document(self, cid, record_id=None):
+        records=[r for r in self.rows('analysis_items',cid) if r['kind'] in ('report','review')]
+        record=next((r for r in records if r['id']==record_id),None) if record_id else (records[-1] if records else None)
+        if record is None: raise ValueError('report_not_found')
+        original=(self.root/record['markdown_path']).resolve()
+        if not original.is_relative_to((self.root/'judgments'/'analyses').resolve()): raise ValueError('invalid_report_path')
+        if hashlib.sha256(original.read_bytes()).hexdigest()!=record['markdown_sha256']: raise ValueError('report_integrity_failed')
+        path=original
+        if record.get('reading_format')!=2:
+            path=original.with_suffix('.reading-v2.md')
+            rendered=readable(record)
+            if not path.exists():
+                try:
+                    with path.open('x',encoding='utf-8',newline='\n') as f:f.write(rendered)
+                except FileExistsError:pass
+            if path.read_text(encoding='utf-8')!=rendered: raise ValueError('reading_copy_integrity_failed')
+        return dict(record_id=record['id'],snapshot_id=record['snapshot_id'],path=str(path),original_path=str(original),
+                    open_in_codex=dict(target=dict(type='file',path=str(path)),placement='right'),
+                    next_step=FOLLOWUP)
 
     def holding(self, case, a):
         snap=self.snapshot(case['id'],a['snapshot_id'])
@@ -289,6 +311,7 @@ class AnalysisService:
             return {'links':[{**i,'stock_key':cases[i['case_id']]['stock_key'],'links':self.links(cases[i['case_id']],origin)} for i in items if i['kind']=='holding_link' and (not a.get('account_alias') or i['account_alias']==a['account_alias'])]}
         case=self.case(a['analysis_key']); cid=case['id']
         if op=='detail': return self.detail(cid,origin)
+        if op=='report_document': return self.report_document(cid,a.get('record_id'))
         if op=='context':
             case['context']=context(a['context'])
             with closing(self.store.connect()) as db,db: db.execute('UPDATE analysis_cases SET payload=? WHERE id=?',(packed(case),cid))
@@ -351,6 +374,8 @@ class AnalysisService:
             raise ValueError('invalid_refresh_mode')
         if op=='propose': return self.proposal(case,a['snapshot_id'],a['drawings'],a['rationale'])
         if op=='decide': return self.decide(case,a['proposal_id'],a['action'],a.get('reason',''),a.get('drawings'))
-        if op=='record': return {**self.record(case,a),'links':self.links(case,origin)}
+        if op=='record':
+            record=self.record(case,a)
+            return {**record,'links':self.links(case,origin),'document':self.report_document(cid,record['id'])}
         if op=='holding': return self.holding(case,a)
         raise ValueError('unknown_analysis_operation')

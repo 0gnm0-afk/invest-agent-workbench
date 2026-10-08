@@ -73,7 +73,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
             except ValueError:
                 return self.send(b'{"error":"invalid_timeframe"}', status=400)
             if path == '/health':
-                return self.send(json.dumps({'app': 'invest-workbench', 'token': token, 'analysis_protocol': 1, 'price_events_protocol': 1, 'pivot_rule': 'weekly-swing-2', 'collaboration_protocol': 1, 'scenario_monitor_protocol': 1, 'offline': offline, 'workspace': str(ROOT)}).encode(), cookie=self.headers.get('Sec-Fetch-Site') == 'same-origin')
+                return self.send(json.dumps({'app': 'invest-workbench', 'token': token, 'analysis_protocol': 1, 'price_events_protocol': 1, 'pivot_rule': 'weekly-swing-2', 'collaboration_protocol': 1, 'scenario_monitor_protocol': 1, 'report_reading_protocol': 2, 'offline': offline, 'workspace': str(ROOT)}).encode(), cookie=self.headers.get('Sec-Fetch-Site') == 'same-origin')
             if path == '/api/daily-update':
                 return self.send(json.dumps(daily_status() if daily_status else {'enabled':False}, ensure_ascii=False).encode('utf-8'))
             if path == '/api/market-exclusions':
@@ -150,7 +150,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                     if excluded:
                         value = {**value,'state':'excluded','reason':excluded['reason'],'bars':[]}
                 return self.send(json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8'))
-            names = {'/chart-events.js':'chart-events.js', '/trailing.js':'trailing.js', '/market-exclusions.js':'market-exclusions.js', '/market-exclusions.css':'market-exclusions.css', '/risk-workbench.js': 'risk-workbench.js', '/risk-workbench.css': 'risk-workbench.css', '/collaboration.js': 'collaboration.js', '/analysis.js': 'analysis.js', '/': 'index.html', '/app.js': 'app.js', '/tooltips.js': 'tooltips.js', '/financial-focus.js': 'financial-focus.js', '/financial-focus.css': 'financial-focus.css', '/financials.css': 'financials.css', '/style.css': 'style.css',
+            names = {'/report-reader.js':'report-reader.js','/report-reader.css':'report-reader.css','/chart-events.js':'chart-events.js', '/trailing.js':'trailing.js', '/market-exclusions.js':'market-exclusions.js', '/market-exclusions.css':'market-exclusions.css', '/risk-workbench.js': 'risk-workbench.js', '/risk-workbench.css': 'risk-workbench.css', '/collaboration.js': 'collaboration.js', '/analysis.js': 'analysis.js', '/': 'index.html', '/app.js': 'app.js', '/tooltips.js': 'tooltips.js', '/financial-focus.js': 'financial-focus.js', '/financial-focus.css': 'financial-focus.css', '/financials.css': 'financials.css', '/style.css': 'style.css',
                      '/scenario-monitor.js':'scenario-monitor.js', '/scenario-monitor.css':'scenario-monitor.css',
                      '/stock-chart.js': 'stock-chart.js', '/drawing-tools.js': 'drawing-tools.js', '/chart-workspace.js': 'chart-workspace.js', '/chart-tools.css': 'chart-tools.css', '/format.js': 'format.js', '/charts.js': 'charts.js', '/workbench.png': 'workbench.png',
                      '/vendor/lightweight-charts.js': 'vendor/lightweight-charts.js',
