@@ -40,9 +40,22 @@ window.WorkbenchCharts = (() => {
       if (x < 0 || x >= chart.timeScale().width() || y < 0 || y >= chart.panes()[0].getHeight()) return;
       series.priceScale().applyOptions({autoScale: false});
     }
+    let previous=chart.timeScale().getVisibleLogicalRange();
+    function visibleRangeChanged(next) {
+      if(next&&previous&&Math.abs((next.to-next.from)-(previous.to-previous.from))>1e-6){
+        series.priceScale().applyOptions({autoScale:true});
+      }
+      previous=next;
+    }
+    function zoom(e) {
+      const rect=el.getBoundingClientRect(),x=e.clientX-rect.left,y=e.clientY-rect.top;
+      if(x>=0&&x<chart.timeScale().width()&&y>=0&&y<chart.panes()[0].getHeight())series.priceScale().applyOptions({autoScale:true});
+    }
+    chart.timeScale().subscribeVisibleLogicalRangeChange(visibleRangeChanged);
+    el.addEventListener('wheel',zoom,{capture:true,passive:true});
     // Capture runs before the chart's mouse handler; it never consumes the event.
     el.addEventListener('pointerdown', beginPan, true);
-    return () => el.removeEventListener('pointerdown', beginPan, true);
+    return () => {el.removeEventListener('pointerdown',beginPan,true);el.removeEventListener('wheel',zoom,true);chart.timeScale().unsubscribeVisibleLogicalRangeChange(visibleRangeChanged);};
   }
   function lineData(rows, key, scale = 1) { return rows.map(r => ({time: r.date, ...(r[key] == null ? {} : {value: r[key] * scale})})); }
   return {create, clear, remove, lineData, enableFreePan};

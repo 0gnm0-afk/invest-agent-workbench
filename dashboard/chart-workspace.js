@@ -27,6 +27,9 @@ window.WorkbenchWorkspace = (() => {
       host.innerHTML='<div class="notice error" role="alert">점선 연장 손잡이를 저장하려면 대시보드를 다시 실행하세요. 기존 작도는 저장돼 있습니다.</div>';
       return;
     }
+    if(packet.average_limit!==7||!packet.extension_kinds?.includes('riskreward')||!packet.extension_kinds?.includes('box')){
+      host.innerHTML='<div class="notice error" role="alert">SMA 7개와 박스·손익비 연장을 사용하려면 대시보드를 다시 실행하세요. 기존 설정과 작도는 보존돼 있습니다.</div>';return;
+    }
     let anchorBars=DrawingTools.withAnchorTimes(bars,frame==='1d'?bars:[],frame),anchorWarning='';
     if(frame!=='1d'){
       try{
@@ -49,7 +52,7 @@ window.WorkbenchWorkspace = (() => {
       <button data-tool="riskreward" title="손익비: 진입·손절·목표 3점" aria-label="손익비"><span aria-hidden="true">▥</span><span>손익비</span></button>
       <span class="tool-divider"></span><button data-action="snap" aria-pressed="${candleSnapEnabled}" class="${candleSnapEnabled?'selected':''}" title="봉의 시가·고가·저가·종가 중 가까운 가격과 실제 발생일에 붙습니다. Alt로 자유 선택.">봉 스냅</button><button data-action="undo" title="Ctrl+Z">실행 취소</button><button data-action="redo" title="Ctrl+Shift+Z">다시 실행</button><button data-action="delete">선택 삭제</button><button data-action="save" class="primary">저장</button>
       <span class="save-state" role="status" aria-live="polite"></span></div>
-      <p class="drawing-hint"></p><div class="chart-controls"><details class="averages-control"><summary>이동평균선 · ${frameName} SMA</summary><div class="average-list"></div><form class="average-add"><label>추가 기간 <input name="period" type="number" min="1" max="500" value="30" required aria-label="추가 SMA 기간"></label><button>추가</button><small>1~500봉 · 최대 6개 · 종가 기준</small></form><p class="average-status" role="status"></p></details><details class="drawing-control"><summary>작도 목록·정밀 편집 <span class="drawing-count"></span></summary><div class="drawing-list"></div><div class="drawing-editor"></div></details></div>`;
+      <p class="drawing-hint"></p><div class="chart-controls"><details class="averages-control"><summary>이동평균선 · ${frameName} SMA</summary><div class="average-list"></div><form class="average-add"><label>추가 기간 <input name="period" type="number" min="1" max="500" value="30" required aria-label="추가 SMA 기간"></label><button>추가</button><small>1~500봉 · 최대 7개 · 종가 기준</small></form><p class="average-status" role="status"></p></details><details class="drawing-control"><summary>작도 목록·정밀 편집 <span class="drawing-count"></span></summary><div class="drawing-list"></div><div class="drawing-editor"></div></details></div>`;
     const q=s=>host.querySelector(s),qa=s=>host.querySelectorAll(s);
     if(!packet.drawing_kinds?.includes('riskreward')){q('[data-tool="riskreward"]').disabled=true;q('[data-tool="riskreward"]').title='손익비 저장을 사용하려면 대시보드를 새로 실행하세요.';}
     const pointLabel=(d,i)=>d.kind==='riskreward'?['진입','손절','목표'][i]:d.kind==='channel'?['기준선 시작','기준선 끝','평행선'][i]:'점 '+(i+1);
@@ -58,7 +61,6 @@ window.WorkbenchWorkspace = (() => {
       const day=hoverTime||bars.at(-1).date;
       smaLegend.replaceChildren();
       if(hoverTime&&hoverTime>bars.at(-1).date){smaLegend.textContent='SMA는 마지막 실제 봉까지 표시합니다.';return;}
-      const caption=document.createElement('small');caption.textContent=(hoverTime?'선택 봉 ':'최근 봉 ')+day;smaLegend.append(caption);
       for(const a of state.averages.filter(a=>a.visible)) {
         const value=averageValues[a.period]?.get(day),span=document.createElement('span');
         span.style.color=a.color;span.textContent='SMA'+a.period+': '+(value==null?'미준비':WorkbenchFormat.money(value,currency));smaLegend.append(span);
@@ -80,7 +82,7 @@ window.WorkbenchWorkspace = (() => {
     function renderEditor() {
       const d=state.drawings.find(x=>x.id===selected),editor=q('.drawing-editor');
       if(!d){editor.innerHTML='<small>차트의 도형이나 목록을 선택하면 날짜·가격·색상을 수정할 수 있습니다.</small>';return;}
-      editor.innerHTML=`<form class="point-form"><strong>${DrawingTools.labels[d.kind]}</strong><div class="point-grid">${d.points.map((p,i)=>`<label>${pointLabel(d,i)} 날짜<input type="date" name="time${i}" value="${safe(p.time)}" required></label><label>${pointLabel(d,i)} 가격 (${currency})<input type="text" inputmode="decimal" name="price${i}" value="${WorkbenchFormat.money(p.price,currency)}" required></label>`).join('')}</div><div class="editor-style"><label>선 색상<input type="color" name="color" value="${d.color}"></label><label>굵기<select name="width">${[1,2,3,4].map(n=>`<option ${d.width===n?'selected':''}>${n}</option>`).join('')}</select></label>${['trend','channel'].includes(d.kind)?`<label><input type="checkbox" name="extend" ${d.extend?'checked':''}>점선 연장 · 양쪽 사각 손잡이로 길이 조절</label>`:''}<button>수정 적용</button></div><p class="point-error" role="alert"></p></form>${d.kind==='measure'?`<p class="measurement-result">${safe(DrawingTools.measure(d.points,drawingBars,currency,frame))}</p>`:''}${d.kind==='riskreward'?`<p class="measurement-result">${safe(DrawingTools.riskReward(d.points,currency)?.label)} · 1주 기준 가격 거리, 수수료·슬리피지 제외</p>`:''}`;
+      editor.innerHTML=`<form class="point-form"><strong>${DrawingTools.labels[d.kind]}</strong><div class="point-grid">${d.points.map((p,i)=>`<label>${pointLabel(d,i)} 날짜<input type="date" name="time${i}" value="${safe(p.time)}" required></label><label>${pointLabel(d,i)} 가격 (${currency})<input type="text" inputmode="decimal" name="price${i}" value="${WorkbenchFormat.money(p.price,currency)}" required></label>`).join('')}</div><div class="editor-style"><label>선 색상<input type="color" name="color" value="${d.color}"></label><label>굵기<select name="width">${[1,2,3,4].map(n=>`<option ${d.width===n?'selected':''}>${n}</option>`).join('')}</select></label>${['trend','channel','box','riskreward'].includes(d.kind)?`<label><input type="checkbox" name="extend" ${(d.extend||(['box','riskreward'].includes(d.kind)&&!d.extension))?'checked':''}>점선 연장 · 양쪽 사각 손잡이로 길이 조절</label>`:''}<button>수정 적용</button></div><p class="point-error" role="alert"></p></form>${d.kind==='measure'?`<p class="measurement-result">${safe(DrawingTools.measure(d.points,drawingBars,currency,frame))}</p>`:''}${d.kind==='riskreward'?`<p class="measurement-result">${safe(DrawingTools.riskReward(d.points,currency)?.label)} · 1주 기준 가격 거리, 수수료·슬리피지 제외</p>`:''}`;
       editor.querySelector('form').onsubmit=e=>{
         e.preventDefault();const f=new FormData(e.target),next=clone(d);
         next.points=d.points.map((p,i)=>({time:f.get('time'+i),price:f.get('price'+i)===WorkbenchFormat.money(p.price,currency)?p.price:Number(String(f.get('price'+i)).replaceAll(',',''))}));
@@ -88,7 +90,7 @@ window.WorkbenchWorkspace = (() => {
         if(['trend','channel'].includes(d.kind)&&next.points[0].time===next.points[1].time){q('.point-error').textContent='첫 두 점은 서로 다른 날짜여야 합니다.';return;}
         if(d.kind==='riskreward'&&!DrawingTools.riskReward(next.points,currency)){q('.point-error').textContent='손절·목표는 진입가의 반대편에 두고, 서로 다른 날짜를 포함해야 합니다.';return;}
         next.color=f.get('color');next.width=Number(f.get('width'));next.extend=f.has('extend');
-        if(['trend','channel'].includes(next.kind))next.extension=DrawingTools.extensionBounds(next,drawingBars,frame);
+        if(['trend','channel','box','riskreward'].includes(next.kind))next.extension=DrawingTools.extensionBounds(next,drawingBars,frame);
         commit({...state,drawings:state.drawings.map(x=>x.id===d.id?next:x)});
       };
     }
@@ -101,7 +103,7 @@ window.WorkbenchWorkspace = (() => {
     }
     q('.average-add').onsubmit=e=>{
       e.preventDefault();const n=Number(new FormData(e.target).get('period'));
-      if(!Number.isInteger(n)||n<1||n>500||state.averages.length>=6||state.averages.some(a=>a.period===n)){q('.average-status').textContent='중복 없이 1~500봉, 최대 6개를 입력하세요.';return;}
+      if(!Number.isInteger(n)||n<1||n>500||state.averages.length>=7||state.averages.some(a=>a.period===n)){q('.average-status').textContent='중복 없이 1~500봉, 최대 7개를 입력하세요.';return;}
       commit({...state,averages:[...state.averages,{period:n,color:'#cc6963',width:2,visible:true}]});renderAverages();loadAverages();
     };
     async function loadAverages() {
@@ -112,7 +114,7 @@ window.WorkbenchWorkspace = (() => {
         const r=await fetch('/api/averages/'+key+'?periods='+requested.map(a=>a.period).join(',')+'&timeframe='+frame);if(!r.ok)throw Error();const values=await r.json();
         if(dead||version!==averageVersion)return;
         for(const a of requested) {
-          const ref=chart.addSeries(LightweightCharts.LineSeries,{color:a.color,lineWidth:a.width,title:'',priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false,priceFormat:{type:'custom',minMove:currency==='KRW'?1:.01,formatter:v=>WorkbenchFormat.money(v,currency)}});
+          const ref=chart.addSeries(LightweightCharts.LineSeries,{color:a.color,lineWidth:a.width,title:'',priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false,autoscaleInfoProvider:()=>null,priceFormat:{type:'custom',minMove:currency==='KRW'?1:.01,formatter:v=>WorkbenchFormat.money(v,currency)}});
           ref.setData(values[a.period]);averageRefs.push(ref);averageValues[a.period]=new Map(values[a.period].map(p=>[p.time,p.value]));
         }
         renderSmaLegend();
@@ -152,7 +154,7 @@ window.WorkbenchWorkspace = (() => {
       else if(e.key==='Delete'){e.preventDefault();remove();}
     }
     function beforeUnload(e){if(dirty()){e.preventDefault();e.returnValue='';}}
-    chart=WorkbenchCharts.create(plot,[{type:'candles',currency,label:currency,options:{title:''},data:bars.map(b=>({time:b.date,open:b.open,high:b.high,low:b.low,close:b.close})).concat(drawingBars.slice(bars.length).map(b=>({time:b.date})))},{type:'volume',label:'거래량',pane:1,data:bars.map(b=>({time:b.date,...(b.volume==null?{}:{value:b.volume}),color:b.close>=b.open?'#298463':'#994653'})),options:{title:'',priceFormat:{type:'volume'}}}],{height:plot.clientHeight,headroom:.22,lastBars:126,onReady:(c,refs)=>{price=refs[0].ref;}});
+    chart=WorkbenchCharts.create(plot,[{type:'candles',currency,label:currency,options:{title:''},data:bars.map(b=>({time:b.date,open:b.open,high:b.high,low:b.low,close:b.close})).concat(drawingBars.slice(bars.length).map(b=>({time:b.date})))},{type:'volume',label:'거래량',pane:1,data:bars.map(b=>({time:b.date,...(b.volume==null?{}:{value:b.volume}),color:b.close>=b.open?'#298463':'#994653'})),options:{title:'',priceFormat:{type:'volume'}}}],{height:plot.clientHeight,headroom:.12,lastBars:126,onReady:(c,refs)=>{price=refs[0].ref;}});
     chart.timeScale().setVisibleLogicalRange({from:Math.max(0,bars.length-126),to:bars.length-1+25});
     const detachPan=WorkbenchCharts.enableFreePan(plot,chart,price);
     const detachHoldings=window.WorkbenchTrailing?.attachStock({series:price,host:plot.parentElement,market,symbol,currency,isCurrent});
@@ -161,13 +163,13 @@ window.WorkbenchWorkspace = (() => {
       if(!legend)return;
       const b=byDate.get(day)||bars.at(-1);
       legend.replaceChildren();
-      if(day&&day>bars.at(-1).date){legend.textContent=day+' · 미래 작도 공간 · 가격 자료 없음';return;}
+      if(day&&day>bars.at(-1).date){legend.textContent=day+' · 미래 작도 공간 · 가격 자료 없음';legend.append(smaLegend);return;}
       const date=document.createElement('strong');date.textContent=b.date+' · '+frameName;legend.append(date);
       for(const [label,key] of [['O','open'],['H','high'],['L','low'],['C','close']]){const part=document.createElement('span');part.textContent=label+' '+WorkbenchFormat.money(b[key],currency);part.className=b.close>=b.open?'quote-up':'quote-down';legend.append(part);}
-      const volume=document.createElement('span');volume.textContent='Vol '+(b.volume==null?'결측':b.volume.toLocaleString('ko-KR'));legend.append(volume);
+      const volume=document.createElement('span');volume.textContent='Vol '+(b.volume==null?'결측':b.volume.toLocaleString('ko-KR'));legend.append(volume);legend.append(smaLegend);
     }
     renderPriceLegend(bars.at(-1).date);
-    plot.append(smaLegend);renderSmaLegend();
+    if(!legend)plot.append(smaLegend);renderSmaLegend();
     chart.subscribeCrosshairMove(p=>{
       hoverTime=p.time?(typeof p.time==='string'?p.time:`${p.time.year}-${String(p.time.month).padStart(2,'0')}-${String(p.time.day).padStart(2,'0')}`):null;
       renderSmaLegend();renderPriceLegend(hoverTime);

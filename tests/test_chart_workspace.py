@@ -41,8 +41,53 @@ class Workspaces(unittest.TestCase):
             with self.subTest(extension=extension):
                 state=defaults();state['drawings']=[dict(drawing(),extension=extension)]
                 with self.assertRaises(ValueError):validate(state)
-        state=defaults();state['drawings']=[dict(drawing('box'),extension={'left':'2026-09-01','right':'2026-10-10'})]
+        state=defaults();state['drawings']=[dict(drawing('measure'),extension={'left':'2026-09-01','right':'2026-10-10'})]
         with self.assertRaises(ValueError):validate(state)
+    def test_seven_defaults_sma_and_limit(self):
+        self.assertEqual([a['period'] for a in defaults()['averages']], [5,10,20,50,100,150,200])
+        self.assertTrue(all(a['visible'] for a in defaults()['averages']))
+        bars=[{'date':str(i),'close':float(i+1)} for i in range(200)]
+        result=moving_averages({'bars':bars},[5,10,20,50,100,150,200])
+        self.assertAlmostEqual(result['200'][-1]['value'],100.5)
+        self.assertNotIn('value',result['200'][-2])
+        with self.assertRaises(ValueError):moving_averages({'bars':bars},[5,10,20,50,100,150,200,250])
+        with self.assertRaises(ValueError):validate({**defaults(),'averages':defaults()['averages']+[dict(defaults()['averages'][0],period=250)]})
+
+    def test_six_preset_upgrade_is_once_preserves_custom_styles_and_history(self):
+        import sqlite3
+        state=defaults();state['averages'].pop();state['averages'][0].update(color='#123456',width=4,visible=False)
+        state['drawings']=[drawing('box')]
+        self.store.shared('KR:SIX',revision=0,state=state)
+        original=copy.deepcopy(state)
+        packet=self.store.shared('KR:SIX')
+        self.assertEqual(packet['revision'],2)
+        self.assertEqual(packet['state']['averages'][:-1],original['averages'])
+        self.assertEqual(packet['state']['averages'][-1]['period'],200)
+        self.assertEqual(packet['state']['drawings'],original['drawings'])
+        self.assertEqual(self.store.shared('KR:SIX')['revision'],2)
+        with self.assertRaises(Conflict):self.store.shared('KR:SIX',revision=1,state=original)
+        from contextlib import closing
+        with closing(sqlite3.connect(self.path)) as db:
+            payload=json.loads(db.execute('SELECT payload FROM chart_workspace_versions WHERE identity=? AND revision=1',('KR:SIX',)).fetchone()[0])
+        self.assertEqual(payload['averages']['1d'],original['averages'])
+        # Once upgraded, an explicit later deletion of SMA200 stays deleted.
+        packet['state']['averages'].pop()
+        self.store.shared('KR:SIX',revision=2,state=packet['state'])
+        self.assertEqual(self.store.shared('KR:SIX')['state']['averages'],original['averages'])
+        custom=copy.deepcopy(original);custom['averages'][0]['period']=7
+        self.store.shared('KR:CUSTOM',revision=0,state=custom)
+        self.assertEqual(self.store.shared('KR:CUSTOM')['state'],custom)
+
+    def test_box_and_rr_extensions_shared_preserve_all_anchors(self):
+        box=dict(drawing('box'),extend=True,extension={'left':'2026-09-01','right':'2026-10-10'})
+        rr=dict(drawing('channel','rr'),kind='riskreward',extend=True,points=[{'time':'2026-09-21','price':100},{'time':'2026-09-22','price':90},{'time':'2026-10-01','price':120}],extension={'left':'2026-09-01','right':'2026-10-10'})
+        state={**defaults(),'drawings':[box,rr]}
+        self.store.shared('US:FLAT',revision=0,state=state)
+        for frame in ('1d','1w','1mo'):
+            self.assertEqual(WorkspaceStore(self.path).shared('US:FLAT',frame)['state']['drawings'],state['drawings'])
+        rr['extension']['right']='2026-09-25'
+        with self.assertRaises(ValueError):validate(state)
+
     def test_every_tool_and_average_persists_across_store_reopen(self):
         state=defaults();state['drawings']=[drawing(k,k) for k in ['trend','channel','horizontal','box','measure']]
         original=copy.deepcopy(state);self.store.save('KR:AAA',0,state)
@@ -124,11 +169,11 @@ class SharedWorkspaces(unittest.TestCase):
             key='KR:A'+('' if frame=='1d' else '|'+frame)
             value=defaults();value['drawings']=[drawing(ident='same')]
             if frame=='1mo':value['drawings'][0]['points'][0]['price']=1234
-            value['averages'][0]['period']={'1d':10,'1w':11,'1mo':12}[frame]
+            value['averages'][0]['period']={'1d':7,'1w':11,'1mo':12}[frame]
             self.store.save(key,0,value);original[key]=self.store.read(key)
         daily=self.store.shared('KR:A')
         self.assertEqual(len(daily['state']['drawings']),2)
-        for frame,n in [('1d',10),('1w',11),('1mo',12)]:
+        for frame,n in [('1d',7),('1w',11),('1mo',12)]:
             got=WorkspaceStore(self.path).shared('KR:A',frame)
             self.assertEqual(got['state']['drawings'],daily['state']['drawings'])
             self.assertEqual(got['state']['averages'][0]['period'],n)
@@ -137,12 +182,12 @@ class SharedWorkspaces(unittest.TestCase):
     def test_shared_edit_delete_conflict_and_reopen(self):
         a=self.store.shared('KR:A');b=self.store.shared('KR:A','1w')
         state=a['state'];state['drawings']=[drawing(k,k) for k in ('trend','channel','horizontal','box','measure')]
-        state['averages'][0]['period']=10
+        state['averages'][0]['period']=7
         self.store.shared('KR:A',revision=a['revision'],state=state)
         with self.assertRaises(Conflict):self.store.shared('KR:A','1w',revision=b['revision'],state=b['state'])
         month=self.store.shared('KR:A','1mo')
         self.assertEqual(month['state']['drawings'],state['drawings'])
-        self.assertEqual(month['state']['averages'][0]['period'],20)
+        self.assertEqual(month['state']['averages'][0]['period'],5)
         month['state']['drawings'].pop()
         self.store.shared('KR:A','1mo',revision=month['revision'],state=month['state'])
         self.assertEqual(len(WorkspaceStore(self.path).shared('KR:A')['state']['drawings']),4)
@@ -221,6 +266,18 @@ class WorkspaceHTTP(unittest.TestCase):
                 code, restored = self.call('/api/chart-state/KR%3AA?timeframe=' + target)
                 self.assertEqual(code, 200)
                 self.assertEqual(restored['state']['drawings'], state['drawings'])
+
+    def test_flat_extensions_and_seven_averages_http_roundtrip(self):
+        _, packet=self.call("/api/chart-state/KR%3AA")
+        state=defaults()
+        state["drawings"]=[dict(drawing("box"),extend=True,extension={"left":"2026-09-01","right":"2026-10-10"}),dict(drawing("channel","rr"),kind="riskreward",extend=True,points=[dict(time="2026-09-21",price=100),dict(time="2026-09-22",price=90),dict(time="2026-10-01",price=120)],extension={"left":"2026-09-01","right":"2026-10-10"})]
+        self.assertEqual(self.call("/api/chart-state/KR%3AA","POST",json.dumps(dict(revision=packet["revision"],state=state)),self.headers())[0],200)
+        for frame in ("1d","1w","1mo"):
+            code,restored=self.call("/api/chart-state/KR%3AA?timeframe="+frame)
+            self.assertEqual(code,200);self.assertEqual(restored["state"]["drawings"],state["drawings"])
+            self.assertEqual(restored["average_limit"],7)
+        code,values=self.call("/api/averages/KR%3AA?periods=5,10,20,50,100,150,200")
+        self.assertEqual(code,200);self.assertEqual(len(values),7)
 
     def test_sma_endpoint(self):
         status,data=self.call('/api/averages/KR%3AA?periods=2');self.assertEqual(status,200);self.assertAlmostEqual(data['2'][1]['value'],100.15)

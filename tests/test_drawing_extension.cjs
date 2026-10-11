@@ -29,7 +29,8 @@ function fixture(drawings,frame='1d',shift=0){
 }
 function drawing(bars,kind='trend',extend=true,reverse=false){
   const points=[{time:bars[1].date,price:80},{time:bars[3].date,price:120}];
-  if(reverse)points.reverse();if(kind==='channel')points.push({time:bars[2].date,price:130});
+  if(reverse)points.reverse();if(kind==='riskreward'){points[0].price=100;points[1].price=80;points.push({time:bars[2].date,price:140});}
+  if(kind==='channel')points.push({time:bars[2].date,price:130});
   return {id:'test',kind,points,color,width:2,extend,extension:{left:bars[0].date,right:bars[5].date}};
 }
 // The saved anchors stay solid, while both projections share exactly their slope.
@@ -70,7 +71,7 @@ for(const shift of [-100,100]){
 // Horizontal/flat trends and endpoints on the viewport edge produce no duplicate tail.
 const flat=fixture(bars=>[{...drawing(bars),points:[{time:bars[0].date,price:100},{time:bars[3].date,price:100}]}]);
 assert.deepEqual(flat.render(),[{x1:30,y1:100,x2:50,y2:100,dash:'5 4'},{x1:0,y1:100,x2:30,y2:100,dash:''}]);flat.tool.destroy();
-// Completing a drawing enables projections only for trend/channel, after the last click.
+// Completing a drawing enables projections for trend/channel/box/riskreward, after the last click.
 for(const kind of Object.keys(DrawingTools.count)){
   const f=fixture(()=>[]);f.tool.setMode(kind);f.render();
   const positions=kind==='riskreward'?[[10,100],[30,120],[20,60]]:[[10,120],[30,80],[20,70]];
@@ -78,12 +79,25 @@ for(const kind of Object.keys(DrawingTools.count)){
     const [x,y]=positions[i];f.svg.events.pointerdown({button:0,clientX:x,clientY:y,preventDefault(){},stopPropagation(){}});
     if(i+1<DrawingTools.count[kind])assert.equal(f.shapes.length,0);
   }
-  assert.equal(f.shapes.length,1);assert.equal(f.shapes[0].extend,['trend','channel'].includes(kind));
-  assert.deepEqual(Object.keys(f.shapes[0]).sort(),['color','extend',...(['trend','channel'].includes(kind)?['extension']:[]),'id','kind','points','width']);f.tool.destroy();
+  assert.equal(f.shapes.length,1);assert.equal(f.shapes[0].extend,['trend','channel','box','riskreward'].includes(kind));
+  assert.deepEqual(Object.keys(f.shapes[0]).sort(),['color','extend',...(['trend','channel','box','riskreward'].includes(kind)?['extension']:[]),'id','kind','points','width']);f.tool.destroy();
 }
+// Flat bounds extend every level horizontally; three RR dates define its width.
+for(const kind of ['box','riskreward'])for(const frame of ['1d','1w','1mo']){
+  const f=fixture(bars=>[drawing(bars,kind)],frame);f.tool.select('test');f.render();
+  const tails=f.svg.querySelectorAll().filter(n=>n.tag==='line'&&n.attrs['stroke-dasharray']==='5 4');
+  assert.equal(tails.length,kind==='box'?4:6);
+  for(const l of tails)assert.equal(l.attrs.y1,l.attrs.y2);
+  assert.equal(f.svg.querySelectorAll().filter(n=>n.attrs['data-extension']).length,2);
+  assert.deepEqual(f.shapes,f.original);f.tool.destroy();
+}
+const third=fixture(bars=>[{...drawing(bars,'riskreward'),points:[{time:bars[1].date,price:100},{time:bars[2].date,price:80},{time:bars[4].date,price:140}]}]);
+third.tool.select('test');third.render();
+assert.equal(DrawingTools.extensionBounds(third.shapes[0],third.bars).right,third.bars[5].date);
+third.tool.destroy();
 // Both handles change only their own endpoint, commit once on drop and cancel safely.
 function event(x,y,target){return {clientX:x,clientY:y,button:0,pointerId:1,target,preventDefault(){},stopPropagation(){}};}
-for(const kind of ['trend','channel'])for(const reverse of [false,true]){
+for(const kind of ['trend','channel','box','riskreward'])for(const reverse of [false,true]){
   const f=fixture(bars=>[drawing(bars,kind,true,reverse)]);f.tool.select('test');f.render();
   const handles=f.svg.querySelectorAll().filter(n=>n.attrs['data-extension']);assert.equal(handles.length,2);
   const target=side=>({closest:()=>({getAttribute:()=> 'test',classList:{contains:()=>false}}),getAttribute:k=>k==='data-extension'?side:null,hasAttribute:()=>false});
@@ -96,7 +110,7 @@ for(const kind of ['trend','channel'])for(const reverse of [false,true]){
   const before=structuredClone(f.shapes);f.svg.events.pointerdown(event(0,100,target('left')));f.svg.events.pointermove(event(10,100));f.tool.cancel();assert.deepEqual(f.shapes,before);
   f.svg.events.pointerdown(event(0,100,target('left')));f.svg.events.pointermove(event(45,100));f.svg.events.pointerup(event(45,100));
   assert.equal(f.shapes[0].extension.left,f.bars[1].date);assert.equal(f.shapes[0].extension.right,f.bars[5].date);
-  const reloaded=fixture(()=>JSON.parse(JSON.stringify(f.shapes)));assert.equal(reloaded.render()[0].x2,50);reloaded.tool.destroy();f.tool.destroy();
+  const reloaded=fixture(()=>JSON.parse(JSON.stringify(f.shapes)));reloaded.render();assert.ok(reloaded.svg.querySelectorAll().some(n=>n.tag==='line'&&Number(n.attrs.x2)===50));reloaded.tool.destroy();f.tool.destroy();
 }
 // Legacy booleans get finite defaults without mutating stored records.
 const moved=fixture(bars=>[{...drawing(bars),extension:{left:bars[0].date,right:bars[4].date}}]);

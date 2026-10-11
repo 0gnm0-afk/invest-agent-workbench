@@ -9,5 +9,8 @@ let calls=0;global.fetch=async()=>{calls++;return {ok:true,json:async()=>({revis
  global.fetch=async()=>{calls++;return {ok:true,json:async()=>({drawing_limit:300,revision:1,state:{drawings:[]}})}};
  await window.WorkbenchWorkspace.mount({host,plot:{},stock:{bars:[{date:'2026-09-30'}]},market:'KR',symbol:'105560.KS',currency:'KRW',isCurrent:()=>true});
  assert.match(host.innerHTML,/점선 연장 손잡이.*다시 실행/);assert.equal(calls,2);
+ global.fetch=async()=>({ok:true,json:async()=>({drawing_limit:300,drawing_extensions:'bounded-v1',revision:1,state:{drawings:[]}})});
+ await window.WorkbenchWorkspace.mount({host,plot:{},stock:{bars:[{date:'2026-09-30'}]},market:'KR',symbol:'105560.KS',currency:'KRW',isCurrent:()=>true});
+ assert.match(host.innerHTML,/SMA 7개.*다시 실행/);
  console.log('legacy server guard: blocked before chart editing or save');
 })().catch(e=>{console.error(e);process.exit(1)});

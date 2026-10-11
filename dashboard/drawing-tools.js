@@ -2,6 +2,8 @@
 window.DrawingTools = (() => {
   const count = {trend:2, channel:3, horizontal:1, box:2, measure:2, riskreward:3};
   const labels = {trend:'추세선',channel:'평행 채널',horizontal:'수평선',box:'박스',measure:'구간 측정',riskreward:'손익비'};
+  const extendable = kind => ['trend','channel','box','riskreward'].includes(kind);
+  const anchorTimes = d => (d.kind==='riskreward'?d.points:d.points.slice(0,2)).map(p=>p.time).sort();
   const clone = x => JSON.parse(JSON.stringify(x));
   function channel(points) {
     const [a,b,c] = points, slope = (b.y-a.y)/(b.x-a.x);
@@ -9,7 +11,7 @@ window.DrawingTools = (() => {
     return [a,b,{x:b.x,y:b.y+offset},{x:a.x,y:a.y+offset}];
   }
   function extensionBounds(d,bars,frame='1d') {
-    const times=d.points.slice(0,2).map(p=>p.time).sort(),[left,right]=times;
+    const times=anchorTimes(d),left=times[0],right=times.at(-1);
     if(d.extension)return {left:d.extension.left<left?d.extension.left:left,right:d.extension.right>right?d.extension.right:right};
     const day=86400000,padding=Math.max(3,Math.ceil((Date.parse(right)-Date.parse(left))/day/4));
     const shift=(time,n)=>new Date(Date.parse(time)+n*day).toISOString().slice(0,10);
@@ -180,7 +182,7 @@ window.DrawingTools = (() => {
     function render() {
       if(removed)return;
       const w=chart.timeScale().width(),h=chart.panes()[0].getHeight();
-      const all=getDrawings().concat(getOverlays()).map(d=>({d,p:project(d.points,d.kind)})).sort((a,b)=>Number(a.d.id===selected)-Number(b.d.id===selected));
+      const all=getDrawings().concat(getOverlays()).map(d=>{const view=['box','riskreward'].includes(d.kind)&&!d.extension?{...d,extend:true}:d;return {d:view,p:project(d.points,d.kind)};}).sort((a,b)=>Number(a.d.id===selected)-Number(b.d.id===selected));
       if(draft.length) {
         const ps=[...draft];if(hover&&ps.length<count[mode])ps.push(hover);
         // Keep the lower baseline visible while the upper anchor is being chosen.
@@ -199,9 +201,24 @@ window.DrawingTools = (() => {
           if(p.some(v=>!v||v.x==null||v.y==null||!Number.isFinite(v.x+v.y)))continue;
           const g=node('g',{'data-id':d.id||'',opacity:d.id?1:.65,'aria-label':(d.ai?'AI 제안 · ':'')+labels[d.kind],class:d.ai?'ai-proposal':'user-drawing'});
           const [a,b]=p, stroke=d.color;let extensionHandles=null;
-          function line(v1,v2,dash='') {
+          function line(v1,v2,dash='',color=stroke) {
             node('line',{x1:v1.x,y1:v1.y,x2:v2.x,y2:v2.y,stroke:'transparent','stroke-width':14,'pointer-events':mode==='select'?'stroke':'none'},g);
-            node('line',{x1:v1.x,y1:v1.y,x2:v2.x,y2:v2.y,stroke,'stroke-width':d.width,'stroke-dasharray':d.ai?'7 5':dash,'pointer-events':'none'},g);
+            node('line',{x1:v1.x,y1:v1.y,x2:v2.x,y2:v2.y,stroke:color,'stroke-width':d.width,'stroke-dasharray':d.ai?'7 5':dash,'pointer-events':'none'},g);
+          }
+          function flatExtensions(levels,left,right) {
+            const bounds=extensionBounds(d,bars,timeframe);
+            const edgeX=(time,fallback)=>{
+              const bounded=time<bars[0].date?bars[0].date:time>(bars.at(-1).last_session||bars.at(-1).date)?(bars.at(-1).last_session||bars.at(-1).date):time;
+              const logical=index(bounded,bars,timeframe);
+              return logical==null?fallback:coordinate(chart.timeScale(),logical)??fallback;
+            };
+            const lx=d.extend?Math.min(left,edgeX(bounds.left,left)):left,rx=d.extend?Math.max(right,edgeX(bounds.right,right)):right;
+            const ys=levels.map(v=>v.y),mid=(Math.min(...ys)+Math.max(...ys))/2;
+            extensionHandles=[{side:'left',x:lx,y:mid},{side:'right',x:rx,y:mid}];
+            if(d.extend)for(const {y,color} of levels){
+              if(lx<left)line({x:lx,y},{x:left,y},'5 4',color);
+              if(rx>right)line({x:right,y},{x:rx,y},'5 4',color);
+            }
           }
           if(d.kind==='horizontal') {
             line({x:0,y:a.y},{x:w,y:a.y});
@@ -213,13 +230,15 @@ window.DrawingTools = (() => {
             for(const [edge,color] of [[stop,'#ee6677'],[target,'#36c595']]){
               node('rect',{x:left,y:Math.min(entry.y,edge.y),width:Math.max(1,right-left),height:Math.abs(edge.y-entry.y),fill:color,'fill-opacity':.18,stroke:color,'stroke-width':d.width,'pointer-events':mode==='select'?'all':'none'},g);
             }
-            line({x:left,y:entry.y},{x:right,y:entry.y},'5 3');
+            line({x:left,y:entry.y},{x:right,y:entry.y});
+            flatExtensions([{y:entry.y,color:stroke},{y:stop.y,color:'#ee6677'},{y:target.y,color:'#36c595'}],left,right);
             const texts=[result.direction+' · '+result.label,result.profit,result.loss];
             const tx=Math.max(6,Math.min(left+6,w-235)),ty=Math.max(16,Math.min(Math.min(stop.y,target.y)-42,h-48));
             const text=node('text',{x:tx,y:ty,fill:'#e9f2ff','font-size':11,'paint-order':'stroke',stroke:'#202630','stroke-width':3,'pointer-events':'none'},g);
             texts.forEach((t,i)=>node('tspan',{x:tx,dy:i?15:0},text).textContent=t);
           } else if(d.kind==='box'||d.kind==='measure') {
             node('rect',{x:Math.min(a.x,b.x),y:Math.min(a.y,b.y),width:Math.max(1,Math.abs(b.x-a.x)),height:Math.max(1,Math.abs(b.y-a.y)),fill:stroke,'fill-opacity':.10,stroke,'stroke-width':d.width,'pointer-events':mode==='select'?'all':'none'},g);
+            if(d.kind==='box')flatExtensions([{y:a.y,color:stroke},{y:b.y,color:stroke}],Math.min(a.x,b.x),Math.max(a.x,b.x));
             if(d.kind==='measure') {
               line(a,b,'4 3');
               const parts=measure(d.points,bars,currency,timeframe).split(' · '), lines=[parts.slice(0,2).join(' · '),parts.slice(2).join(' · ')];
@@ -315,7 +334,7 @@ window.DrawingTools = (() => {
         draft.push(p);
         if(draft.length===count[mode]) {
           if(getDrawings().length>=drawingLimit){draft=[];onHint(`종목당 최대 ${drawingLimit}개입니다. 필요 없는 도형을 삭제하세요.`);return;}
-          const drawing={id:crypto.randomUUID(),kind:mode,points:clone(draft),color:'#218775',width:2,extend:['trend','channel'].includes(mode)};
+          const drawing={id:crypto.randomUUID(),kind:mode,points:clone(draft),color:'#218775',width:2,extend:extendable(mode)};
           if(drawing.extend)drawing.extension=extensionBounds(drawing,bars,timeframe);
           onChange([...getDrawings(),drawing]);setMode('select');select(drawing.id);
         }else if(mode==='channel')onHint(draft.length===1?'평행 채널: 끝 하단점을 클릭하세요.':'평행 채널: 하단 기준선 위쪽의 상단점을 클릭하세요.');else if(mode==='riskreward')onHint(draft.length===1?'손익비: 손절가를 클릭하세요.':'손익비: 진입가 반대편의 목표가를 클릭하세요.');else onHint(`${labels[mode]}: ${count[mode]-draft.length}개 지점을 더 클릭하세요.`);
@@ -331,19 +350,21 @@ window.DrawingTools = (() => {
     function move(e) {
       if(drag?.extension){
         const p=extensionPointer(e);if(!p)return;
-        const d=clone(drag.original),times=d.points.slice(0,2).map(v=>v.time).sort();
-        d.extension=d.extend?extensionBounds(d,bars,timeframe):{left:times[0],right:times[1]};
-        d.extension[drag.extension]=drag.extension==='left'?(p.time<times[0]?p.time:times[0]):(p.time>times[1]?p.time:times[1]);
+        const d=clone(drag.original),times=anchorTimes(d);
+        if(['box','riskreward'].includes(d.kind)&&!d.extension)d.extend=true;
+        d.extension=d.extend?extensionBounds(d,bars,timeframe):{left:times[0],right:times.at(-1)};
+        d.extension[drag.extension]=drag.extension==='left'?(p.time<times[0]?p.time:times[0]):(p.time>times.at(-1)?p.time:times.at(-1));
         d.extend=true;drag.moved=true;hover=null;snapped=null;reference=null;
         onChange(drag.all.map(v=>v.id===d.id?d:v),{preview:true});return;
       }
       const p=point(e);if(!p){hover=null;return;}hover=p;
       if(!drag)return;
       const d=clone(drag.original);
+      if(['box','riskreward'].includes(d.kind)&&!d.extension){d.extend=true;d.extension=extensionBounds(d,bars,timeframe);}
       if(drag.handle!=null)d.points[drag.handle]=p;
       else {
         let delta=Math.round(index(p.time,bars,timeframe)-index(drag.start.time,bars,timeframe));
-        const extension=d.extend&&['trend','channel'].includes(d.kind)?extensionBounds(d,bars,timeframe):d.extension;
+        const extension=d.extend&&extendable(d.kind)?extensionBounds(d,bars,timeframe):d.extension;
         const ids=d.points.map(v=>index(v.time,bars,timeframe));
         if(ids.some(i=>i==null))return;
         const limits=extension?ids.concat(Object.values(extension).map(time=>index(time,bars,timeframe)).filter(i=>i!=null)):ids;

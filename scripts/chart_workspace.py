@@ -8,7 +8,9 @@ import sqlite3
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-COLORS = ['#dd9500', '#2271b2', '#8254a8', '#687780']
+COLORS = ['#cc6963', '#cda45d', '#b4cf63', '#59c78c', '#5a9fca', '#6668cd', '#c181ce']
+DEFAULT_PERIODS = [5, 10, 20, 50, 100, 150, 200]
+EXTENDABLE_KINDS = ('trend', 'channel', 'box', 'riskreward')
 KINDS = {'trend': 2, 'channel': 3, 'horizontal': 1, 'box': 2, 'measure': 2, 'riskreward': 3}
 
 
@@ -18,15 +20,15 @@ class Conflict(Exception):
 
 def defaults():
     return {'schema': 1, 'drawings': [], 'averages': [
-        {'period': n, 'color': c, 'width': 2, 'visible': True}
-        for n, c in zip([20, 50, 150, 200], COLORS)]}
+        {'period': n, 'color': c, 'width': w, 'visible': True}
+        for n, c, w in zip(DEFAULT_PERIODS, COLORS, [1, 1, 1, 2, 3, 3, 3])]}
 
 
 def validate(state, drawing_limit=100):
     if not isinstance(state, dict) or set(state) != {'schema', 'drawings', 'averages'} or type(state['schema']) is not int or state['schema'] != 1:
         raise ValueError('invalid_schema')
     drawings, averages = state['drawings'], state['averages']
-    if not isinstance(drawings, list) or len(drawings) > drawing_limit or not isinstance(averages, list) or len(averages) > 6:
+    if not isinstance(drawings, list) or len(drawings) > drawing_limit or not isinstance(averages, list) or len(averages) > 7:
         raise ValueError('item_limit')
     ids, periods = set(), set()
     for average in averages:
@@ -63,13 +65,14 @@ def validate(state, drawing_limit=100):
             raise ValueError('distinct_dates_required')
         if 'extension' in drawing:
             extension = drawing['extension']
-            if kind not in ('trend', 'channel') or not isinstance(extension, dict) or set(extension) != {'left', 'right'}:
+            if kind not in EXTENDABLE_KINDS or not isinstance(extension, dict) or set(extension) != {'left', 'right'}:
                 raise ValueError('invalid_extension')
             for value in extension.values():
                 if not isinstance(value, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
                     raise ValueError('invalid_extension_date')
                 date.fromisoformat(value)
-            left, right = sorted(p['time'] for p in points[:2])
+            times = [p['time'] for p in (points if kind == 'riskreward' else points[:2])]
+            left, right = min(times), max(times)
             if extension['left'] > left or extension['right'] < right:
                 raise ValueError('extension_must_contain_anchors')
         if kind == 'riskreward':
@@ -165,6 +168,30 @@ class WorkspaceStore:
                 raise ValueError('invalid_shared_workspace')
             for period in ('1d', '1w', '1mo'):
                 validate({'schema': 1, 'drawings': payload['drawings'], 'averages': payload['averages'][period]}, drawing_limit=300)
+            db.execute('CREATE TABLE IF NOT EXISTS chart_workspace_migrations (identity TEXT PRIMARY KEY, version INTEGER NOT NULL)')
+            migrated = db.execute('SELECT version FROM chart_workspace_migrations WHERE identity=?', (identity,)).fetchone()
+            upgraded = False
+            if state is None and not migrated:
+                for period in ('1d', '1w', '1mo'):
+                    averages = payload['averages'][period]
+                    legacy_defaults = [{'period': n, 'color': c, 'width': 2, 'visible': True}
+                                       for n, c in zip([20,50,150,200], ['#dd9500','#2271b2','#8254a8','#687780'])]
+                    six = len(averages) == 6 and {a['period'] for a in averages} == set(DEFAULT_PERIODS[:-1])
+                    if six or averages == legacy_defaults:
+                        if not upgraded:
+                            db.execute('INSERT OR IGNORE INTO chart_workspace_versions VALUES (?,?,?,?)',
+                                       (identity, current, json.dumps(payload, ensure_ascii=False, allow_nan=False), updated))
+                        if six:
+                            averages.append(defaults()['averages'][-1])
+                        else:
+                            by_period = {a['period']: a for a in averages}
+                            payload['averages'][period] = [by_period.get(a['period'], a) for a in defaults()['averages']]
+                        upgraded = True
+                db.execute('INSERT INTO chart_workspace_migrations VALUES (?,1)', (identity,))
+                if upgraded:
+                    current += 1; updated = datetime.now(timezone.utc).isoformat()
+                    db.execute('INSERT INTO chart_workspace_versions VALUES (?,?,?,?)',
+                               (identity, current, json.dumps(payload, ensure_ascii=False, allow_nan=False), updated))
             if state is not None:
                 if current != revision:
                     raise Conflict('workspace_changed_elsewhere')
@@ -175,16 +202,16 @@ class WorkspaceStore:
                 current += 1; updated = datetime.now(timezone.utc).isoformat()
                 db.execute('INSERT INTO chart_workspace_versions VALUES (?,?,?,?)',
                            (identity, current, json.dumps(payload, ensure_ascii=False, allow_nan=False), updated))
-            if row is None or state is not None:
+            if row is None or state is not None or upgraded:
                 db.execute('INSERT INTO shared_chart_workspaces VALUES (?,?,?,?) ON CONFLICT(identity) DO UPDATE SET revision=excluded.revision,payload=excluded.payload,updated_at=excluded.updated_at',
                            (identity, current, json.dumps(payload, ensure_ascii=False, allow_nan=False), updated))
-        return {'revision': current, 'updated_at': updated, 'drawing_limit': 300, 'drawing_kinds': list(KINDS), 'drawing_extensions': 'bounded-v1',
+        return {'revision': current, 'updated_at': updated, 'drawing_limit': 300, 'drawing_kinds': list(KINDS), 'drawing_extensions': 'bounded-v1', 'extension_kinds': list(EXTENDABLE_KINDS), 'average_limit': 7,
                 'state': {'schema': 1, 'drawings': payload['drawings'], 'averages': payload['averages'][frame]}}
 
 
 def moving_averages(stock, periods):
     from invest_agent.trading.momentum_entry import sma
-    if len(periods) > 6 or any(type(n) is not int or not 1 <= n <= 500 for n in periods):
+    if len(periods) > 7 or any(type(n) is not int or not 1 <= n <= 500 for n in periods):
         raise ValueError('invalid_period')
     bars = stock.get('bars', [])
     result = {}
