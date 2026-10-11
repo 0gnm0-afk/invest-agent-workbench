@@ -1,3 +1,4 @@
+import io
 import json
 import sys
 import tempfile
@@ -69,6 +70,16 @@ class Startup(unittest.TestCase):
         self.ready.write_text('{')
         self.assertEqual(json.loads(self.get('/api/startup'))['state'], 'loading')
         self.state['failed'] = True
+        self.assertEqual(json.loads(self.get('/api/startup'))['state'], 'failed')
+
+    def test_worker_failure_persists_traceback_without_console_output(self):
+        def failed_main():
+            raise RuntimeError('preparation_fixture_failure')
+        with patch.dict(sys.modules, {'dashboard': type('FailedDashboard', (), {'main': staticmethod(failed_main)})}), patch.object(sys, 'argv', []), patch.object(sys, 'stderr', io.StringIO()):
+            startup.run_dashboard([], self.ready, self.state)
+        self.assertTrue(self.state['failed'])
+        diagnostic = self.ready.with_suffix('.err.log').read_text(encoding='utf-8')
+        self.assertIn('RuntimeError: preparation_fixture_failure', diagnostic)
         self.assertEqual(json.loads(self.get('/api/startup'))['state'], 'failed')
 
     def test_foreign_host_and_unlisted_paths_are_blocked(self):

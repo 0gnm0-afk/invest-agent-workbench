@@ -85,7 +85,12 @@ def run_dashboard(arguments, ready_file, state):
         state['failed'] = True
     except BaseException:
         state['failed'] = True
+        # Persist even when pythonw inherited unusable standard handles.
+        with ready_file.with_suffix('.err.log').open('a', encoding='utf-8', buffering=1) as log:
+            traceback.print_exc(file=log)
         traceback.print_exc()
+        if sys.stderr is not None:
+            sys.stderr.flush()
 
 
 def main():
@@ -102,9 +107,9 @@ def main():
         parser.error('ready-file must be new for each launch')
     # pythonw desktop launches have no console; keep diagnostics in private runtime.
     if sys.stdout is None:
-        sys.stdout = args.ready_file.with_suffix('.log').open('a', encoding='utf-8')
+        sys.stdout = args.ready_file.with_suffix('.log').open('a', encoding='utf-8', buffering=1)
     if sys.stderr is None:
-        sys.stderr = args.ready_file.with_suffix('.err.log').open('a', encoding='utf-8')
+        sys.stderr = args.ready_file.with_suffix('.err.log').open('a', encoding='utf-8', buffering=1)
     state = {}
     server = ThreadingHTTPServer(('127.0.0.1', 0), handler_for(ROOT / 'dashboard', state, inner_ready))
     server.daemon_threads = True
