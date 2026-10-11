@@ -151,7 +151,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                         value = {**value,'state':'excluded','reason':excluded['reason'],'bars':[]}
                 return self.send(json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8'))
             names = {'/report-reader.js':'report-reader.js','/report-reader.css':'report-reader.css','/chart-events.js':'chart-events.js', '/trailing.js':'trailing.js', '/market-exclusions.js':'market-exclusions.js', '/market-exclusions.css':'market-exclusions.css', '/risk-workbench.js': 'risk-workbench.js', '/risk-workbench.css': 'risk-workbench.css', '/collaboration.js': 'collaboration.js', '/analysis.js': 'analysis.js', '/': 'index.html', '/app.js': 'app.js', '/tooltips.js': 'tooltips.js', '/financial-focus.js': 'financial-focus.js', '/financial-focus.css': 'financial-focus.css', '/financials.css': 'financials.css', '/style.css': 'style.css',
-                     '/scenario-monitor.js':'scenario-monitor.js', '/scenario-monitor.css':'scenario-monitor.css',
+                     '/scenario-preview.js':'scenario-preview.js', '/scenario-monitor.js':'scenario-monitor.js', '/scenario-monitor.css':'scenario-monitor.css',
                      '/stock-chart.js': 'stock-chart.js', '/drawing-tools.js': 'drawing-tools.js', '/chart-workspace.js': 'chart-workspace.js', '/chart-tools.css': 'chart-tools.css', '/format.js': 'format.js', '/charts.js': 'charts.js', '/workbench.png': 'workbench.png',
                      '/vendor/lightweight-charts.js': 'vendor/lightweight-charts.js',
                      '/vendor/NOTICE': 'vendor/NOTICE', '/vendor/LICENSE': 'vendor/LICENSE'}

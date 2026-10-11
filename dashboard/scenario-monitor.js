@@ -36,29 +36,58 @@ window.WorkbenchScenarios = (() => {
   const lines=Array.isArray(v.lines)?v.lines:Object.entries(v.lines||{}).map(([name,value])=>({name,value}));
   return `<article class="scenario-card" data-monitor="${esc(m.id)}"><div class="row"><h3><a href="${esc(route)}">${esc(m.name||m.identity?.name||m.stock_key)}</a> · ${esc(m.title||label(m.purpose))}</h3><span class="scenario-badge">${m.test_record?'검증용 · ':''}${m.active?label(m.status):'감시 중단'}</span></div>
    <p>${m.issue?'<strong class="error-text">판정 보류 · '+esc(issues[m.issue]||m.issue)+'</strong>':`완료 거래일 ${esc(v.date||'미판정')} · 종가 <strong>${money(v.close,currency)}</strong> ${esc(currency)}`} · ATR14 ${money(v.atr,currency)} · 접근폭 ${esc(m.tolerance_atr)} × ATR14${v.tolerance!=null?' = '+money(v.tolerance,currency):''}</p>
-   ${v.superseded?'<p class="error-text">아래 수치는 변경 전 기준의 과거 판정입니다. 수정된 기준은 다음 완료 종가 판정 대기 중입니다.</p>':m.issue&&v.date?'<p>아래 기준선은 마지막 정상 판정 당시 값입니다. 현재 판정은 보류되었습니다.</p>':''}<div class="scenario-levels">${lines.map(l=>`<span><strong>${esc(label(l.name))}</strong> ${money(l.value,currency)} ${v.states?.[l.name]?`<em>${esc(label(v.states[l.name]))}</em>`:''}</span>`).join('')||'<span>기준선은 완료 거래일 판정 후 표시됩니다.</span>'}${v.states?.zone?`<span class="scenario-zone-state"><strong>매수 구간 상태</strong> <em>${v.states.zone==='reached'?'구간 내부 도달':esc(label(v.states.zone))}</em></span>`:''}</div>
-   ${trendHTML(m,currency)}<p class="chart-caption">작도 ${esc(m.drawing_id)} · 경계 ${esc(label(m.boundary))} · 저장 v${esc(m.workspace_revision)} · ${esc(m.timeframe)} · ${esc(m.price_basis||m.identity?.price_basis||'기준 확인 중')} · 계획 ${esc(m.plan_record_id)}<br>저장한 작도 수정은 활성 참조에 반영됩니다. 당시 확정 계획과 과거 입력은 보존됩니다.</p>
+   ${v.superseded?'<p class="error-text">아래 수치는 변경 전 기준의 과거 판정입니다. 수정된 기준은 다음 완료 종가 판정 대기 중입니다.</p>':m.issue&&v.date?'<p>아래 기준선은 마지막 정상 판정 당시 값입니다. 현재 판정은 보류되었습니다.</p>':''}<div class="scenario-levels">${lines.map(l=>`<span><strong>${esc(label(l.name))}</strong> ${money(l.value,currency)} ${v.states?.[l.name]?`<em>${esc(label(v.states[l.name]))}</em>`:''}</span>`).join('')||'<span>아직 종가 판정 기록이 없습니다. 저장 작도는 차트에서 미리 확인할 수 있습니다.</span>'}${v.states?.zone?`<span class="scenario-zone-state"><strong>매수 구간 상태</strong> <em>${v.states.zone==='reached'?'구간 내부 도달':esc(label(v.states.zone))}</em></span>`:''}</div>
+   ${(m.evaluations||[]).length?`<details><summary>과거 종가 판정 차트</summary>${trendHTML(m,currency)}</details>`:""}<p class="chart-caption">작도 ${esc(m.drawing_id)} · 경계 ${esc(label(m.boundary))} · 저장 v${esc(m.workspace_revision)} · ${esc(m.timeframe)} · ${esc(m.price_basis||m.identity?.price_basis||'기준 확인 중')} · 계획 ${esc(m.plan_record_id)}<br>저장한 작도 수정은 활성 참조에 반영됩니다. 당시 확정 계획과 과거 입력은 보존됩니다.</p>
    ${m.confirmed_response?`<p>확정 대응: ${esc(m.confirmed_response)}</p>`:'<p>대응 기준 미정</p>'}
    <form data-monitor-settings><label>접근 허용폭 (ATR14 배수)<input name="tolerance_atr" aria-label="접근 허용폭" type="number" min="0" max="10" step="0.05" value="${esc(m.tolerance_atr)}" required></label><button>허용폭 저장</button><button type="button" data-toggle>${m.active?'감시 중단':'감시 재개'}</button><button type="button" data-monitor-history>변경 이력</button></form>
    ${m.purpose==='buy'&&m.conversion?.status==='pending'?'<div class="scenario-conversion"><strong>계좌에서 실제 보유가 확인되었습니다.</strong><p>이 매수 감시를 보유 감시로 전환하시겠습니까? 주문이나 체결 기록을 만들지 않습니다.</p><button data-convert="yes">보유 감시로 전환</button><button data-convert="no">매수 감시 유지</button></div>':''}<div data-history hidden></div><p data-result role="status"></p></article>`;
  }
  function eventsHTML(events){return events.length?`<details><summary>시나리오 사건 기록 (${events.length})</summary>${events.slice(0,100).map(e=>`<p><strong>${esc(e.date)} · ${esc(e.stock_key||e.symbol)} · ${esc(label(e.boundary))+' '+esc(label(e.state||e.kind))}</strong><br>종가 ${money(e.close,e.currency)} · ${e.zone_lower!=null?'구간 '+money(e.zone_lower,e.currency)+' ~ '+money(e.zone_upper,e.currency):'기준 '+money(e.threshold,e.currency)} ${esc(e.currency)}<br>${esc(e.confirmed_response||'대응 기준 미정')} ${e.message?'<pre class="analysis-document">'+esc(e.message)+'</pre>':''}</p>`).join('')}</details>`:'';}
- async function renderList(host,stockKey){
+ async function renderList(host,stockKey,riskPositions=null){
   const data=await rpc('monitor_list',stockKey?{stock_key:stockKey}:{});if(!host.isConnected)return;
   const signature=JSON.stringify(data);if(host.dataset.snapshot===signature)return data;host.dataset.snapshot=signature;
   const rows=data.monitors||[];
+  host.querySelectorAll('.chart').forEach(p=>{if(p._scenarioChart){WorkbenchCharts.remove(p._scenarioChart);p._scenarioChart=null;}});
   host.innerHTML=['holding','buy'].map(p=>`<section class="panel scenario-list"><div class="panel-body"><h2>${p==='holding'?'보유 시나리오 · 가격위험':'매수 감시'}</h2><p>${p==='holding'?'기존 트레일링·5일선과 별도로 시나리오 경계를 확인합니다.':'원하는 매수 구간을 기다리는 목록입니다. 보유 시나리오와 별개로 유지합니다.'} 매일 06:40 갱신 뒤 완료 종가로 판정합니다.</p>${rows.filter(m=>m.purpose===p).map(monitorHTML).join('')||'<p class="empty">등록된 감시가 없습니다. 종목 차트 옆 버튼으로 확정 시나리오를 연결하세요.</p>'}</div></section>`).join('')+eventsHTML(data.events||[]);
   host.querySelectorAll('[data-monitor]').forEach(card=>{
    const m=rows.find(x=>x.id===card.dataset.monitor),result=card.querySelector('[data-result]');
-   async function mutate(op,args){try{result.textContent='저장 중…';await rpc(op,args);await renderList(host,stockKey);}catch(e){result.textContent=e.message;}}
+   async function mutate(op,args){try{result.textContent='저장 중…';await rpc(op,args);await renderList(host,stockKey,riskPositions);}catch(e){result.textContent=e.message;}}
    card.querySelector('form').onsubmit=e=>{e.preventDefault();mutate('monitor_update',{id:m.id,revision:m.revision,tolerance_atr:Number(new FormData(e.target).get('tolerance_atr'))});};
    card.querySelector('[data-toggle]').onclick=()=>mutate('monitor_update',{id:m.id,revision:m.revision,active:!m.active});
    card.querySelectorAll('[data-convert]').forEach(b=>b.onclick=()=>mutate('monitor_conversion',{id:m.id,revision:m.revision,accept:b.dataset.convert==='yes'}));
    card.querySelector('[data-monitor-history]').onclick=()=>{const h=card.querySelector('[data-history]');h.hidden=!h.hidden;h.innerHTML='<pre class="analysis-document">'+esc(JSON.stringify(m.history||m.revisions||[],null,2))+'</pre>';};
   });
+  if(riskPositions&&window.ScenarioPreview)await previewRisk(host,rows,riskPositions);
   return data;
  }
- async function mountRisk(host){const box=document.createElement('div');box.id='scenario-risk-lists';host.append(box);try{await renderList(box);}catch(e){box.textContent='시나리오 감시 조회 실패 · '+e.message;}}
+ async function previewRisk(host,rows,positions){
+  const cache=new Map(),root=host.parentElement;
+  const load=key=>{if(!cache.has(key))cache.set(key,fetch('/api/chart/'+encodeURIComponent(key)+'?timeframe=1d').then(r=>{if(!r.ok)throw Error('저장 가격 조회 실패');return r.json();}));return cache.get(key);};
+  const matches=(p,m)=>p.market===m.identity.market&&(p.quote_symbol||p.symbol)===(m.stock_key.split(':')[1])&&(!m.account_alias||m.account_alias===p.account);
+  // Cards live under their account's existing chart; remove old cards before a settings refresh.
+  root.querySelectorAll('[data-integrated-scenario]').forEach(e=>e.remove());
+  for(const [i,p] of positions.entries()){
+   const monitors=rows.filter(m=>m.purpose==='holding'&&matches(p,m));if(!monitors.length)continue;
+   const plot=root.querySelector('#trailing-chart-'+i),panel=plot.parentElement.parentElement;
+   const block=document.createElement('div');block.dataset.integratedScenario='';panel.append(block);
+   for(const m of monitors){const card=host.querySelector('[data-monitor="'+m.id+'"]');if(card)block.append(card);}
+   try{const stock=await load(monitors[0].stock_key);if(!root.isConnected)return;
+    const usable=monitors.filter(m=>m.identity.price_basis===stock.price_basis&&m.identity.currency===stock.currency);
+    ScenarioPreview.mount(plot,stock.bars||[],usable,{currency:p.currency,trailing:p.active?p.line:null,holdingLegend:root.querySelector('#trailing-legend-'+i)});
+    block.insertAdjacentHTML('afterbegin','<p>위 차트: 최근 한 달 종가 + 저장된 보유 시나리오 · 미래 점선은 작도 미리보기이며 종가 판정 결과가 아닙니다.</p>');
+   }catch(e){block.insertAdjacentHTML('afterbegin','<p>'+esc(e.message)+'</p>');}
+  }
+  for(const m of rows){const card=host.querySelector('[data-monitor="'+m.id+'"]');if(!card)continue;
+   const plot=document.createElement('div');plot.className='chart';plot.setAttribute('aria-label',m.name+' 최근 한 달 종가와 시나리오 미리보기');card.querySelector('.row').after(plot);
+   try{const stock=await load(m.stock_key);if(!root.isConnected)return;
+    if(stock.currency!==m.identity.currency||m.identity.price_basis!==stock.price_basis)throw Error('가격 기준 불일치 · 미리보기 보류');
+    const preview=ScenarioPreview.mount(plot,stock.bars||[],[m],{currency:m.currency});
+    plot.insertAdjacentHTML('afterend','<p class="chart-caption">최근 한 달 저장 종가 · '+esc(stock.bars?.at(-1)?.date||'자료 없음')+' 기준. '+(preview.series.length?'저장 작도 점선은 미래 미리보기이며 판정 결과가 아닙니다.':'표시 가능한 활성 작도가 없습니다.')+' 미래 날짜는 휴일을 반영하지 않은 평일 좌표입니다.</p>');
+   }catch(e){plot.textContent=e.message;}
+  }
+  const holding=host.querySelector('.scenario-list');if(holding&&!holding.querySelector('[data-monitor]'))holding.remove();
+ }
+ async function mountRisk(host,positions=[]){const box=document.createElement('div');box.id='scenario-risk-lists';host.append(box);try{await renderList(box,undefined,positions);}catch(e){box.textContent='시나리오 감시 조회 실패 · '+e.message;}}
  async function mountStock({market,symbol,currency,controller,isCurrent}){
   const stockKey=market+':'+symbol,price=document.querySelector('#stock-price');
   const toolbar=document.createElement('div');toolbar.className='scenario-chart-actions';toolbar.innerHTML='<button data-purpose="holding">가격위험으로 보내기</button><button data-purpose="buy">매수감시 추가</button><span>저장 작도 → 시나리오 확인 → 종가 감시</span>';
