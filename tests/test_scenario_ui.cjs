@@ -9,11 +9,12 @@ assert.deepEqual(window.WorkbenchScenarios.monitoringPlans([
  {id:'monitor',plan_id:'pl_monitor',monitoring_only:true},
  {id:'not_a_flag',plan_id:'pl_bad',monitoring_only:'true'}
 ]).map(r=>r.id),['monitor']);
-const monitor={id:'sm_fixture',revision:2,stock_key:'US:SYNTH',case_id:'an_fixture',identity:{currency:'USD',name:'합성 <script>bad()</script>',price_basis:'adjusted'},purpose:'buy',active:true,status:'warning',drawing_id:'channel_fixture',workspace_revision:4,timeframe:'1w',plan_record_id:'it_fixture',tolerance_atr:.5,confirmed_response:null,latest:{date:'2026-10-07',close:100.25,atr:2.5,tolerance:1.25,lines:[{name:'lower',value:100},{name:'upper',value:110}],states:{lower:'approach',upper:'clear'}},conversion:{status:'pending'},test_record:true};
+const monitor={id:'sm_fixture',revision:2,stock_key:'US:SYNTH',case_id:'an_fixture',identity:{currency:'USD',name:'합성 <script>bad()</script>',price_basis:'adjusted'},purpose:'buy',active:true,status:'warning',drawing_id:'channel_fixture',boundary:'lower',workspace_revision:4,timeframe:'1w',plan_record_id:'it_fixture',tolerance_atr:.5,confirmed_response:null,latest:{date:'2026-10-07',close:100.25,atr:2.5,tolerance:1.25,lines:[{name:'lower',value:100},{name:'upper',value:110}],states:{lower:'approach',upper:'clear'}},conversion:{status:'pending'},test_record:true};
 let html=window.WorkbenchScenarios.monitorHTML(monitor);
 assert.match(html,/100\.25/);assert.match(html,/100\.00/);assert.match(html,/110\.00/);
 assert.match(html,/0\.5 × ATR14 = 1\.25/);assert.match(html,/접근/);assert.match(html,/매수 감시 유지/);
 assert.match(html,/검증용/);assert.match(html,/대응 기준 미정/);assert(!html.includes('<script>'));
+assert.match(html,/작도 channel_fixture · 경계 하단 · 저장 v4/);
 assert.match(html,/#stock\/US\/SYNTH\?analysis=an_fixture/);
 html=window.WorkbenchScenarios.monitorHTML({...monitor,latest:{...monitor.latest,states:{zone:'reached'}}});
 const zoneLevels=html.match(/<div class="scenario-levels">([\s\S]*?)<\/div>/)[1];
