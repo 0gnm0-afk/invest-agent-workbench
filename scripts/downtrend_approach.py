@@ -5,8 +5,7 @@ from pathlib import Path
 import hashlib
 import json
 import math
-from invest_agent.trading.sperandeo import pivots, PIVOT_RIGHT
-from invest_agent.trading.trendlines import valid_pair
+import recent_trendlines as recent
 from invest_agent.trading.market import usable_tail, check_bars
 from invest_agent.trading.momentum_entry import completed
 from invest_agent.trading.momentum_watch import signal, PHASES
@@ -15,7 +14,7 @@ from atomic_io import atomic_write
 
 ROUTE = 'downtrend_approach'
 LABEL = '하락 추세선 근접'
-DEFAULTS = dict(approach_atr=.5, window=252, min_trend_bars=20, limit_per_market=10)
+DEFAULTS = dict(approach_atr=.5, window=60, min_trend_bars=10, limit_per_market=10)
 
 
 def settings(overrides=None):
@@ -25,7 +24,7 @@ def settings(overrides=None):
     for key in ('window', 'min_trend_bars', 'limit_per_market'):
         if type(cfg[key]) is not int:
             raise ValueError('invalid_downtrend_setting:' + key)
-    if not 20 <= cfg['min_trend_bars'] <= cfg['window'] <= 252 or not 0 <= cfg['limit_per_market'] <= 50:
+    if not 10 <= cfg['min_trend_bars'] <= cfg['window'] <= 252 or not 0 <= cfg['limit_per_market'] <= 50:
         raise ValueError('invalid_downtrend_window_or_limit')
     if type(cfg['approach_atr']) not in (int, float) or not math.isfinite(cfg['approach_atr']) or not 0 < cfg['approach_atr'] <= 3:
         raise ValueError('invalid_downtrend_approach_atr')
@@ -64,40 +63,10 @@ def analyze(raw, overrides=None, *, as_of=None):
     volatility = atr14(full)
     if not volatility or volatility <= 0:
         return {**result, 'state':'atr_unavailable'}
-    bars = full[-cfg['window']:]
-    end = len(bars)-1
-    points = pivots(bars, 'high')
-    candidates = []
-    for a in points:
-        if end-a < cfg['min_trend_bars']:
-            continue
-        for b in points:
-            if not valid_pair(bars,a,b,'high'):
-                continue
-            known = b+PIVOT_RIGHT
-            if known >= end:
-                continue
-            slope = (bars[b]['high']-bars[a]['high'])/(b-a)
-            at = lambda i: bars[a]['high']+slope*(i-a)
-            latest = at(end)
-            gap = latest-bars[-1]['close']
-            if latest <= 0 or not 0 <= gap <= cfg['approach_atr']*volatility:
-                continue
-            # A previously broken line is not a fresh pre-breakout approach.
-            if any(bars[i]['close'] > at(i) for i in range(known+1,end+1)):
-                continue
-            line = dict(anchor_a_date=bars[a]['date'], anchor_a_price=bars[a]['high'],
-                        anchor_b_date=bars[b]['date'], anchor_b_price=bars[b]['high'],
-                        confirmed_at=bars[known]['date'], slope_per_bar=slope,
-                        value_latest=latest, as_of=bars[-1]['date'], time_axis='trading_sessions',
-                        price_scale='linear', gap_atr=gap/volatility, atr14=volatility,
-                        trend_bars=end-a, wick_breach=any(bars[i]['high'] > at(i) for i in range(known+1,end+1)))
-            candidates.append(line)
-    # Prefer the dominant higher high, then the latest valid lower high.
-    candidates.sort(key=lambda x:(-x['anchor_a_price'], -int(x['anchor_b_date'].replace('-','')), x['gap_atr']))
-    if not candidates:
+    bars = full[-min(cfg['window'],recent.WINDOW):]
+    line = recent.select(full,window=cfg['window'],min_trend_bars=cfg['min_trend_bars'])
+    if line is None or not 0 <= line['gap_atr'] <= cfg['approach_atr']:
         return result
-    line = candidates[0]
     stop = min(b['low'] for b in bars if b['date'] >= line['anchor_b_date'])
     setup = dict(kind=ROUTE, label=LABEL+' · 돌파 전', base_start=line['anchor_a_date'],
                  base_end=bars[-2]['date'], known_at=line['confirmed_at'], pivot=line['value_latest'],
@@ -198,7 +167,7 @@ def cached(root,review,snapshot,source_hash,options=None):
     cfg = settings(options)
     signature = dict(source=source_hash,config=cfg,review=review,
                      code={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in
-                           {Path(__file__),Path(pivots.__code__.co_filename),Path(valid_pair.__code__.co_filename),
+                           {Path(__file__),Path(recent.__file__),
                             Path(completed.__code__.co_filename),Path(check_bars.__code__.co_filename)}})
     key = hashlib.sha256(json.dumps(signature,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
     folder = Path(root)/'runtime/downtrend-approach'/key

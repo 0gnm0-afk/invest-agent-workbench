@@ -138,6 +138,11 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                 value = histories.view(stocks[key], frame)
                 daily = value if frame == '1d' else histories.view(stocks[key], '1d')
                 value['price_events'] = price_events(daily, financials.read(key))
+                from recent_trendlines import overlay
+                entry = next((e for e in data.get('market',{}).get('entries',[]) if e['market']+':'+e['symbol']==key),{})
+                signals = entry.get('route_signals',{})
+                line = signals.get('downtrend_approach',{}).get('trendline') or signals.get('sperandeo',{}).get('resistance_trendline')
+                value['auto_trendlines'] = overlay(daily['bars'],value['bars'],screening_line=line)
                 return self.send(json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8'))
             if path.startswith('/api/stock/'):
                 key = urllib.parse.unquote(path[len('/api/stock/'):])

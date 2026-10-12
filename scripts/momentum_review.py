@@ -41,10 +41,11 @@ def build(screen,snapshot,overrides):
         import watch_review
         old={k:v for k,v in overrides.items() if k!='watchlist'}
         return watch_review.augment(build(screen,snapshot,old),screen,snapshot,overrides['watchlist'])
-    allowed={'strategy','limit_per_market','sperandeo_limit_per_market','taver_enabled','momentum'}
+    allowed={'strategy','limit_per_market','sperandeo_limit_per_market','taver_enabled','momentum','trendline_policy'}
     if set(overrides)-allowed:raise ValueError('unknown_pdf_priority_setting')
     if overrides.get('taver_enabled',False) is not False:raise ValueError('taver_excluded_from_pdf_strategy')
     cfg={'strategy':'pdf_momentum','limit_per_market':10,'sperandeo_limit_per_market':10,'taver_enabled':False,**overrides}
+    if cfg.get('trendline_policy') not in (None,'recent-pivots-v1'):raise ValueError('unknown_trendline_policy')
     cfg['momentum']=model.settings(cfg.get('momentum'))
     for k in ('limit_per_market','sperandeo_limit_per_market'):
         if type(cfg[k]) is not int or not 0<=cfg[k]<=50:raise ValueError('invalid_'+k)
@@ -80,7 +81,13 @@ def build(screen,snapshot,overrides):
         bars,f=prepared[key];pool=returns[key[0]];rs=None
         if f['state']=='available' and len(pool)>1:
             value=f['returns']['252'];rs=100*((bisect_left(pool,value)+bisect_right(pool,value)-1)/2)/(len(pool)-1)
-        try:obs=model.analyze(bars,rs,markets[key[0]],ordered_structure(row.get('sperandeo')),cfg['momentum'],as_of=screen['session_dates'][key[0]])
+        try:
+            structure=ordered_structure(row.get('sperandeo'))
+            if cfg.get('trendline_policy')=='recent-pivots-v1':
+                from recent_sperandeo import analyze as recent_structure
+                structure=recent_structure(bars,as_of=screen['session_dates'][key[0]])
+            obs=model.analyze(bars,rs,markets[key[0]],structure,cfg['momentum'],as_of=screen['session_dates'][key[0]])
+            if cfg.get('trendline_policy'):obs['recent_structure']=structure
         except (ValueError,KeyError,IndexError) as exc:
             obs={'state':'analysis_error','candidate':False,'main_candidate':False,'sperandeo_candidate':False,'rejections':[str(exc)]}
         obs.update(identity,rs_population=len(pool),provider=by_series[key].get('provider'),
@@ -143,11 +150,11 @@ def draw(bars,path,entry):
             xs=[i-start for i in range(start,len(bars)) if i+1>=n]
             ax.plot(xs,[model.sma(bars,n,x+start+1) for x in xs],lw=1,color=color,label=f'SMA {n}')
         known=dates.get(event['known_at'],start)-start
-        if event.get('trendline'):
-            line=event['trendline'];a=dates[line['anchor_a_date']]-start;b=dates[line['anchor_b_date']]-start
+        if event.get('trendline') or event.get('resistance_trendline'):
+            line=event.get('trendline') or event['resistance_trendline'];a=dates[line['anchor_a_date']]-start;b=dates[line['anchor_b_date']]-start
             ax.plot([a,b],[line['anchor_a_price'],line['anchor_b_price']],color='#dd9500',label='Descending resistance')
-            ax.plot([b,len(shown)-1],[line['anchor_b_price'],line['value_latest']],color='#dd9500',ls='--',label='Pre-breakout extension')
-        else:
+            ax.plot([b,len(shown)-1],[line['anchor_b_price'],line['value_latest']],color='#dd9500',ls='--',label='Resistance extension')
+        if not event.get('trendline'):
             ax.hlines(event['pivot'],max(known,0),len(shown)-1,color='#1d4ed8',ls='--',label=f"Pivot {money(event['pivot'],currency)}")
         ax.hlines(event['structure_stop'],max(known,0),len(shown)-1,color='#c54848',ls=':',label=f"Structure invalidation {money(event['structure_stop'],currency)}")
         zone=event.get('entry_zone')

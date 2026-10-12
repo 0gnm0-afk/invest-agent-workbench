@@ -105,14 +105,17 @@ def saved_market(root=ROOT, run_dir=None):
     }
     downtrend_options = load(root/'config.json').get('priority_review',{}).get('watchlist',{}).get('downtrend_approach') if (root/'config.json').exists() else None
     if downtrend_options is not None and review.get('schema') == 4:
-        from downtrend_approach import cached as downtrend_projection
+        from recent_screen_projection import cached as trendline_projection
         try:
-            projected_review = downtrend_projection(root,review,snapshot,sha(source),downtrend_options)
+            projected_review = trendline_projection(root,artifact('screen.json'),snapshot,review,sha(source),downtrend_options)
             result['entries'] = [e for g in projected_review['markets'].values() for e in g['entries']]
             result['candidate_count'] = projected_review['candidate_count']
-            result['downtrend_settings'] = downtrend_options
+            result['entry_candidate_count'] = projected_review['entry_candidate_count']
+            result['trendline_policy'] = projected_review['config']['trendline_policy']
+            result['downtrend_settings'] = projected_review['config']['watchlist']['downtrend_approach']
         except (OSError, ValueError, KeyError, TypeError, BusyError) as exc:
-            result['errors'].append('downtrend_approach_unavailable:' + type(exc).__name__)
+            result['errors'].append('recent_trendlines_unavailable:' + type(exc).__name__)
+            result.update(entries=[],candidate_count=None,entry_candidate_count=None,trendline_policy='unavailable')
     result['screen_groups'] = screen_groups(result['entries'], snapshot.get('universe', []))
     return result
 

@@ -15,8 +15,8 @@ from test_momentum_entry import fixture, series
 
 def example():
     bars=series([80.]*270+[96.]*51)
-    # A at 280, lower B at 290; extended resistance is 102 at 320.
-    for i,price in [(280,110.),(290,108.)]:
+    # A at 280, lower B at 300; extended resistance is 102 at 320.
+    for i,price in [(280,110.),(300,106.)]:
         bars[i].update(open=price-1,close=price-1,high=price,low=price-2)
     bars[-1].update(open=101.,close=101.5,high=101.8,low=100.5)
     return bars
@@ -27,7 +27,7 @@ class DowntrendTests(unittest.TestCase):
         bars=example();r=d.analyze(bars);self.assertEqual(r['state'],'approach')
         sig=r['signals'][0];line=sig['trendline']
         self.assertEqual(line['anchor_a_date'],bars[280]['date'])
-        self.assertEqual(line['anchor_b_date'],bars[290]['date'])
+        self.assertEqual(line['anchor_b_date'],bars[300]['date'])
         self.assertAlmostEqual(line['value_latest'],102)
         self.assertLessEqual(line['gap_atr'],.5)
         self.assertFalse(sig['entry_pass']);self.assertIsNone(sig['breakout_date'])
@@ -40,10 +40,10 @@ class DowntrendTests(unittest.TestCase):
         self.assertFalse(d.analyze(far)['signals'])
         broken=example();broken[-1].update(open=103,close=103,high=104,low=102)
         self.assertFalse(d.analyze(broken)['signals'])
-        retraced=example();retraced[300].update(open=107,close=107,high=108,low=106)
+        retraced=example();retraced[310].update(open=107,close=107,high=108,low=106)
         # Original A/B cannot come back as a fresh signal after a close breakout.
         result=d.analyze(retraced)
-        self.assertFalse(any(s['trendline']['anchor_b_date']==retraced[290]['date'] for s in result['signals']))
+        self.assertFalse(any(s['trendline']['anchor_b_date']==retraced[300]['date'] for s in result['signals']))
 
     def test_future_incomplete_and_missing_inputs(self):
         bars=example();before=d.analyze(bars)

@@ -36,13 +36,18 @@ def augment(strict,screen,snapshot,options):
         if o.get('features',{}).get('state')!='available':continue
         k=(o['market'],o['symbol']);bars=usable_tail(engine.completed(series[k]['bars'],o['as_of']),snapshot['sessions'][k[0]])
         o['entry_settings']=strict['config']['momentum']
-        result=watch.analyze(bars,{**o,'market':out['market_context'][k[0]]},ordered_structure(rows[k].get('sperandeo')),cfg,as_of=o['as_of']);o.update(result)
+        result=watch.analyze(bars,{**o,'market':out['market_context'][k[0]]},o.get('recent_structure',ordered_structure(rows[k].get('sperandeo'))),cfg,as_of=o['as_of']);o.update(result)
         if base_cfg is not None:
             result=base.analyze(bars,base_cfg,as_of=o['as_of'],market=out['market_context'][k[0]])
             o['base_observation']=result
             # Existing signals win ties, preserving their representative chart and phase.
             o['signals']=sorted(o['signals']+result['signals'],key=lambda s:(watch.ORDER[s['phase']],s['route']=='base_watch',signal_key(s)))
             o['phase']=o['signals'][0]['phase'] if o['signals'] else 'excluded'
+        if o.get('recent_structure'):
+            structure=next(iter(o['recent_structure']['windows'].values()),{})
+            for sig in o['signals']:
+                if sig['route']=='sperandeo' and structure.get('trendline'):
+                    sig['resistance_trendline']=structure['trendline']
         o['candidate']=bool(o['signals'])
     groups={}
     for market in ('KR','US'):
