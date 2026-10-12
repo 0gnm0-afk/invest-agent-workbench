@@ -11,7 +11,7 @@ def price_text(text, currency):
 
 PRICE_KEYS = {'open','high','low','close','price','pivot','structure_stop','latest_close',
               'breakout_close','lower_exclusive','upper_inclusive','atr14','year_high','year_low',
-              'first_half_low','last_half_low','prior_peak'}
+              'first_half_low','last_half_low','prior_peak','anchor_a_price','anchor_b_price','value_latest','slope_per_bar'}
 
 def display_analysis(value, currency, key=''):
     if isinstance(value, list):

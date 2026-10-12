@@ -17,7 +17,7 @@ window.WorkbenchFormat = (() => {
   }
   const priceKeys = new Set(['open','high','low','close','price','pivot','structure_stop','latest_close',
     'breakout_close','lower_exclusive','upper_inclusive','atr14','year_high','year_low',
-    'first_half_low','last_half_low','prior_peak']);
+    'first_half_low','last_half_low','prior_peak','anchor_a_price','anchor_b_price','value_latest','slope_per_bar']);
   function analysis(value, currency, key = '') {
     if (Array.isArray(value)) return value.map(v => analysis(v, currency, key));
     if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) =>

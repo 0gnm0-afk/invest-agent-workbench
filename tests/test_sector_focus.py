@@ -94,11 +94,11 @@ class FocusTests(unittest.TestCase):
              market_cap_currency='KRW' if e['market']=='KR' else 'USD',market_cap_as_of='2026-09-24') for e in entries]
         groups=f.screen_groups(entries,uni)
         for group in groups:
-            if group['route']=='sperandeo':self.assertEqual(group['top'],[])
+            if group['route'] in ('sperandeo','downtrend_approach'):self.assertEqual(group['top'],[])
             else:self.assertEqual((group['top'],group['missing_cap']),(['4','3','2'],1))
         self.assertEqual([{k:v for k,v in e.items() if k!='display_cap'} for e in entries],original)
         uni[-1]['market_cap_currency']='KRW'
-        group=f.screen_groups(entries,uni)[3]
+        group=next(g for g in f.screen_groups(entries,uni) if g['market']=='US' and g['route']=='pdf_momentum')
         self.assertEqual(group['top'],['3','2','1'])
 
     def test_cache_reuse_and_tamper_detection(self):

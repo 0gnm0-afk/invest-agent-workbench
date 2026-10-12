@@ -1,4 +1,4 @@
-"""Read-only view adapter. No market collection or stock screening. Cached sector attention projection only."""
+"""Read-only view adapter. No market collection. Cached sector and downtrend projections on verified saved inputs."""
 import hashlib
 import json
 import sys
@@ -103,6 +103,16 @@ def saved_market(root=ROOT, run_dir=None):
         'classification': (sum(c['unmatched'] for c in result['coverage'].values())
                            if result.get('coverage') and all('unmatched' in c for c in result['coverage'].values()) else None),
     }
+    downtrend_options = load(root/'config.json').get('priority_review',{}).get('watchlist',{}).get('downtrend_approach') if (root/'config.json').exists() else None
+    if downtrend_options is not None and review.get('schema') == 4:
+        from downtrend_approach import cached as downtrend_projection
+        try:
+            projected_review = downtrend_projection(root,review,snapshot,sha(source),downtrend_options)
+            result['entries'] = [e for g in projected_review['markets'].values() for e in g['entries']]
+            result['candidate_count'] = projected_review['candidate_count']
+            result['downtrend_settings'] = downtrend_options
+        except (OSError, ValueError, KeyError, TypeError, BusyError) as exc:
+            result['errors'].append('downtrend_approach_unavailable:' + type(exc).__name__)
     result['screen_groups'] = screen_groups(result['entries'], snapshot.get('universe', []))
     return result
 

@@ -13,13 +13,14 @@ def signal_key(s):return base.rank(s) if s['route']=='base_watch' else watch.key
 def rs_label(rs):return f'{rs:.1f}' if rs is not None else '미산출'
 
 LABELS=watch.PHASES
-ROUTES={'pdf_momentum':'PDF 모멘텀','sperandeo':'스페란데오','base_watch':'바닥·눌림 횡보'}
+ROUTES={'pdf_momentum':'PDF 모멘텀','sperandeo':'스페란데오','base_watch':'바닥·눌림 횡보','downtrend_approach':'하락 추세선 근접'}
 WHY={'watch_rs':'관찰 상대강도 미달','long_uptrend':'장기 상승 추세 미충족','near_or_above_50':'50일선에서 크게 이탈',
      'positive_3m':'3개월 상승 미충족','near_year_high':'52주 고점에서 크게 이탈','no_intact_watch_structure':'유효한 조정/재시험 구조 없음'}
 
 def augment(strict,screen,snapshot,options):
     options=dict(options);enabled=options.pop('enabled',True)
     if enabled is not True:raise ValueError('watchlist_enabled_must_be_true')
+    downtrend_options=options.pop('downtrend_approach',None)
     base_options=options.pop('base_structure',None)
     base_cfg=None;base_cap=0
     if base_options is not None:
@@ -76,6 +77,9 @@ def augment(strict,screen,snapshot,options):
     out.update(markets=groups,candidate_count=sum(g['candidate_count'] for g in groups.values()),
         entry_candidate_count=sum(g['entry_candidate_count'] for g in groups.values()),
         policy='관찰 시작 → 돌파 대기 → 진입 조건 충족. 관찰 단계에는 시장·거래량·진입 위험의 미충족 조건을 함께 표시합니다.')
+    if downtrend_options is not None:
+        from downtrend_approach import augment as add_downtrend
+        out=add_downtrend(out,snapshot,downtrend_options)
     return out
 
 def report_lines(review,charts):

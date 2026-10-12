@@ -143,7 +143,12 @@ def draw(bars,path,entry):
             xs=[i-start for i in range(start,len(bars)) if i+1>=n]
             ax.plot(xs,[model.sma(bars,n,x+start+1) for x in xs],lw=1,color=color,label=f'SMA {n}')
         known=dates.get(event['known_at'],start)-start
-        ax.hlines(event['pivot'],max(known,0),len(shown)-1,color='#1d4ed8',ls='--',label=f"Pivot {money(event['pivot'],currency)}")
+        if event.get('trendline'):
+            line=event['trendline'];a=dates[line['anchor_a_date']]-start;b=dates[line['anchor_b_date']]-start
+            ax.plot([a,b],[line['anchor_a_price'],line['anchor_b_price']],color='#dd9500',label='Descending resistance')
+            ax.plot([b,len(shown)-1],[line['anchor_b_price'],line['value_latest']],color='#dd9500',ls='--',label='Pre-breakout extension')
+        else:
+            ax.hlines(event['pivot'],max(known,0),len(shown)-1,color='#1d4ed8',ls='--',label=f"Pivot {money(event['pivot'],currency)}")
         ax.hlines(event['structure_stop'],max(known,0),len(shown)-1,color='#c54848',ls=':',label=f"Structure invalidation {money(event['structure_stop'],currency)}")
         zone=event.get('entry_zone')
         if zone:ax.fill_between([max(known,0),len(shown)-1],zone['lower_exclusive'],zone['upper_inclusive'],color='#3b82f6',alpha=.1,label='Entry review zone')
@@ -153,7 +158,7 @@ def draw(bars,path,entry):
             ax.scatter(i,event['breakout_close'],marker='^',s=90,color='#111827',zorder=5,label='Confirmed close breakout')
         else:
             ax.set_xlim(-1,len(shown)+10)
-            for level,color in [(event['pivot'],'#1d4ed8'),(event['structure_stop'],'#c54848')]:
+            for level,color in ([(event['structure_stop'],'#c54848')] if event.get('trendline') else [(event['pivot'],'#1d4ed8'),(event['structure_stop'],'#c54848')]):
                 ax.hlines(level,max(known,0),len(shown)+5,color=color,ls='--',lw=1)
                 ax.text(len(shown)+1,level,money(level,currency),color=color,fontsize=8)
             ax.scatter(len(shown)-1,bars[-1]['close'],marker='o',s=35,color='#111827',label='Observation only')
@@ -180,9 +185,9 @@ def charts(review,screen,snapshot,output,draw_fn=None):
             row={'market':e['market'],'symbol':e['symbol'],'as_of':e['as_of'],'state':'failed'}
             try:
                 b=usable_tail(model.completed(series[(e['market'],e['symbol'])]['bars'],e['as_of']),snapshot['sessions'][e['market']])
-                image=folder/(stem+'.png');draw_fn(b,image,e);write(folder/(stem+'.json'),{'entry':e,'source':({'basis':'user_requested_base_watch_operational_assumptions','rules':'B1-B6'} if e['entry_signal']['route']=='base_watch' else SOURCE)})
+                image=folder/(stem+'.png');draw_fn(b,image,e);write(folder/(stem+'.json'),{'entry':e,'source':({'basis':'user_requested_base_watch_operational_assumptions','rules':'B1-B6'} if e['entry_signal']['route']=='base_watch' else {'basis':'user_requested_downtrend_approach'} if e['entry_signal']['route']=='downtrend_approach' else SOURCE)})
                 esc=html.escape
-                body='<h1>'+esc(stock_label(e))+'</h1><p>완료 세션 '+esc(e['as_of'])+' · '+esc(' / '.join('바닥·눌림 횡보' if x=='base_watch' else '스페란데오' if x=='sperandeo' and review.get('schema')==4 else ROUTES[x] for x in e['origins']))+'</p>'
+                body='<h1>'+esc(stock_label(e))+'</h1><p>완료 세션 '+esc(e['as_of'])+' · '+esc(' / '.join('바닥·눌림 횡보' if x=='base_watch' else '스페란데오' if x=='sperandeo' and review.get('schema')==4 else '하락 추세선 근접' if x=='downtrend_approach' else ROUTES[x] for x in e['origins']))+'</p>'
                 body+='<p>'+esc(e.get('entry_signal',{}).get('phase_label','진입 조건 충족'))+' · 재무/기관/질적 조건 미검증 · 자동 주문 없음</p><img style="max-width:100%" src="'+stem+'.png">'
                 body+='<ul>'+''.join('<li>'+esc(price_text(x,currency_for(e)))+'</li>' for x in e['reasons'])+'</ul>'
                 body+='<p>구조 무효화 참고선은 자동 손절 주문이 아닙니다. 갭·슬리피지·현재 장중 가격을 반영하지 않습니다.</p>'

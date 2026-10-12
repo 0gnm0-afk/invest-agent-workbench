@@ -212,7 +212,7 @@ def screen_groups(entries, universe):
     result=[]
     for market in ('KR','US'):
         currency={'KR':'KRW','US':'USD'}[market]
-        for route,label in [('pdf_momentum','PDF 모멘텀'),('sperandeo','스페란데오 S3·S4'),('base_watch','바닥·눌림 횡보')]:
+        for route,label in [('pdf_momentum','PDF 모멘텀'),('sperandeo','스페란데오 S3·S4'),('base_watch','바닥·눌림 횡보'),('downtrend_approach','하락 추세선 근접')]:
             rows=[]
             for e in entries:
                 if e['market']!=market or route not in e.get('origins',[]):continue
