@@ -15,8 +15,8 @@ from test_momentum_entry import fixture, series
 
 def example():
     bars=series([80.]*270+[96.]*51)
-    # A at 280, lower B at 300; extended resistance is 102 at 320.
-    for i,price in [(280,110.),(300,106.)]:
+    # Three descending pivots; the upstream regression is 102 at 320.
+    for i,price in [(280,110.),(290,108.),(300,106.)]:
         bars[i].update(open=price-1,close=price-1,high=price,low=price-2)
     bars[-1].update(open=101.,close=101.5,high=101.8,low=100.5)
     return bars

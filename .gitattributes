@@ -3,3 +3,6 @@ skills/stock-qualitative-analysis/** -text whitespace=cr-at-eol
 # Preserved unified diffs contain intentional blank context lines.
 docs/qualitative-scenario-skill-2026-10-08.patch -whitespace
 docs/scenario-monitor-blueprint-2026-10-08.patch -whitespace
+
+# Preserve the upstream release bytes, including its original whitespace.
+scripts/vendor/trendln/** -text -whitespace

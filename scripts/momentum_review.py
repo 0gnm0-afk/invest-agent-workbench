@@ -45,7 +45,7 @@ def build(screen,snapshot,overrides):
     if set(overrides)-allowed:raise ValueError('unknown_pdf_priority_setting')
     if overrides.get('taver_enabled',False) is not False:raise ValueError('taver_excluded_from_pdf_strategy')
     cfg={'strategy':'pdf_momentum','limit_per_market':10,'sperandeo_limit_per_market':10,'taver_enabled':False,**overrides}
-    if cfg.get('trendline_policy') not in (None,'recent-pivots-v1'):raise ValueError('unknown_trendline_policy')
+    if cfg.get('trendline_policy') not in (None,'trendln-0.1.18-v1'):raise ValueError('unknown_trendline_policy')
     cfg['momentum']=model.settings(cfg.get('momentum'))
     for k in ('limit_per_market','sperandeo_limit_per_market'):
         if type(cfg[k]) is not int or not 0<=cfg[k]<=50:raise ValueError('invalid_'+k)
@@ -83,7 +83,7 @@ def build(screen,snapshot,overrides):
             value=f['returns']['252'];rs=100*((bisect_left(pool,value)+bisect_right(pool,value)-1)/2)/(len(pool)-1)
         try:
             structure=ordered_structure(row.get('sperandeo'))
-            if cfg.get('trendline_policy')=='recent-pivots-v1':
+            if cfg.get('trendline_policy')=='trendln-0.1.18-v1':
                 from recent_sperandeo import analyze as recent_structure
                 structure=recent_structure(bars,as_of=screen['session_dates'][key[0]])
             obs=model.analyze(bars,rs,markets[key[0]],structure,cfg['momentum'],as_of=screen['session_dates'][key[0]])

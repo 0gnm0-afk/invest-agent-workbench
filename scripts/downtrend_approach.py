@@ -167,7 +167,7 @@ def cached(root,review,snapshot,source_hash,options=None):
     cfg = settings(options)
     signature = dict(source=source_hash,config=cfg,review=review,
                      code={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in
-                           {Path(__file__),Path(recent.__file__),
+                           {Path(__file__),Path(recent.__file__),Path(recent.trendln.__file__),
                             Path(completed.__code__.co_filename),Path(check_bars.__code__.co_filename)}})
     key = hashlib.sha256(json.dumps(signature,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
     folder = Path(root)/'runtime/downtrend-approach'/key

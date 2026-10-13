@@ -1,8 +1,11 @@
-"""Recent confirmed pivot envelopes shared by chart and screening; no network/storage."""
+"""Pinned trendln regression lines shared by chart and screening; no network/storage."""
 import math
-from invest_agent.trading.sperandeo import pivots, PIVOT_RIGHT
+from vendor import trendln
 
-VERSION = 'recent-pivots-v1'
+PIVOT_RIGHT = 2  # Conservative confirmation delay; trendln NAIVE needs one right bar.
+
+VERSION = 'trendln-0.1.18-v1'
+FIT_ERROR = .005
 WINDOW = 60
 MIN_TREND_BARS = 10
 MAX_TOUCH_AGE = 20
@@ -36,57 +39,80 @@ def clean(raw, as_of=None):
 
 
 def candidates(raw, key='high', *, as_of=None, window=WINDOW, min_trend_bars=MIN_TREND_BARS):
-    """Two confirmed pivots, bounded age, intact bodies and ATR-bounded wick noise.
+    """Use upstream fits unchanged, then apply the shared screening eligibility.
 
-    No regression through candle bodies. The first close break is retained even
-    after price retraces. Rank before testing approach, to avoid cherry-picking
-    whichever of many old lines happens to sit next to today's close.
+    A/B prices are coordinates ON the regression, not necessarily candle extrema.
+    Actual extrema and all fitted points remain in fit_points for audit/display.
+    No custom two-point fallback: fewer than three fitting pivots means no line.
     """
-    bars = clean(raw,as_of)
-    if len(bars)<15:return []
-    atrs=atr_series(bars)
-    offset=max(0,len(bars)-min(window,WINDOW))
-    points=[i+offset for i in pivots(bars[offset:],key)]
-    end=len(bars)-1
-    sign=1 if key=='high' else -1
-    result=[]
-    for b in reversed(points):
-        if end-b>MAX_TOUCH_AGE:continue
-        for a in reversed(points):
-            if b-a<5 or end-a<min_trend_bars or atrs[a] is None:continue
-            slope=(bars[b][key]-bars[a][key])/(b-a)
-            if slope*sign>=0:continue
-            at=lambda i:bars[a][key]+slope*(i-a)
-            known=b+PIVOT_RIGHT
-            if at(end)<=0:continue
-            eps=max(bars[a][key],bars[b][key])*1e-10
-            broken=None;breach=None;valid=True
-            for i in range(a,end+1):
-                value=at(i)
-                crossed=sign*(bars[i]['close']-value)>eps
-                if crossed:
-                    if i<=known:valid=False
-                    else:broken=i
-                    break
-                body=max(bars[i]['open'],bars[i]['close']) if key=='high' else min(bars[i]['open'],bars[i]['close'])
-                if sign*(body-value)>eps or sign*(bars[i][key]-value)>WICK_ATR*atrs[i]+eps:
-                    valid=False;break
-                if sign*(bars[i][key]-value)>eps and breach is None:breach=i
-            if not valid or broken is not None and broken-a<min_trend_bars:continue
-            touch_end=broken if broken is not None else end+1
-            touches=[i for i in points if a<=i<touch_end and abs(bars[i][key]-at(i))<=WICK_ATR*atrs[i]+eps]
-            result.append(dict(state='available',algorithm=VERSION,side='resistance' if key=='high' else 'support',
-                anchor_a_date=bars[a]['date'],anchor_a_price=bars[a][key],anchor_b_date=bars[b]['date'],anchor_b_price=bars[b][key],
-                anchor_a_confirmed_at=bars[a+PIVOT_RIGHT]['date'],confirmed_at=bars[known]['date'],
-                slope_per_bar=slope,value_latest=at(end),as_of=bars[end]['date'],time_axis='trading_sessions',price_scale='linear',
-                atr14=atrs[-1],gap_atr=sign*(at(end)-bars[end]['close'])/atrs[-1] if atrs[-1] else None,
-                trend_bars=end-a,touch_count=len(touches),touch_dates=[bars[i]['date'] for i in touches],
-                last_touch_age=end-b,wick_breach=breach is not None,
-                first_price_breach_date=bars[breach]['date'] if breach is not None else None,
-                first_close_break_date=bars[broken]['date'] if broken is not None else None,
-                bars_since_break=end-broken if broken is not None else None,
-                latest_close_beyond_line=sign*(bars[end]['close']-at(end))>eps))
-    result.sort(key=lambda l:(l['last_touch_age'],-min(l['touch_count'],3),l['trend_bars']))
+    if key not in ('high', 'low'):
+        raise ValueError('invalid_trendline_side')
+    bars = clean(raw, as_of)
+    if len(bars) < 15:
+        return []
+    atrs = atr_series(bars)
+    offset = max(0, len(bars)-min(window, WINDOW))
+    values = [float(b[key]) for b in bars[offset:]]
+    if len(values) < 3:
+        return []
+    data = (None, values) if key == 'high' else (values, None)
+    _, _, fitted, _ = trendln.calc_support_resistance(
+        data, extmethod=trendln.METHOD_NAIVE, method=trendln.METHOD_NSQUREDLOGN,
+        window=len(values), errpct=FIT_ERROR, sortError=False, include_edge=False)
+    end = len(bars)-1
+    sign = 1 if key == 'high' else -1
+    result = []
+    for local_points, fit in fitted:
+        points = sorted(i+offset for i in local_points)
+        a, b = points[0], points[-1]
+        known = b+PIVOT_RIGHT
+        if known > end or end-b > MAX_TOUCH_AGE or b-a < 5 or end-a < min_trend_bars or atrs[a] is None:
+            continue
+        slope, intercept, ssr, slope_error, intercept_error, area = map(float, fit)
+        if not all(math.isfinite(v) for v in fit) or slope*sign >= 0:
+            continue
+        base = intercept+slope*(a-offset)
+        at = lambda i: base+slope*(i-a)
+        if at(end) <= 0:
+            continue
+        eps = max(bars[a][key], bars[b][key])*1e-10
+        broken = breach = None
+        valid = True
+        for i in range(a, end+1):
+            value = at(i)
+            if sign*(bars[i]['close']-value) > eps:
+                if i <= known:
+                    valid = False
+                else:
+                    broken = i
+                break
+            body = max(bars[i]['open'], bars[i]['close']) if key == 'high' else min(bars[i]['open'], bars[i]['close'])
+            if sign*(body-value) > eps or sign*(bars[i][key]-value) > WICK_ATR*atrs[i]+eps:
+                valid = False
+                break
+            if sign*(bars[i][key]-value) > eps and breach is None:
+                breach = i
+        if not valid or broken is not None and broken-a < min_trend_bars:
+            continue
+        result.append(dict(state='available', algorithm=VERSION, library='trendln', library_version='0.1.18',
+            fit_method='METHOD_NSQUREDLOGN', extrema_method='METHOD_NAIVE', fit_error_pct=FIT_ERROR,
+            side='resistance' if key=='high' else 'support',
+            anchor_a_date=bars[a]['date'], anchor_a_price=at(a), anchor_b_date=bars[b]['date'], anchor_b_price=at(b),
+            anchor_a_source_price=bars[a][key], anchor_b_source_price=bars[b][key],
+            anchor_a_confirmed_at=bars[a+PIVOT_RIGHT]['date'], confirmed_at=bars[known]['date'],
+            slope_per_bar=slope, value_latest=at(end), as_of=bars[end]['date'], time_axis='trading_sessions', price_scale='linear',
+            atr14=atrs[-1], gap_atr=sign*(at(end)-bars[end]['close'])/atrs[-1] if atrs[-1] else None,
+            trend_bars=end-a, touch_count=len(points), touch_dates=[bars[i]['date'] for i in points],
+            fit_points=[dict(date=bars[i]['date'], price=bars[i][key], line_price=at(i)) for i in points],
+            fit_ssr=ssr, fit_slope_error=slope_error, fit_intercept_error=intercept_error, fit_wrong_side_area=area,
+            last_touch_age=end-b, wick_breach=breach is not None,
+            first_price_breach_date=bars[breach]['date'] if breach is not None else None,
+            first_close_break_date=bars[broken]['date'] if broken is not None else None,
+            bars_since_break=end-broken if broken is not None else None,
+            latest_close_beyond_line=sign*(bars[end]['close']-at(end)) > eps))
+    # Upstream ranks by wrong-side area. Use its error metric and recency for ties;
+    # select before the proximity filter, never search for whichever line is near.
+    result.sort(key=lambda l: (l['fit_wrong_side_area'], l['fit_slope_error'], l['last_touch_age'], l['trend_bars']))
     return result
 
 

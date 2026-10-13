@@ -12,6 +12,37 @@ import momentum_review
 
 
 class RecentTrendlineTests(unittest.TestCase):
+    def test_upstream_source_and_non_collinear_regression(self):
+        import hashlib
+        notice=Path(r.trendln.__file__).with_name('NOTICE.md').read_text(encoding='utf-8')
+        self.assertIn(hashlib.sha256(Path(r.trendln.__file__).read_bytes()).hexdigest(),notice)
+        bars=example();bars[290]['high']+=.01
+        with patch.object(r.trendln,'calc_support_resistance',wraps=r.trendln.calc_support_resistance) as calculate:
+            line=r.select(bars)
+        calculate.assert_called_once()
+        self.assertEqual(line['library_version'],'0.1.18')
+        self.assertEqual(line['touch_count'],3)
+        # Independent OLS oracle over three non-collinear highs. Endpoints must
+        # use the fitted values, never snap the regression back to two candles.
+        xs=[280,290,300];ys=[bars[i]['high'] for i in xs]
+        xmean=sum(xs)/3;ymean=sum(ys)/3
+        slope=sum((x-xmean)*(y-ymean) for x,y in zip(xs,ys))/sum((x-xmean)**2 for x in xs)
+        expected=ymean+slope*(320-xmean)
+        self.assertAlmostEqual(line['value_latest'],expected)
+        self.assertNotEqual(line['anchor_a_price'],line['anchor_a_source_price'])
+        self.assertGreater(line['fit_ssr'],0)
+        import downtrend_approach
+        boundary=copy.deepcopy(bars);level=line['value_latest']
+        boundary[-1].update(open=level,close=level,high=level,low=level-1)
+        self.assertEqual(downtrend_approach.analyze(boundary)['signals'][0]['trendline']['gap_atr'],0)
+        packet=r.overlay(bars,bars,screening_line=line)
+        actual=next(l for l in packet['lines'] if l['side']=='resistance')
+        self.assertEqual(actual['extension'][-1]['value'],line['value_latest'])
+
+    def test_no_custom_two_point_fallback(self):
+        bars=example();bars[290].update(open=96,close=96,high=96.4,low=95.6)
+        self.assertIsNone(r.select(bars))
+
     def test_recent_limits_and_candle_envelope(self):
         bars=example();line=r.select(bars)
         self.assertEqual(line['anchor_a_date'],bars[280]['date'])
