@@ -187,7 +187,7 @@ class IntegrationTests(unittest.TestCase):
                 daily.render(run,out,screen)
                 page=(out/'report.html').read_text(encoding='utf-8')
                 self.assertNotIn('LEGACY_ONLY',page)
-                self.assertIn('PDF 모멘텀',page);self.assertIn('진입후보',page)
+                self.assertIn('추세, 조정, 돌파',page);self.assertIn('진입후보',page)
                 self.assertIn('href="entry-scan.html"',page)
                 self.assertNotIn('## 조사 순서',page)
         for item in snap['series']:item['bars'][-1]['volume']=1

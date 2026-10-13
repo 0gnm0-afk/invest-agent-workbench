@@ -13,7 +13,7 @@ from display_format import money, currency_for, price_text, display_analysis
 
 SOURCE={'title':'최고의 주식을 고르는 대가들의 노하우','publisher':'DB금융투자','date':'2023-08-21',
         'pdf_pages':45,'sha256':'26ddc0f066941c5406f59d8da2dad84681548a9a55e93ad63c417955e91149d7'}
-ROUTES={'pdf_momentum':'PDF 모멘텀','sperandeo':'스페란데오 S4'}
+ROUTES={'pdf_momentum':'추세, 조정, 돌파','sperandeo':'스페란데오 S4'}
 REASONS={'not_selected':'진입 조건 미충족','relative_strength':'12개월 상대강도 부족/결측','positive_2_3_4m':'2·3·4개월 상승 조건 미충족',
 'market_supportive':'시장 추세 지지 부족/결측','above_150_200':'150·200일선 아래','ma150_above_200':'150/200일선 역전',
 'ma200_rising_month':'200일선 한 달 상승 미충족','ma50_above_150_200':'50/150/200일선 정렬 미충족',

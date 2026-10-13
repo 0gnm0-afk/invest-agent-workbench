@@ -13,7 +13,7 @@ def signal_key(s):return base.rank(s) if s['route']=='base_watch' else watch.key
 def rs_label(rs):return f'{rs:.1f}' if rs is not None else '미산출'
 
 LABELS=watch.PHASES
-ROUTES={'pdf_momentum':'PDF 모멘텀','sperandeo':'스페란데오','base_watch':'바닥·눌림 횡보','downtrend_approach':'하락 추세선 근접'}
+ROUTES={'pdf_momentum':'추세, 조정, 돌파','sperandeo':'스페란데오','base_watch':'바닥·눌림 횡보','downtrend_approach':'하락 추세선 근접'}
 WHY={'watch_rs':'관찰 상대강도 미달','long_uptrend':'장기 상승 추세 미충족','near_or_above_50':'50일선에서 크게 이탈',
      'positive_3m':'3개월 상승 미충족','near_year_high':'52주 고점에서 크게 이탈','no_intact_watch_structure':'유효한 조정/재시험 구조 없음'}
 
