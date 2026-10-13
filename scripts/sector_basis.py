@@ -17,6 +17,12 @@ REVIEWED_REVISIONS = frozenset({(
     CONTRACT, FAQ_URL,
     '0dd9ad07af2bdf4b333a8ba902ede5b727e5f87cf95d77d7b5786119159d216b',
     '89198a71f91c88d672fc2e55fc363015e5c99069378c93c35460203e19177b4e',
+), (
+    # Full FAQ diff reviewed 2026-10-13. KR/US adjustment rounding differs;
+    # daily session and comprehensive volume still use provider values as supplied.
+    CONTRACT, FAQ_URL,
+    '0dd9ad07af2bdf4b333a8ba902ede5b727e5f87cf95d77d7b5786119159d216b',
+    '24719bffec1c419af9dab1e16aba66e2d35103a1a417e28ce36bd84bd2b270ca',
 )})
 
 
@@ -95,8 +101,12 @@ def series_basis(series):
         return None, 'adjusted_price_and_volume_required'
     return {'contract':CONTRACT, 'market':market,
             'price_session':'KR_integrated_provider_daily_close' if market == 'KR' else 'US_regular_official_close',
-            'price_adjustment':'provider_price_times_adjustment_ratio_rounded_no_local_readjustment',
-            'volume_adjustment':'provider_volume_divided_by_adjustment_ratio_floored',
+            'price_adjustment':('provider_price_times_adjustment_ratio_KRW_rounded_no_local_readjustment'
+                                if market == 'KR' else
+                                'provider_price_times_adjustment_ratio_USD_unrounded_no_local_readjustment'),
+            'volume_adjustment':('provider_volume_divided_by_adjustment_ratio_floored'
+                                 if market == 'KR' else
+                                 'provider_volume_divided_by_adjustment_ratio_nearest_integer'),
             'volume_session':'provider_daily_comprehensive_including_off_session_trades',
             'return_semantics':'provider_adjusted_close_return_not_certified_reinvested_total_return',
             'volume_semantics':'relative_provider_activity_not_consolidated_market_flow'}, None

@@ -37,6 +37,14 @@ class BasisTest(unittest.TestCase):
         self.assertIn('divided_by',basis['volume_adjustment'])
         self.assertIn('off_session',basis['volume_session'])
 
+    def test_market_specific_adjustment_semantics(self):
+        kr,_=sb.series_basis(stock('KR'))
+        us,_=sb.series_basis(stock('US'))
+        self.assertIn('KRW_rounded',kr['price_adjustment'])
+        self.assertIn('floored',kr['volume_adjustment'])
+        self.assertIn('USD_unrounded',us['price_adjustment'])
+        self.assertIn('nearest_integer',us['volume_adjustment'])
+
     def test_unknown_provider_raw_price_and_wrong_currency_rejected(self):
         for key,value in [('provider','NH'),('source_url','https://example.invalid'),('currency','USD'),
                           ('price_basis','toss_raw_ohlc_no_order_authority'),('collection',{'adjusted':False}),
