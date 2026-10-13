@@ -31,6 +31,18 @@ def equity(p):
         'stock', 'equity', 'etf', 'adr', 'common_stock', 'commonshare', 'depositary_receipt')
 
 
+POLICY = 'high95-approach-v2'
+
+
+def levels(bar, line):
+    return {'trailing': line, 'ma5': bar['ma5'], 'ma10': bar['ma10']}
+
+
+def approach_flags(bar, line):
+    return {kind: bar['close'] <= value + .5*bar['atr']
+            for kind, value in levels(bar, line).items()}
+
+
 def indicators(rows):
     """Wilder ATR14 seeded by 14 TRs requiring a preceding close."""
     bars, trs, atr, prior = [], [], None, None
@@ -49,8 +61,10 @@ def indicators(rows):
             elif len(trs) > 14:
                 atr = (atr*13+tr)/14
         values = [r['close'] for r in bars[-4:]]+[close]
+        ten = [r['close'] for r in bars[-9:]]+[close]
         bars.append(dict(date=day, high=high, low=low, close=close, atr=atr,
-                         ma5=sum(values)/5 if len(values) == 5 else None))
+                         ma5=sum(values)/5 if len(values) == 5 else None,
+                         ma10=sum(ten)/10 if len(ten) == 10 else None))
         prior = close
     return bars
 
@@ -167,43 +181,56 @@ class TrailingStore:
                                 state['status'] = 'waiting_profit'
                                 if latest['close'] > cost:
                                     state.update(active=True, generation=state['generation']+1, started_on=latest['date'],
-                                                 high=latest['high'], line=None, history=[], last_date=None, below=False)
+                                                 high=latest['high'], line=None, history=[], last_date=None, below=False, policy=None)
                             if state['active']:
+                                # Upgrade at the last processed close; never replay old-policy alerts.
+                                if state.get('policy') != POLICY:
+                                    if state.get('last_date'):
+                                        anchor = by_day[state['last_date']]
+                                        state.setdefault('policy_changes', []).append(dict(
+                                            previous_policy=state.get('policy', 'trailing-v1'),
+                                            previous_line=state.get('line'), date=anchor['date'],
+                                            changed_at=now.isoformat(), policy=POLICY))
+                                        state['line'] = .95*state['high']
+                                        state['approaching'] = approach_flags(anchor, state['line'])
+                                    else:
+                                        prior = bars[-2] if len(bars) > 1 and bars[-2]['atr'] is not None else latest
+                                        # Existing MA proximity at activation is a baseline, not a crossing.
+                                        state['approaching'] = {
+                                            kind: prior is not None and prior['atr'] is not None
+                                                  and prior[kind] is not None
+                                                  and prior['close'] <= prior[kind]+.5*prior['atr']
+                                            for kind in ('ma5', 'ma10')}
+                                        state['approaching']['trailing'] = False
+                                    state['policy'] = POLICY
+                                    state.pop('cost_pending', None)
                                 pending = [b for b in bars if b['date'] >= state['started_on'] and b['date'] > (state.get('last_date') or '')]
-                                breach_pending = False
+                                approach_pending = {kind: False for kind in ('trailing', 'ma5', 'ma10')}
                                 for bar in pending:
-                                    # Additional purchases preserve both H and the previous line.
                                     state['high'] = max(state['high'], bar['high'])
-                                    candidate = max(state['high']-2.5*bar['atr'], .95*state['high'])
-                                    floor = cost if bar['date'] == latest['date'] else previous_cost
-                                    state['line'] = max(state.get('line') or floor, floor, candidate)
-                                    below = bar['close'] <= state['line']
-                                    if below and not state.get('below', False):
-                                        breach_pending = True
-                                    elif not below:
-                                        breach_pending = False
-                                    idx = bars.index(bar)
-                                    prior = bars[idx-1] if idx else None
-                                    ma_cross = prior is not None and prior['ma5'] is not None and prior['close'] > prior['ma5'] and bar['close'] <= bar['ma5']
-                                    # Backlogged bars rebuild the state; only the latest completed session issues new warnings.
+                                    state['line'] = .95*state['high']
+                                    flags = approach_flags(bar, state['line'])
+                                    for kind, near in flags.items():
+                                        if near and not state['approaching'].get(kind, False):
+                                            approach_pending[kind] = True
+                                        elif not near:
+                                            approach_pending[kind] = False
+                                    # Restore gaps, but issue only a still-active latest-session event.
                                     if bar['date'] == latest['date']:
-                                        for kind, triggered, threshold in [('trailing', below and breach_pending, state['line']), ('ma5',ma_cross,bar['ma5'])]:
-                                            if triggered:
-                                                event_id = hashlib.sha256(f"{key}|{state['generation']}|{bar['date']}|{kind}".encode()).hexdigest()
+                                        for kind, threshold in levels(bar, state['line']).items():
+                                            if flags[kind] and approach_pending[kind]:
+                                                event_id = hashlib.sha256(f"{key}|{state['generation']}|{bar['date']}|{kind}|{POLICY}".encode()).hexdigest()
+                                                label = {'trailing':'고점 대비 5% 트레일링선', 'ma5':'5일 이동평균선', 'ma10':'10일 이동평균선'}[kind]
                                                 event = dict(id=event_id, key=key, account=alias, market=p['market'], symbol=p['symbol'], currency=p['currency'],
-                                                    date=bar['date'], kind=kind, close=bar['close'], threshold=threshold, created_at=now.isoformat(),
-                                                    name=state['name'], high=state['high'], atr=bar['atr'], line=state['line'], ma5=bar['ma5'],
-                                                    reason='종가가 최종 트레일링 경고선에 접촉·이탈' if kind=='trailing' else '전일 종가는 MA5 위, 당일 종가는 당일 MA5에 접촉·이탈')
+                                                    date=bar['date'], kind=kind, policy=POLICY, close=bar['close'], threshold=threshold,
+                                                    alert_threshold=threshold+.5*bar['atr'], tolerance=.5*bar['atr'],
+                                                    created_at=now.isoformat(), name=state['name'], high=state['high'], atr=bar['atr'],
+                                                    line=state['line'], ma5=bar['ma5'], ma10=bar['ma10'],
+                                                    reason=label+' 위쪽 0.5 ATR 이내 접근 또는 접촉·이탈')
                                                 db.execute('INSERT OR IGNORE INTO warnings VALUES(?,?)',(event_id,packed(event)))
-                                    state['history'].append(dict(date=bar['date'],close=bar['close'],line=state['line']))
-                                    state.update(last_date=bar['date'], last_bar=bar, below=below)
-                                if not pending and cost > state['line']:
-                                    state['line'] = cost
-                                    state['history'][-1]['line'] = cost
-                                    state['cost_pending'] = True
-                                elif pending:
-                                    state['cost_pending'] = False
-                                state['status'] = 'warning' if state['below'] else 'monitoring'
+                                    state['history'].append(dict(date=bar['date'],close=bar['close'],line=state['line'],policy=POLICY))
+                                    state.update(last_date=bar['date'], last_bar=bar, below=bar['close'] <= state['line'], approaching=flags)
+                                state['status'] = 'warning' if any(state['approaching'].values()) else 'monitoring'
                             state['price_average_cost'] = cost
                             state['prices'] = [dict(date=b['date'],close=b['close']) for b in bars[-126:]]
                     except (ValueError, KeyError, TypeError, OverflowError) as exc:

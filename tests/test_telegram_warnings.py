@@ -21,7 +21,7 @@ class TelegramWarnings(unittest.TestCase):
         self.config = dict(token='fake', chat='123', enabled_at='2026-10-06T00:00:00+00:00')
         self.event = dict(id='warning1', key='private', account='ACCOUNT_PRIVATE', market='KR', symbol='005930',
             name='합성종목', currency='KRW', date='2026-10-05', created_at='2026-10-06T01:00:00+00:00',
-            kind='trailing', close=263000, threshold=263150, line=263150, high=277000, atr=6000, ma5=266000,
+            kind='trailing', policy='high95-approach-v2', alert_threshold=266150, tolerance=3000, close=263000, threshold=263150, line=263150, high=277000, atr=6000, ma5=266000,
             average_cost=212345, reason='종가가 최종 트레일링 경고선에 접촉·이탈')
         self.sent = []
 
@@ -88,6 +88,47 @@ class TelegramWarnings(unittest.TestCase):
         body=telegram.message({**self.event,'currency':'USD','close':120.1,'threshold':125.2})
         self.assertIn('120.10 USD',body)
         self.assertIn('-4.07%',body)
+
+    def test_three_approach_messages_and_persistent_dedup(self):
+        for kind,threshold in [('trailing',263150),('ma5',266000),('ma10',267000)]:
+            self.add(id='new-'+kind,kind=kind,policy='high95-approach-v2',close=268000,
+                     threshold=threshold,alert_threshold=threshold+3000,tolerance=3000,ma10=267000,
+                     reason='0.5 ATR 접근')
+        self.assertEqual(self.dispatch()['counts'],{'sent':3})
+        self.assertTrue(all('0.5 ATR' in body and '알림 기준:' in body for body in self.sent))
+        self.assertIn('10일 이동평균선',self.sent[2]);self.assertIn('H × 95%',self.sent[0])
+        self.assertNotIn('ACCOUNT_PRIVATE',''.join(self.sent));self.assertNotIn('212,345',''.join(self.sent))
+        self.dispatch();self.assertEqual(len(self.sent),3)
+    def test_approach_gap_below_message(self):
+        body=telegram.message({**self.event,'policy':'high95-approach-v2','kind':'trailing',
+                              'alert_threshold':266150,'tolerance':3000})
+        self.assertIn('접촉·이탈',body);self.assertNotIn('2.5 ×',body)
+
+    def test_legacy_warning_preserved_but_not_dispatched(self):
+        self.add(policy=None)
+        self.dispatch()
+        self.assertFalse(self.sent)
+        self.assertEqual(len(self.store.read()['events']),1)
+
+    def test_calculated_three_events_reach_delivery_and_no_repeat(self):
+        from datetime import datetime,timedelta,timezone
+        now=datetime(2026,10,6,1,tzinfo=timezone.utc)
+        bundle={'as_of':now.isoformat(),'query_state':'received','accounts':[
+            {'alias':'ACCOUNT_PRIVATE','holdings_complete':True,'positions':[
+                {'market':'US','symbol':'S','currency':'USD','quantity':2,'average_cost':90}]}]}
+        bars=[{'date':(datetime(2026,9,19)+timedelta(days=i)).date().isoformat(),
+               'high':102,'low':98,'close':100} for i in range(15)]
+        def calculate():
+            return self.store.update(bundle,{'US:S':{'currency':'USD','bars':bars}},
+                {'US':bars[-1]['date']},now,sessions={'US':[b['date'] for b in bars]})
+        calculate()
+        bars.append({'date':'2026-10-04','high':105,'low':103,'close':104});calculate()
+        bars.append({'date':'2026-10-05','high':96,'low':94,'close':95})
+        events=calculate()['events'];self.assertEqual({e['kind'] for e in events},{'trailing','ma5','ma10'})
+        self.assertEqual(self.dispatch()['counts'],{'sent':3})
+        calculate();self.dispatch();self.assertEqual(len(self.sent),3)
+        self.assertTrue(all('0.5 ATR' in body for body in self.sent))
+        self.assertNotIn('ACCOUNT_PRIVATE',''.join(self.sent))
 
     def test_configuration_dpapi_roundtrip_no_plaintext(self):
         with patch.dict('os.environ',{'TELEGRAM_BOT_TOKEN':'123:secret','TELEGRAM_CHAT_ID':'123'}):

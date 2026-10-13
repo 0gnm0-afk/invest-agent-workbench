@@ -99,6 +99,8 @@ def message(e):
         return scenario_message(e)
     currency = e['currency']
     price = lambda v: money(v, currency)+('원' if currency == 'KRW' else ' USD')
+    if e.get('policy') == 'high95-approach-v2':
+        return approach_message(e)
     trailing = e['kind'] == 'trailing'
     title = '트레일링 경고선 도달' if trailing else '5일 이동평균선 접촉·이탈'
     difference = (e['close']/e['threshold']-1)*100
@@ -122,6 +124,28 @@ def message(e):
               '완료 일봉 기준 알림이며 장중 실시간 감시가 아닙니다.',
               '같은 경고는 반복 전송하지 않으며, 조건 회복 후 다시 발생하면 새로 알립니다.',
               '확인: PC 투자 대시보드 → 가격 위험 경고. 자동 주문은 실행하지 않습니다.']
+    if e.get('detail_url'): lines.append('종목 상세: '+e['detail_url'])
+    return '\n'.join(lines)
+
+
+def approach_message(e):
+    price = lambda v: money(v, e['currency'])+('원' if e['currency']=='KRW' else ' USD')
+    label = {'trailing':'트레일링선', 'ma5':'5일 이동평균선', 'ma10':'10일 이동평균선'}[e['kind']]
+    situation = '접근' if e['close'] > e['threshold'] else '접촉·이탈'
+    lines = [f'🔔 투자에이전트 | {label} 0.5 ATR {situation}', '',
+        f"종목: {e.get('name') or e['symbol']} ({e['symbol']} · {e['market']})",
+        f"기준: {e['date']} 해당 시장 정규장 완료 일봉",
+        f"종가: {price(e['close'])}", f"{label}: {price(e['threshold'])}",
+        f"알림 기준: {price(e['alert_threshold'])} 이하 (기준선 + 0.5 × ATR14)",
+        f"접근 폭: {price(e['tolerance'])} · ATR14: {price(e['atr'])}",
+        f"기준선 대비: {(e['close']/e['threshold']-1)*100:+.2f}%", '',
+        '발생 이유: '+e['reason'],
+        '트레일링선 = 감시 시작 이후 장중 최고가 H × 95%. 평단 하한은 적용하지 않습니다.',
+        f"감시 최고가 H: {price(e['high'])}",
+        '다음 행동: 종목 상세에서 저장 시나리오와 최신 근거를 확인하세요.',
+        f"분석 요청: {e['symbol']}의 저장 분석·논의를 이어 읽고 이번 {label} 접근 경고와 미정 대응을 함께 검토해줘.",
+        '각 선은 독립 알림입니다. 기준선 + 0.5 ATR 위로 회복한 뒤 다시 진입하면 새로 알립니다.',
+        '완료 일봉 기준 알림 · 장중 실시간 감시 및 자동 주문 없음.']
     if e.get('detail_url'): lines.append('종목 상세: '+e['detail_url'])
     return '\n'.join(lines)
 
@@ -176,7 +200,9 @@ def dispatch(root=ROOT, targets=None, *, config=None, sender=None, include_trail
                 from daily_launch import plan_for
                 targets = plan_for(datetime.now(timezone.utc))['targets']
             from trailing_warnings import TrailingStore
-            events = TrailingStore(root/'runtime/trailing-warnings.sqlite3').read()['events'] if include_trailing else []
+            # Keep legacy events in storage, but do not send obsolete warning rules.
+            events = [e for e in TrailingStore(root/'runtime/trailing-warnings.sqlite3').read()['events']
+                      if e.get('policy') == 'high95-approach-v2'] if include_trailing else []
             from scenario_monitor import ScenarioStore
             scenario = ScenarioStore(root/'runtime/chart-workspaces.sqlite3').read() if include_scenarios else {'monitors':[], 'events':[]}
             monitors = {m['id']:m for m in scenario['monitors']}

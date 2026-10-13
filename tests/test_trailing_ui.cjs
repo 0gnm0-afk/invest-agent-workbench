@@ -17,3 +17,14 @@ priceLine=null;window.WorkbenchTrailing.mountChart({},legend,{...p,active:false}
 const app=fs.readFileSync('dashboard/app.js','utf8');assert.ok(app.includes("page==='risk'"));assert.ok(!app.includes('기존 위험관리'));
 assert.ok(fs.readFileSync('dashboard/trailing.js','utf8').includes('stock-price-legend trailing-price-legend'));
 console.log('trailing UI: full-width latest dotted price line, axis numbers, top-left legend, hover/reset, missing state and scale PASS');
+
+(async()=>{
+ global.location={hash:'#risk'};
+ global.fetch=async()=>({ok:true,json:async()=>({positions:[],events:[{date:'2026-10-05',symbol:'S',kind:'ma10',policy:'high95-approach-v2',reason:'10일선 0.5 ATR 접근',close:101,threshold:100,alert_threshold:102,currency:'USD',account:'a'}]})});
+ const host={innerHTML:'',isConnected:true};
+ await window.WorkbenchTrailing.mount(host);
+ assert.match(host.innerHTML,/트레일링\/5일선\/10일선/);
+ assert.match(host.innerHTML,/MA10 0.5 ATR 접근·이탈/);
+ assert.match(host.innerHTML,/알림 기준 102.00/);
+ console.log('three-line approach explanation and MA10 event display PASS');
+})().catch(error=>{console.error(error);process.exitCode=1;});
