@@ -54,7 +54,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
             self.send_header('X-Content-Type-Options', 'nosniff')
             self.send_header('Referrer-Policy', 'no-referrer')
             if cookie:
-                self.send_header('Set-Cookie', 'workbench_confirm=' + browser_session + '; HttpOnly; SameSite=Strict; Path=/api/analysis-rpc')
+                self.send_header('Set-Cookie', 'workbench_confirm_' + str(self.server.server_port) + '=' + browser_session + '; HttpOnly; SameSite=Strict; Path=/api/analysis-rpc')
                 self.send_header('Set-Cookie', 'workbench_scope_confirm=' + browser_session + '; HttpOnly; SameSite=Strict; Path=/api/market-exclusions')
             self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
             self.end_headers()
@@ -73,7 +73,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
             except ValueError:
                 return self.send(b'{"error":"invalid_timeframe"}', status=400)
             if path == '/health':
-                return self.send(json.dumps({'app': 'invest-workbench', 'token': token, 'analysis_protocol': 1, 'price_events_protocol': 1, 'pivot_rule': 'weekly-swing-2', 'collaboration_protocol': 1, 'scenario_monitor_protocol': 1, 'report_reading_protocol': 2, 'offline': offline, 'workspace': str(ROOT)}).encode(), cookie=self.headers.get('Sec-Fetch-Site') == 'same-origin')
+                return self.send(json.dumps({'app': 'invest-workbench', 'token': token, 'analysis_protocol': 1, 'price_events_protocol': 1, 'pivot_rule': 'weekly-swing-2', 'collaboration_protocol': 1, 'scenario_monitor_protocol': 1, 'trade_cycle_protocol': 1, 'report_reading_protocol': 2, 'offline': offline, 'workspace': str(ROOT)}).encode(), cookie=self.headers.get('Sec-Fetch-Site') == 'same-origin')
             if path == '/api/daily-update':
                 return self.send(json.dumps(daily_status() if daily_status else {'enabled':False}, ensure_ascii=False).encode('utf-8'))
             if path == '/api/market-exclusions':
@@ -156,7 +156,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                         value = {**value,'state':'excluded','reason':excluded['reason'],'bars':[]}
                 return self.send(json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8'))
             names = {'/report-reader.js':'report-reader.js','/report-reader.css':'report-reader.css','/chart-events.js':'chart-events.js', '/trailing.js':'trailing.js', '/market-exclusions.js':'market-exclusions.js', '/market-exclusions.css':'market-exclusions.css', '/risk-workbench.js': 'risk-workbench.js', '/risk-workbench.css': 'risk-workbench.css', '/collaboration.js': 'collaboration.js', '/analysis.js': 'analysis.js', '/': 'index.html', '/app.js': 'app.js', '/tooltips.js': 'tooltips.js', '/financial-focus.js': 'financial-focus.js', '/financial-focus.css': 'financial-focus.css', '/financials.css': 'financials.css', '/style.css': 'style.css',
-                     '/scenario-preview.js':'scenario-preview.js', '/scenario-monitor.js':'scenario-monitor.js', '/scenario-monitor.css':'scenario-monitor.css',
+                     '/trade-cycle.js':'trade-cycle.js', '/trade-cycle.css':'trade-cycle.css', '/scenario-preview.js':'scenario-preview.js', '/scenario-monitor.js':'scenario-monitor.js', '/scenario-monitor.css':'scenario-monitor.css',
                      '/stock-chart.js': 'stock-chart.js', '/drawing-tools.js': 'drawing-tools.js', '/chart-workspace.js': 'chart-workspace.js', '/chart-tools.css': 'chart-tools.css', '/format.js': 'format.js', '/charts.js': 'charts.js', '/workbench.png': 'workbench.png',
                      '/vendor/lightweight-charts.js': 'vendor/lightweight-charts.js',
                      '/vendor/NOTICE': 'vendor/NOTICE', '/vendor/LICENSE': 'vendor/LICENSE'}
@@ -253,7 +253,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                         principal = role or 'legacy'
                         if role is None and self.headers.get('Sec-Fetch-Site') == 'same-origin':
                             cookies = SimpleCookie(self.headers.get('Cookie', ''))
-                            candidate = cookies.get('workbench_confirm')
+                            candidate = cookies.get('workbench_confirm_' + str(self.server.server_port))
                             if candidate and secrets.compare_digest(candidate.value, browser_session): principal = 'browser'
                         if body['op'] in ('decide', 'holding') and principal != 'browser':
                             raise Forbidden('local_browser_confirmation_required')

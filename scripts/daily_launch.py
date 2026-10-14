@@ -277,12 +277,22 @@ class DailyLaunch:
                 result['scenario_state'] = 'evaluated' if any(m['active'] for m in scenario['monitors']) else 'not_configured'
             except Exception:
                 result['scenario_state'] = 'unavailable'
-        if self.accounts and (result.get('trailing_state') == 'evaluated' or result.get('scenario_state') == 'evaluated'):
+        if result.get('state') in ('succeeded', 'partial'):
+            try:
+                from trade_cycle_alerts import refresh_saved as refresh_cycles
+                cycles = refresh_cycles(self.root, result['output'], plan['targets'],
+                                        account_failed=result.get('account_state') == 'failed')
+                if cycles['states']:
+                    result['trade_cycle_state'] = ('evaluated' if any(s['status'] == 'evaluated' for s in cycles['states']) else 'deferred')
+            except Exception:
+                result['trade_cycle_state'] = 'unavailable'
+        if self.accounts and any(result.get(key) == 'evaluated' for key in ('trailing_state', 'scenario_state', 'trade_cycle_state')):
             try:
                 from telegram_warnings import dispatch
                 result['telegram_state'] = dispatch(self.root, plan['targets'],
                                                     include_trailing=result.get('trailing_state') == 'evaluated',
-                                                    include_scenarios=result.get('scenario_state') == 'evaluated')['state']
+                                                    include_scenarios=result.get('scenario_state') == 'evaluated',
+                                                    **({'include_cycles':result['trade_cycle_state'] == 'evaluated'} if 'trade_cycle_state' in result else {}))['state']
             except Exception:
                 # Delivery failure must not change a successful market/account result.
                 result['telegram_state'] = 'unavailable'
@@ -290,6 +300,7 @@ class DailyLaunch:
 
     def public(self, record):
         result={k:record.get(k) for k in ('day','state','stage','targets','started_at','finished_at','error','reused','manual_retry','telegram_state','trailing_state','scenario_state','account_attempted','account_state','account_error')}
+        if 'trade_cycle_state' in record: result['trade_cycle_state'] = record['trade_cycle_state']
         result['attempt_id'] = attempt_id(record)
         result['display_updated'] = False
         result['display_stale'] = bool(record.get('display_run') and record.get('display_run') != record.get('run'))

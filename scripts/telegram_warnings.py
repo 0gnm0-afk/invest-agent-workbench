@@ -95,6 +95,17 @@ def api(config, method, payload):
 
 
 def message(e):
+    if e['kind'] == 'trade_cycle':
+        from trade_cycle_alerts import message as cycle_message
+        return cycle_message(e)
+    body = base_message(e)
+    if e.get('cycle_context'):
+        from trade_cycle_alerts import context_text
+        body += '\n\n' + context_text(e)
+    return body
+
+
+def base_message(e):
     if e['kind'] == 'scenario':
         return scenario_message(e)
     currency = e['currency']
@@ -155,6 +166,8 @@ def current_detail_link(root, event):
     try:
         origin=json.loads((Path(root)/'runtime/dashboard/analysis-endpoint.json').read_text(encoding='utf-8-sig')).get('url')
         if not isinstance(origin,str) or not re.fullmatch(r'http://127\.0\.0\.1:[0-9]{1,5}',origin): return event.get('detail_url')
+        if event.get('kind') == 'trade_cycle':
+            return origin+'/#cycle?id='+quote(event['cycle_id'],safe='')
         route=origin+'/#stock/'+quote(event['market'],safe='')+'/'+quote(event['symbol'],safe='')
         return route+('?analysis='+quote(event['case_id'],safe='') if event.get('case_id') else '')
     except (OSError,ValueError,KeyError): return event.get('detail_url')
@@ -187,7 +200,7 @@ def scenario_message(e):
     return '\n'.join(lines)
 
 
-def dispatch(root=ROOT, targets=None, *, config=None, sender=None, include_trailing=True, include_scenarios=True):
+def dispatch(root=ROOT, targets=None, *, config=None, sender=None, include_trailing=True, include_scenarios=True, include_cycles=True):
     root = Path(root)
     folder = root/'runtime/telegram-delivery'
     folder.mkdir(parents=True, exist_ok=True)
@@ -211,7 +224,15 @@ def dispatch(root=ROOT, targets=None, *, config=None, sender=None, include_trail
                 if (event.get('test_record') or not monitor or not monitor['active'] or monitor.get('issue')
                         or monitor['revision'] != event['monitor_revision']):
                     continue
-                events.append(event)
+                # Preserve the monitor's account scope when matching an approved cycle.
+                events.append({**event, 'account':monitor.get('account_alias')})
+            from trade_cycle_alerts import delivery_events
+            cycle_context_failed = False
+            try:
+                events = delivery_events(root, events, targets, include_cycles=include_cycles)
+            except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
+                # A bad new cycle record must not suppress an existing price warning.
+                cycle_context_failed = True
             events.sort(key=lambda e:e['created_at'], reverse=True)
             sender = sender or (lambda text: api(config, 'sendMessage', {'chat_id':config['chat'], 'text':text}))
             with closing(sqlite3.connect(folder/'delivery.sqlite3', timeout=30)) as db, db:
@@ -247,6 +268,7 @@ def dispatch(root=ROOT, targets=None, *, config=None, sender=None, include_trail
                         break  # Avoid flooding a failing/rate-limited endpoint.
                 counts = dict(db.execute('SELECT state,count(*) FROM deliveries GROUP BY state'))
             result = dict(state='attention' if counts.get('failed') or counts.get('unknown') else 'ready', counts=counts, checked_at=utc())
+            if cycle_context_failed: result['trade_cycle_state'] = 'unavailable'
             atomic_write(folder/'latest.json', json.dumps(result))
             return result
     except BusyError:
