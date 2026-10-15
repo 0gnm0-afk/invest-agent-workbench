@@ -12,7 +12,7 @@ class RetryConflict(ValueError):
 
 
 class DashboardDaily:
-    def __init__(self, daily, views, builder, base_run, *, saved_accounts=True, now=None, observe_only=False):
+    def __init__(self, daily, views, builder, base_run, *, saved_accounts=True, now=None, observe_only=False, baseline_record=None):
         self.daily, self.views, self.builder = daily, views, builder
         self.display_run = base_run
         self.saved_accounts = saved_accounts
@@ -24,7 +24,7 @@ class DashboardDaily:
         self.ready = False
         self.record = {'day': self.day(), 'state': 'saved' if observe_only else 'running',
                        'stage': 'finished' if observe_only else 'starting', 'targets': {}}
-        self.seen = None
+        self.seen = self.signature(baseline_record) if baseline_record is not None else None
         self.revision = 0
         self.view_error = None
 
@@ -35,9 +35,9 @@ class DashboardDaily:
     def signature(record):
         return tuple(record.get(k) for k in ('attempt_id', 'started_at', 'state', 'finished_at', 'display_run'))
 
-    def _start(self, *, initial=False, retry=False, expected=None):
+    def _start(self, *, initial=False, retry=False, expected=None, refresh_accounts=False):
         self.active, self.ready, self.view_error = True, False, None
-        self.thread = threading.Thread(target=self._prepare, kwargs=dict(initial=initial, retry=retry, expected=expected), daemon=True)
+        self.thread = threading.Thread(target=self._prepare, kwargs=dict(initial=initial, retry=retry, expected=expected, refresh_accounts=refresh_accounts), daemon=True)
         self.thread.start()
 
     def start(self, retry=False):
@@ -45,7 +45,19 @@ class DashboardDaily:
             if not self.active:
                 self._start(initial=not self.observe_only, retry=retry)
 
-    def _prepare(self, *, initial=False, retry=False, expected=None):
+    def launch(self, *, daily_refresh, retry_market, saved_accounts):
+        """Reopening an existing server uses the same once-per-day gate."""
+        with self.lock:
+            if daily_refresh and not self.active:
+                self.observe_only = False
+                self.saved_accounts = saved_accounts
+                self.daily.accounts = not saved_accounts
+                self._start(initial=True, retry=retry_market)
+            elif not daily_refresh and not saved_accounts and not self.active:
+                self._start(refresh_accounts=True)
+            return self.status()
+
+    def _prepare(self, *, initial=False, retry=False, expected=None, refresh_accounts=False):
         try:
             now = self.clock()
             record = (self.daily.once(now, retry=retry, expected_attempt=expected) if initial or retry
@@ -62,8 +74,9 @@ class DashboardDaily:
             display = self.daily.display_run() or record.get('display_run')
             update = self.daily.public({**record, 'display_run': display})
             account_stale = self.views['view'][0].get('accounts', {}).get('stale', False)
-            refresh = not record.get('account_attempted') and initial and not retry and not self.saved_accounts and (not record.get('reused') or account_stale)
-            if display == self.display_run and not refresh and not (record.get('account_attempted') and not record.get('reused')):
+            refresh = refresh_accounts or (not record.get('account_attempted') and initial and not retry and not self.saved_accounts and (not record.get('reused') or account_stale))
+            account_changed = record.get('account_attempted') and not record.get('reused') and self.signature(record) != self.seen
+            if display == self.display_run and not refresh and not account_changed:
                 data, stocks = self.views['view']
                 next_view = ({**data, 'daily_update': update}, stocks)
             else:

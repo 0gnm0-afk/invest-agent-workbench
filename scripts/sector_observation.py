@@ -451,7 +451,7 @@ def align_groups(groups, universe, applied):
     return result, changes
 
 
-def build(market_root, classification_root, evidence, nh_root, applied, *, allow_universe_changes=False, basis_rechecks=None):
+def build(market_root, classification_root, evidence, nh_root, applied, *, allow_universe_changes=False, basis_rechecks=None, snapshot=None):
     inputs = {}
     basis_contract = load_basis(evidence, checked, load, inputs, applied, age_issue, rechecks=basis_rechecks)
     if (evidence/'wics-public.json').exists() and basis_contract is None:
@@ -459,7 +459,11 @@ def build(market_root, classification_root, evidence, nh_root, applied, *, allow
     market_manifest = load(checked(market_root / 'manifest.json', None, inputs))
     for name, expected in market_manifest.items():
         checked(market_root / name, expected, inputs)
-    snapshot, quality = load(market_root / 'snapshot.json'), load(market_root / 'summary.json')
+    # The optional snapshot has already been read by the caller; hashes above
+    # are checked even on reuse. Avoid holding a second full-universe parse.
+    if snapshot is None:
+        snapshot = load(market_root / 'snapshot.json')
+    quality = load(market_root / 'summary.json')
     original_manifest = load(checked(classification_root / 'manifest.json', None, inputs))
     original_path = checked(classification_root / 'classification.json',
                             original_manifest['output_hashes']['classification.json'], inputs)

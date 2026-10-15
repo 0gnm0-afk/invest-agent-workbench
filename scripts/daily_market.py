@@ -361,7 +361,7 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
         update(stage, 'completed')
         stage = 'sector_screen'
         update(stage, 'running')
-        observation, groups, sector_inputs = sector.build(source, *[Path(p) for p in seed['roots'][1:]], now(), allow_universe_changes=True, basis_rechecks=basis_rechecks)
+        observation, groups, sector_inputs = sector.build(source, *[Path(p) for p in seed['roots'][1:]], now(), allow_universe_changes=True, basis_rechecks=basis_rechecks, snapshot=snapshot)
         inputs.update(sector_inputs)
         export_sectors(output/'sectors', observation, groups)
         screening = enrich(screening, observation, groups)
@@ -464,7 +464,7 @@ def verify(output):
     saved = sector.load(output/'screen.json')
     report, groups, _ = sector.build(source, *[Path(p) for p in seed['roots'][1:]],
         sector.load(output/'sectors/observation.json')['applied_at'], allow_universe_changes=True,
-        basis_rechecks=run.get('basis_rechecks'))
+        basis_rechecks=run.get('basis_rechecks'), snapshot=snapshot)
     if report != sector.load(output/'sectors/observation.json') or groups != sector.load(output/'sectors/groups.json'):
         raise ValueError('sector_replay_mismatch')
     if base != sector.load(output/'screen-base.json') or enrich(base, report, groups) != saved:

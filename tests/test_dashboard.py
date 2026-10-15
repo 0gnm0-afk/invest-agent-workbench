@@ -62,6 +62,28 @@ class StoredData(unittest.TestCase):
         self.assertEqual(value['state'], 'failed')
         self.assertEqual(value['quality']['state'], 'partial')
 
+    def test_hash_does_not_allocate_a_whole_file_buffer(self):
+        expected = hashlib.sha256(self.source.read_bytes()).hexdigest()
+        with patch.object(Path, 'read_bytes', side_effect=MemoryError('whole_file_buffer')):
+            self.assertEqual(d.sha(self.source), expected)
+
+    def test_build_persists_account_receipt_without_large_view_copies(self):
+        d.write(self.root/'config.json', {'engine': str(self.root/'engine')})
+        accounts = dict(query_state='saved', holdings=[])
+        with patch.object(d, 'account_view', return_value=accounts), patch('trailing_warnings.TrailingStore.update', side_effect=AssertionError('saved view must not rewrite warnings')):
+            output, data, stocks = d.build(self.root, refresh=False, market_run=self.run)
+        self.assertIn('US:ABC', stocks)
+        self.assertEqual(data['accounts'], accounts)
+        self.assertFalse((output/'dashboard.json').exists())
+        self.assertFalse((output/'stocks.json').exists())
+        receipt = d.load(output/'manifest.json')
+        self.assertEqual(receipt['files']['account-view.json'], d.sha(output/'account-view.json'))
+        self.assertEqual(receipt['view_storage'], 'memory')
+        with patch.object(d, 'account_view', return_value=accounts), patch('trailing_warnings.TrailingStore.update', return_value={}):
+            exported, _, _ = d.build(self.root, refresh=False, market_run=self.run, persist_view=True)
+        self.assertTrue((exported/'dashboard.json').exists())
+        self.assertEqual(d.load(exported/'manifest.json')['files']['dashboard.json'], d.sha(exported/'dashboard.json'))
+
     def test_price_tampering_is_rejected(self):
         self.source.write_text('{}')
         with self.assertRaisesRegex(ValueError, 'hash_mismatch'):

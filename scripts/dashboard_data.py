@@ -14,7 +14,8 @@ def load(path):
 
 
 def sha(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    with Path(path).open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
 def now():
@@ -86,7 +87,7 @@ def saved_market(root=ROOT, run_dir=None):
         config = load(root/'config.json') if (root/'config.json').exists() else {}
         if config.get('sector_manifest'):
             from sector_projection import cached as project
-            projected = project(root, run_dir, config, source.parent, observation, review)
+            projected = project(root, run_dir, config, source.parent, observation, review, snapshot=snapshot)
             groups = projected['groups']
             horizons = {(s['market'],s['group_code']):s['horizons'] for s in projected['observation']['observations']}
             result['sectors'] = [dict(s,horizons=horizons[(s['market'],s['group_code'])]) for s in projected['signals']['sectors']]
@@ -300,7 +301,7 @@ def account_view(config, output, refresh=True, saved_dashboard_root=None):
     return result
 
 
-def build(root=ROOT, refresh=True, *, market_run=None, daily_update=None):
+def build(root=ROOT, refresh=True, *, market_run=None, daily_update=None, persist_view=False):
     config = load(root / 'config.json')
     sys.path.insert(0, str(Path(config['engine']) / 'src'))
     output = root / 'runtime/dashboard' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
@@ -317,16 +318,26 @@ def build(root=ROOT, refresh=True, *, market_run=None, daily_update=None):
     stocks = market.pop('stocks')
     from trailing_warnings import TrailingStore
     from daily_launch import plan_for
-    warnings = TrailingStore(root/'runtime/trailing-warnings.sqlite3').update(accounts, stocks, plan_for(datetime.now(timezone.utc))['targets'])
+    warning_store = TrailingStore(root/'runtime/trailing-warnings.sqlite3')
+    warning_time = datetime.now(timezone.utc)
+    warning_targets = plan_for(warning_time)['targets']
+    # Saved-only viewing must not rewrite monitor timestamps/state. The daily
+    # collection path already evaluates warnings after its account refresh.
+    warnings = (warning_store.update(accounts, stocks, warning_targets, warning_time) if refresh
+                else warning_store.public(warning_time, warning_targets))
     data = {'generated_at': now(), 'market': market, 'accounts': accounts, 'trailing': warnings}
     if daily_update is not None:
         data['daily_update'] = daily_update
     write(output / 'account-view.json', accounts)
-    write(output / 'dashboard.json', data)
+    # Explicit --build-only exports retain their prior artifact contract.
+    if persist_view:
+        write(output / 'dashboard.json', data)
+    # Normal HTTP views are already in memory; keep only source/account receipts.
     # Prices remain in the immutable market source, projected in memory only.
     # Do not duplicate hundreds of MB of full-universe bars on every launch.
     write(output / 'manifest.json', {'files': {p.name: sha(p) for p in output.iterdir() if p.is_file()},
-                                    'market_network_calls': 0, 'authority': 'read_only_no_orders'})
+                                    'market_network_calls': 0, 'authority': 'read_only_no_orders',
+                                    'view_storage': 'export' if persist_view else 'memory', 'market_run': str(market_run) if market_run else None})
     return output, data, stocks
 
 

@@ -102,7 +102,7 @@ class Startup(unittest.TestCase):
                 assert self_assert['state'] == 'loading'
                 launched.append((self.target, self.args))
         fake_server = type('Server', (), {'server_port': 12345, 'serve_forever': lambda self: None})()
-        with patch.object(sys, 'argv', ['startup', '--ready-file', str(receipt), '--daily-refresh', '--saved-accounts', '--open-browser']), patch.object(startup, 'ThreadingHTTPServer', return_value=fake_server), patch.object(startup.threading, 'Thread', FakeThread):
+        with patch.object(startup, 'ROOT', self.root), patch.object(startup, 'serve_requests'), patch.object(sys, 'argv', ['startup', '--ready-file', str(receipt), '--daily-refresh', '--saved-accounts', '--open-browser']), patch.object(startup, 'ThreadingHTTPServer', return_value=fake_server), patch.object(startup.threading, 'Thread', FakeThread):
             startup.main()
         self.assertEqual(launched[0][0], startup.run_dashboard)
         self.assertEqual(launched[0][1][0], ['--daily-refresh', '--saved-accounts'])

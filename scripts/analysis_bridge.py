@@ -27,21 +27,21 @@ def ensure():
     except (OSError,ValueError,KeyError): pass
     ENDPOINT.parent.mkdir(parents=True,exist_ok=True)
     # Shared existing lock primitive prevents concurrent MCP/launcher starts.
-    from financial_store import lock_file,unlock
-    lease=lock_file(ENDPOINT.parent/'analysis-start.lock')
+    from dashboard_instance import acquire,release
+    lease=acquire(ROOT, 'analysis-start.lock')
     if lease:
         try:
             try: return endpoint()
             except (OSError,ValueError,KeyError): pass
             log=(ENDPOINT.parent/'analysis-server.log').open('ab')
             try:
-                subprocess.Popen([sys.executable,'-u',str(ROOT/'scripts/dashboard.py'),'--saved-accounts','--ready-file',str(ENDPOINT)],cwd=ROOT,stdin=subprocess.DEVNULL,stdout=log,stderr=log,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+                subprocess.Popen([sys.executable,'-u',str(ROOT/'scripts/dashboard_startup.py'),'--saved-accounts'],cwd=ROOT,stdin=subprocess.DEVNULL,stdout=log,stderr=log,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
             finally: log.close()
             for _ in range(480):
                 try: return endpoint()
                 except (OSError,ValueError,KeyError): time.sleep(.5)
             raise ValueError('dashboard_start_timeout')
-        finally: unlock(lease)
+        finally: release(lease)
     for _ in range(480):
         try: return endpoint()
         except (OSError,ValueError,KeyError): time.sleep(.5)

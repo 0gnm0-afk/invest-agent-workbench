@@ -1,4 +1,10 @@
 """Private loopback dashboard; serves only curated views and bundled assets."""
+import sys
+if __name__ == '__main__' and '--build-only' not in sys.argv:
+    from dashboard_startup import main as start
+    start()
+    raise SystemExit(0)
+
 from datetime import datetime, timezone
 import argparse
 import json
@@ -26,8 +32,8 @@ from trailing_warnings import TrailingStore
 
 
 def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None, daily_status=None, daily_retry=None,
-                analysis_capabilities=None, analysis_dependencies=None, risk_options=None, offline=False, exclusion_review=None):
-    initial_view = (data, stocks)
+                analysis_capabilities=None, analysis_dependencies=None, risk_options=None, offline=False, exclusion_review=None, launch=None):
+    views = views if views is not None else {'view': (data, stocks)}
     store = WorkspaceStore(workspace_path or ROOT / "runtime/chart-workspaces.sqlite3")
     histories = (analysis_dependencies['histories'] if analysis_dependencies else
                  HistoryStore((Path(workspace_path).parent if workspace_path else ROOT / 'runtime') / 'chart-history.sqlite3'))
@@ -37,7 +43,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
     search_cache = [None, None]
     financials = (analysis_dependencies['financials'] if analysis_dependencies else
                   FinancialStore((Path(workspace_path).parent if workspace_path else ROOT / 'runtime') / 'financials'))
-    analyses = AnalysisService(store, histories, financials, lambda: views['view'] if views is not None else initial_view, ROOT if workspace_path is None else Path(workspace_path).parent)
+    analyses = AnalysisService(store, histories, financials, lambda: views['view'], ROOT if workspace_path is None else Path(workspace_path).parent)
     capabilities = dict(analysis_capabilities or {})
     if set(capabilities) - {'collaboration', 'risk'} or any(not isinstance(v,str) or not v or v == token for v in capabilities.values()) or len(set(capabilities.values())) != len(capabilities):
         raise ValueError('invalid_analysis_capabilities')
@@ -61,7 +67,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
             self.wfile.write(body)
 
         def do_GET(self):
-            data, current_stocks = views['view'] if views is not None else initial_view
+            data, current_stocks = views['view']
             stocks = {**histories.saved.stocks, **current_stocks}
             expected = '127.0.0.1:' + str(self.server.server_port)
             if self.headers.get('Host') != expected or self.headers.get('Origin', 'http://' + expected) != 'http://' + expected:
@@ -171,7 +177,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
             return self.send(file.read_bytes(), kind + ('; charset=utf-8' if kind.startswith('text/') else ''))
 
         def do_POST(self):
-            data, stocks = views['view'] if views is not None else initial_view
+            data, stocks = views['view']
             stocks = {**histories.saved.stocks, **stocks}
             path = urllib.parse.urlsplit(self.path).path
             query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query, keep_blank_values=True)
@@ -179,7 +185,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                 frame = timeframe(query.get('timeframe', ['1d'])[0])
             except ValueError:
                 return self.send(b'{"error":"invalid_timeframe"}', status=400)
-            if path not in ('/api/daily-update', '/api/market-exclusions') and not path.startswith(('/api/chart-state/', '/api/chart-history/', '/api/financials/', '/api/analysis-rpc')):
+            if path not in ('/api/launch', '/api/daily-update', '/api/market-exclusions') and not path.startswith(('/api/chart-state/', '/api/chart-history/', '/api/financials/', '/api/analysis-rpc')):
                 return self.send(b'{"error":"read_only"}', status=405)
             expected = '127.0.0.1:' + str(self.server.server_port)
             supplied_token = self.headers.get('X-Workbench-Token', '')
@@ -190,7 +196,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
             if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
                 return self.send(b'{"error":"json_required"}', status=415)
             key = urllib.parse.unquote(path.rsplit('/', 1)[-1])
-            if path not in ('/api/analysis-rpc', '/api/daily-update', '/api/market-exclusions') and key not in stocks:
+            if path not in ('/api/launch', '/api/analysis-rpc', '/api/daily-update', '/api/market-exclusions') and key not in stocks:
                 return self.send(b'{"error":"unknown_stock"}', status=404)
             try:
                 length = int(self.headers.get('Content-Length', '0'))
@@ -204,6 +210,14 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                     if path == '/api/daily-update':
                         return self.send(b'{"error":"invalid_daily_request"}', status=400)
                     raise
+                if path == '/api/launch':
+                    if (query or not isinstance(body, dict) or set(body) != {'daily_refresh', 'retry_market', 'saved_accounts'}
+                            or any(type(v) is not bool for v in body.values())
+                            or body['retry_market'] and not body['daily_refresh']):
+                        return self.send(b'{"error":"invalid_launch_request"}', status=400)
+                    if offline or not launch:
+                        return self.send(b'{"error":"launch_unavailable"}', status=409)
+                    return self.send(json.dumps(launch(**body), ensure_ascii=False).encode('utf-8'), status=202)
                 if path == '/api/daily-update':
                     if (query or not isinstance(body, dict) or set(body) != {'retry', 'attempt_id'}
                             or body['retry'] is not True or not isinstance(body['attempt_id'], str)
@@ -328,10 +342,14 @@ def main():
                                 display_stale=Path(latest['output']).resolve() != Path(base_run).resolve())
         except (OSError, ValueError, KeyError, TypeError):
             saved_notice = dict(saved_only=True, latest_state='unavailable', display_stale=True)
-    output, data, stocks = build(refresh=not args.saved_accounts and not daily, market_run=base_run, daily_update=saved_notice)
+    # Capture the observed receipt before reading accounts. Only a subsequent
+    # receipt may require another full build of the same market.
+    baseline_record = (DailyLaunch(ROOT).read(plan_for(datetime.now(timezone.utc))['day'])
+                       if not daily and not args.offline else None)
+    output, data, stocks = build(refresh=not args.saved_accounts and not daily, market_run=base_run, daily_update=saved_notice, persist_view=args.build_only)
     views = {'view':(data, stocks)}
     controller = (DashboardDaily(daily or DailyLaunch(ROOT), views, build, base_run,
-                                 saved_accounts=args.saved_accounts, observe_only=not daily)
+                                 saved_accounts=args.saved_accounts, observe_only=not daily, baseline_record=baseline_record)
                   if not args.offline else None)
     if args.build_only:
         print(json.dumps({'output': str(output), 'market_state': data['market']['state'],
@@ -359,8 +377,9 @@ def main():
     exclusion_review = ExclusionReview(ROOT,publish=publish_exclusion)
     token = secrets.token_urlsafe(18)
     capabilities = {role: secrets.token_urlsafe(32) for role in ('collaboration','risk')}
-    server = ThreadingHTTPServer(('127.0.0.1', args.port), handler_for(data, stocks, ROOT / 'dashboard', token, views=views, daily_status=controller.status if controller else None, daily_retry=controller.retry if controller else None, analysis_capabilities=capabilities, offline=args.offline, exclusion_review=exclusion_review))
+    server = ThreadingHTTPServer(('127.0.0.1', args.port), handler_for(data, stocks, ROOT / 'dashboard', token, views=views, daily_status=controller.status if controller else None, daily_retry=controller.retry if controller else None, analysis_capabilities=capabilities, offline=args.offline, exclusion_review=exclusion_review, launch=controller.launch if controller else None))
     server.daemon_threads = True
+    del data, stocks  # Only the replaceable view owns the large price graph.
     ready = {'url': 'http://127.0.0.1:' + str(server.server_port), 'output': str(output), 'token': token}
     if args.ready_file:
         args.ready_file.write_text(json.dumps(ready), encoding='utf-8')

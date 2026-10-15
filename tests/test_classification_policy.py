@@ -80,7 +80,15 @@ class ProjectionCache(unittest.TestCase):
             with patch.object(so,'build',return_value=({'observations':[]},[],{str(evidence):so.sha(evidence)})) as build, \
                  patch.object(projection.sector_signals,'build',return_value={'sectors':[]}), \
                  patch.object(projection.sector_signals,'attach_candidates'):
-                first=projection.cached(*args)
+                snapshot=so.load(source/'snapshot.json')
+                original_load=so.load
+                def no_snapshot_reload(path):
+                    if Path(path) == source/'snapshot.json':
+                        raise MemoryError('duplicate_market_snapshot_parse')
+                    return original_load(path)
+                with patch.object(so,'load',side_effect=no_snapshot_reload):
+                    first=projection.cached(*args,snapshot=snapshot)
+                self.assertIs(build.call_args.kwargs['snapshot'],snapshot)
                 self.assertEqual(projection.cached(*args),first)
                 self.assertEqual(build.call_count,1)
                 file=next((root/'runtime/sector-projection').glob('*/view.json'))

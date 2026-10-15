@@ -100,6 +100,39 @@ class RetryFixture(unittest.TestCase):
 
 
 class DashboardRetry(RetryFixture):
+    def test_reopen_upgrades_saved_server_and_preserves_explicit_retry(self):
+        controller = self.controller(observe_only=True)
+        controller.launch(daily_refresh=True, retry_market=False, saved_accounts=True)
+        self.wait(controller)
+        self.assertEqual(self.calls, [])  # Reopening does not retry a failed day.
+        self.assertFalse(controller.observe_only)
+        self.assertFalse(self.gate.accounts)
+        controller.launch(daily_refresh=True, retry_market=True, saved_accounts=True)
+        self.wait(controller)
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(controller.views['view'][1], {'US:NEW': {'bars': [2]}})
+
+
+    def test_saved_market_reopen_can_refresh_accounts_without_market_collection(self):
+        controller = self.controller(observe_only=True)
+        controller.launch(daily_refresh=False, retry_market=False, saved_accounts=False)
+        self.wait(controller)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(len(self.builds), 1)
+        self.assertTrue(self.builds[0]['refresh'])
+
+    def test_loaded_account_receipt_does_not_rebuild_the_same_market_at_startup(self):
+        self.seed.update(account_attempted=True,account_state='received')
+        self.gate.save(self.seed)
+        controller = self.controller(observe_only=True,baseline_record=self.seed)
+        self.assertEqual(self.builds, [])
+        self.gate.save({**self.seed,'attempt_id':'new-account-receipt'})
+        controller.status()
+        self.wait(controller)
+        self.assertEqual(len(self.builds), 1)
+        self.assertFalse(self.builds[0]['refresh'])
+        self.assertEqual(self.calls, [])
+
     def test_account_failure_alone_offers_explicit_retry(self):
         self.seed.update(state='succeeded',account_attempted=True,account_state='failed')
         self.gate.save(self.seed)
@@ -387,7 +420,8 @@ class RetryHTTP(unittest.TestCase):
             return {'enabled': True, 'state': 'running', 'view_ready': False, 'attempt_id': value}
         self.server = ThreadingHTTPServer(('127.0.0.1', 0), handler_for(
             {}, {}, self.root, 'test-token', self.root / 'workspace.sqlite3',
-            daily_status=lambda: {'enabled': True, 'state': 'failed'}, daily_retry=retry))
+            daily_status=lambda: {'enabled': True, 'state': 'failed'}, daily_retry=retry,
+            launch=lambda **flags: self.calls.append(flags) or {'enabled':True}))
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.headers = {'Origin': 'http://127.0.0.1:' + str(self.server.server_port),
@@ -408,6 +442,16 @@ class RetryHTTP(unittest.TestCase):
             return response.status, json.loads(response.read())
         finally:
             conn.close()
+
+    def test_reopen_route_requires_origin_token_and_exact_boolean_flags(self):
+        flags = dict(daily_refresh=True, retry_market=False, saved_accounts=True)
+        self.assertEqual(self.post(flags, path='/api/launch', headers={**self.headers,'X-Workbench-Token':'wrong'})[0], 403)
+        self.assertEqual(self.post(flags, path='/api/launch', headers={**self.headers,'Origin':'http://other'})[0], 403)
+        self.assertEqual(self.post({**flags,'command':'anything'}, path='/api/launch')[0], 400)
+        self.assertEqual(self.post({**flags,'saved_accounts':1}, path='/api/launch')[0], 400)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.post(flags, path='/api/launch')[0], 202)
+        self.assertEqual(self.calls, [flags])
 
     def test_exact_retry_request_is_accepted_and_stale_request_conflicts(self):
         status, body = self.post()

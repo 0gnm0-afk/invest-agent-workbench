@@ -8,7 +8,8 @@ from invest_agent.trading.store import instance_lock
 from invest_agent.trading.runner import atomic_write
 
 
-def cached(root, run, config, source, original_observation, review):
+def cached(root, run, config, source, original_observation, review, *, snapshot=None):
+    """Reuse the caller's verified snapshot; still verify all pinned files."""
     seed_path = Path(config['sector_manifest'])
     so.checked(seed_path, config['sector_manifest_sha256'], {})
     seed = so.load(seed_path)
@@ -32,7 +33,9 @@ def cached(root, run, config, source, original_observation, review):
             if run_manifest['input_hashes'].get(path) != expected:
                 raise ValueError('projection_unpinned_basis_input')
         inputs.update(basis_inputs)
-    reference = so.load(Path(source)/'snapshot.json').get('classification_refresh')
+    if snapshot is None:
+        snapshot = so.load(Path(source)/'snapshot.json')
+    reference = snapshot.get('classification_refresh')
     if reference:
         from classification_refresh import apply
         refresh_inputs = {}
@@ -44,7 +47,7 @@ def cached(root, run, config, source, original_observation, review):
         inputs.update(refresh_inputs)
     from adr_metadata import verified as verify_adr
     adr_inputs = {}
-    verify_adr(so.load(Path(source)/'snapshot.json').get('adr_metadata'), adr_inputs)
+    verify_adr(snapshot.get('adr_metadata'), adr_inputs)
     if any(run_manifest['input_hashes'].get(p) != h for p,h in adr_inputs.items()):
         raise ValueError('projection_unpinned_adr_metadata')
     inputs.update(adr_inputs)
@@ -62,12 +65,11 @@ def cached(root, run, config, source, original_observation, review):
             so.checked(output, meta['sha256'], {})
             return so.load(output)
         observation, groups, verified = so.build(Path(source), *[Path(p) for p in seed['roots'][1:]],
-                                                applied, allow_universe_changes=True, basis_rechecks=basis_rechecks)
+                                                applied, allow_universe_changes=True, basis_rechecks=basis_rechecks, snapshot=snapshot)
         # Every dependency read during replay must agree with pinned evidence.
         for path, expected in verified.items():
             if path not in inputs or inputs[path] != expected:
                 raise ValueError('projection_unpinned_input:'+path)
-        snapshot = so.load(Path(source)/'snapshot.json')
         signals = sector_signals.build(snapshot, groups, observation, config.get('sector_states'))
         sector_signals.attach_candidates(signals, review, groups, {'rows':[]})
         result = dict(observation=observation, groups=groups, signals=signals,

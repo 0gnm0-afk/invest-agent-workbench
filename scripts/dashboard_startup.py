@@ -1,6 +1,9 @@
 """Show the local dashboard shell before importing or building its data."""
 import argparse
 import json
+import os
+import time
+from dashboard_instance import acquire, release, existing, publish, reuse
 import re
 import sys
 import threading
@@ -52,6 +55,10 @@ def handler_for(assets, state, ready_file):
             if self.headers.get('Host') != expected or self.headers.get('Origin', 'http://' + expected) != 'http://' + expected:
                 return self.send(b'{"error":"local_origin_required"}', 'application/json', 403)
             path = urllib.parse.urlsplit(self.path).path
+            if path == '/api/instance':
+                status = public_status(state, ready_file)
+                return self.send(json.dumps(dict(protocol=1, workspace=str(ROOT), instance_id=state.get('instance_id'),
+                    state=status['state'], dashboard_url=status.get('url'))).encode(), 'application/json')
             if path == '/api/startup':
                 return self.send(json.dumps(public_status(state, ready_file)).encode(), 'application/json')
             if path == '/':
@@ -93,33 +100,82 @@ def run_dashboard(arguments, ready_file, state):
             sys.stderr.flush()
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--ready-file', type=Path)
-    parser.add_argument('--open-browser', action='store_true')
-    args, remaining = parser.parse_known_args()
+def serve(args, remaining):
     if args.ready_file is None:
         args.ready_file = ROOT / 'runtime/dashboard' / ('ready-' + uuid.uuid4().hex + '.json')
     args.ready_file.parent.mkdir(parents=True, exist_ok=True)
     inner_ready = args.ready_file.with_name(args.ready_file.stem + '-data.json')
     # Reject a reused receipt instead of ever redirecting to an old server.
     if args.ready_file.exists() or inner_ready.exists():
-        parser.error('ready-file must be new for each launch')
+        raise ValueError('ready-file must be new for each launch')
     # pythonw desktop launches have no console; keep diagnostics in private runtime.
     if sys.stdout is None:
         sys.stdout = args.ready_file.with_suffix('.log').open('a', encoding='utf-8', buffering=1)
     if sys.stderr is None:
         sys.stderr = args.ready_file.with_suffix('.err.log').open('a', encoding='utf-8', buffering=1)
-    state = {}
+    state = {'instance_id': uuid.uuid4().hex}
     server = ThreadingHTTPServer(('127.0.0.1', 0), handler_for(ROOT / 'dashboard', state, inner_ready))
     server.daemon_threads = True
-    ready = {'url': 'http://127.0.0.1:' + str(server.server_port), 'output': None, 'state': 'loading'}
+    ready = {'url': 'http://127.0.0.1:' + str(server.server_port), 'output': None, 'state': 'loading', 'pid': os.getpid()}
+    publish(ROOT, {**ready, 'instance_id': state['instance_id'], 'offline': '--offline' in remaining})
     args.ready_file.write_text(json.dumps(ready), encoding='utf-8')
     print(json.dumps(ready), flush=True)
     threading.Thread(target=run_dashboard, args=(remaining, inner_ready, state), daemon=True).start()
     if args.open_browser:
         threading.Thread(target=webbrowser.open, args=(ready['url'],), daemon=True).start()
-    server.serve_forever()
+    serve_requests(server, state)
+
+
+def serve_requests(server, state):
+    # Failed builders must not retain their imported data/process indefinitely.
+    server.timeout = .5
+    failed_at = None
+    try:
+        while True:
+            server.handle_request()
+            if state.get('failed'):
+                failed_at = failed_at or time.monotonic()
+                if time.monotonic() - failed_at >= 20:
+                    break
+    finally:
+        server.server_close()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--ready-file', type=Path)
+    parser.add_argument('--open-browser', action='store_true')
+    args, remaining = parser.parse_known_args()
+    if '--retry-market' in remaining and '--daily-refresh' not in remaining:
+        parser.error('--retry-market requires --daily-refresh')
+    if '--offline' in remaining and any(flag in remaining for flag in ('--daily-refresh', '--retry-market')):
+        parser.error('--offline cannot be combined with market refresh')
+    if args.ready_file and args.ready_file.exists():
+        parser.error('ready-file must be new for each launch')
+    # Lease is held through serving, including initial preparation. Stale files
+    # cannot hold a lease after a process exits.
+    for _ in range(40):
+        lease = acquire(ROOT)
+        if lease is not None:
+            try:
+                return serve(args, remaining)
+            finally:
+                release(lease)
+        try:
+            value = existing(ROOT)
+        except (OSError, ValueError, KeyError):
+            time.sleep(.25)
+            continue
+        result = reuse(ROOT, value, remaining)
+        if args.ready_file:
+            args.ready_file.parent.mkdir(parents=True, exist_ok=True)
+            args.ready_file.write_text(json.dumps(result), encoding='utf-8')
+        if sys.stdout is not None:
+            print(json.dumps(result), flush=True)
+        if args.open_browser:
+            webbrowser.open(result['url'])
+        return
+    raise ValueError('dashboard_instance_unresponsive: inspect the running server log')
 
 
 if __name__ == '__main__':

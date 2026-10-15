@@ -1,0 +1,72 @@
+"""Real OS leases and launcher reuse, with synthetic local servers only."""
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
+import dashboard_instance as instance
+import dashboard_startup as startup
+
+
+class Instance(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.value = dict(url='http://127.0.0.1:12345', dashboard_url='http://127.0.0.1:12346',
+                          pid=123, state='ready', offline=False)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_lease_blocks_second_owner_and_releases_without_deleting_lock(self):
+        first = instance.acquire(self.root)
+        try:
+            self.assertIsNotNone(first)
+            self.assertIsNone(instance.acquire(self.root))
+        finally:
+            instance.release(first)
+        second = instance.acquire(self.root)
+        self.assertIsNotNone(second)
+        instance.release(second)
+
+    def test_loading_launch_reuses_without_loading_builder(self):
+        receipt = self.root/'ready.json'
+        value = dict(self.value, state='loading', dashboard_url=None)
+        with patch.object(startup, 'ROOT', self.root), patch.object(startup, 'acquire', return_value=None), patch.object(startup, 'existing', return_value=value), patch.object(startup, 'serve') as build, patch.object(sys, 'argv', ['startup','--saved-accounts','--ready-file',str(receipt)]):
+            startup.main()
+        build.assert_not_called()
+        self.assertTrue(json.loads(receipt.read_text())['reused'])
+        self.assertEqual(json.loads(receipt.read_text())['url'], value['url'])
+
+    def test_daily_flags_reach_existing_server_but_saved_reopen_is_read_only(self):
+        with patch.object(instance, 'request', return_value={'workspace':str(self.root),'token':'local'}) as request:
+            instance.reuse(self.root, self.value, ['--saved-accounts'])
+            request.assert_not_called()
+            instance.reuse(self.root, self.value, ['--daily-refresh','--retry-market','--saved-accounts'])
+            self.assertEqual(request.call_args.args[1:3], ('/api/launch',dict(daily_refresh=True,retry_market=True,saved_accounts=True)))
+
+    def test_slow_loading_probe_waits_for_existing_owner(self):
+        loading = dict(self.value,state='loading',dashboard_url=None)
+        with patch.object(instance, 'existing', side_effect=[TimeoutError(),self.value]), patch.object(instance.time,'sleep'), patch.object(instance,'request',return_value={'workspace':str(self.root),'token':'local'}):
+            result = instance.reuse(self.root,loading,['--daily-refresh','--saved-accounts'])
+        self.assertTrue(result['reused'])
+        self.assertEqual(result['url'],self.value['dashboard_url'])
+
+    def test_offline_mismatch_and_failed_builder_do_not_start_another_server(self):
+        with self.assertRaisesRegex(ValueError, 'mode_conflict'):
+            instance.reuse(self.root, self.value, ['--offline'])
+        with self.assertRaisesRegex(ValueError, 'startup_failed'):
+            instance.reuse(self.root, dict(self.value,state='failed'), [])
+
+    def test_stale_or_other_workspace_receipt_is_not_reused(self):
+        instance.publish(self.root, {**self.value,'instance_id':'current'})
+        with patch.object(instance,'request',return_value={'workspace':str(self.root),'instance_id':'old','protocol':1}):
+            with self.assertRaisesRegex(ValueError, 'incompatible'):
+                instance.existing(self.root)
+
+
+if __name__ == '__main__':
+    unittest.main()
