@@ -95,13 +95,13 @@ class DartRevenue(unittest.TestCase):
 
 
 class SecRevenue(unittest.TestCase):
-    def test_ordinary_precedence_keeps_latest_filing_then_tag_priority(self):
+    def test_total_is_not_replaced_by_smaller_contract_component(self):
         data = taxonomy(RevenueFromContractWithCustomerExcludingAssessedTax=[sec_row(100)],
                         Revenues=[sec_row(110, filed='2026-03-01')])
         selected = sec_select(data)
         self.assertEqual(selected[0]['val'], 110)
         data['Revenues']['units']['USD'][0]['filed'] = '2026-02-01'
-        self.assertEqual(sec_select(data)[0]['val'], 100)
+        self.assertEqual(sec_select(data)[0]['val'], 110)
 
     def test_net_financial_total_supported(self):
         selected = sec_select(taxonomy(RevenuesNetOfInterestExpense=[sec_row(100)]))
@@ -146,7 +146,10 @@ class SecRevenue(unittest.TestCase):
 
     def test_conflicting_latest_fact_is_not_arbitrarily_selected(self):
         data = taxonomy(Revenues=[sec_row(100), sec_row(101)])
-        self.assertEqual(sec_select(data), [])
+        conflict=sec_select(data)
+        self.assertEqual(len(conflict),1)
+        self.assertIsNone(conflict[0]['val'])
+        self.assertIn('충돌',conflict[0]['reason'])
         data['Revenues']['units']['USD'].append(sec_row(102, filed='2026-03-01'))
         self.assertEqual(sec_select(data)[0]['val'], 102)
 

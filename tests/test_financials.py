@@ -67,7 +67,7 @@ class StoredRequest(unittest.TestCase):
         with patch('financial_store.Collector') as collector:
             self.assertEqual(self.store.read('US:NVDA')['state'],'not_requested');collector.assert_not_called()
     def test_reuse_does_not_collect(self):
-        with patch.object(self.store,'read',return_value={'result':{'x':1},'state':'complete'}),patch('financial_store.Collector') as collector:
+        with patch.object(self.store,'read',return_value={'result':{'x':1},'state':'complete','result_stale':False}),patch('financial_store.Collector') as collector:
             self.assertEqual(self.store.start('US:NVDA',{},False)['result'],{'x':1});collector.assert_not_called()
     def test_cross_process_lock(self):
         f=lock_file(Path(self.temp.name)/'lock');self.assertIsNotNone(f);self.assertIsNone(lock_file(Path(self.temp.name)/'lock'));unlock(f)

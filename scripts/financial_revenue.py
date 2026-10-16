@@ -109,7 +109,7 @@ def select_dart_revenue(rows, currency='KRW'):
 def _sec_rows(taxonomy, tag, cutoff, as_of, unit):
     rows = []
     for row in taxonomy.get(tag, {}).get('units', {}).get(unit, []):
-        if (row.get('form') not in ('10-K', '10-Q', '10-K/A', '10-Q/A')
+        if (row.get('form') not in ('10-K', '10-Q', '10-K/A', '10-Q/A', '20-F', '20-F/A', '6-K', '6-K/A', '8-K')
                 or not row.get('start') or not row.get('end') or not row.get('filed')
                 or row['end'] < cutoff or row['filed'] > as_of or _number(row.get('val')) is None):
             continue
@@ -133,26 +133,55 @@ def _sec_latest(rows):
         latest = [r for r in values if (r['filed'], r.get('accn', '')) == rank]
         if len({_number(r['val']) for r in latest}) == 1:
             result[span] = latest[0]
+        else:
+            result[span] = dict(latest[0], val=None, reason='동일 최신 공시의 계정값 충돌',
+                                conflicting_values=sorted({_number(r['val']) for r in latest}))
     return result
 
 
 def select_sec_revenue(taxonomy, *, cutoff, as_of, unit='USD'):
     """Return SEC duration facts with revenue metadata, deduplicated by exact span.
 
-    Ordinary revenue preserves the existing latest-filing/alias precedence.
-    Explicit total Revenues is preferred to customer-contract fee components
-    when banking tags exist. Net-interest-only and fee-only facts never qualify.
+    Total revenue takes precedence over revenue from customer contracts, which
+    can exclude interest, leases and insurance. Filing recency only ranks facts
+    within a comparable total. A banking tag does not make every total net.
     """
-    ordinary_tags = ('RevenueFromContractWithCustomerExcludingAssessedTax', 'Revenues', 'SalesRevenueNet')
+    ordinary_tags = ('Revenues', 'SalesRevenueNet', 'RevenueFromContractWithCustomerExcludingAssessedTax')
     net_tag = 'RevenuesNetOfInterestExpense'
     banking = bool(taxonomy.get('InterestIncomeExpenseNet') or taxonomy.get(net_tag))
-    # Keep the original ordinary-company ordering/filing rank exactly.
+    # A filer may migrate a total to the customer-contract concept and later
+    # restate that same period using only the new concept. Prove equivalence
+    # from the latest filing that published BOTH values for that exact span;
+    # never infer it from the issuer name or from equal values in another year.
+    contract_tag=ordinary_tags[-1]
+    paired={}
+    contract_rows=_sec_rows(taxonomy,contract_tag,cutoff,as_of,unit)
+    for total_tag in ordinary_tags[:2]:
+        total_rows=_sec_rows(taxonomy,total_tag,cutoff,as_of,unit)
+        for total in total_rows:
+            matches=[r for r in contract_rows if (r['start'],r['end'],r['filed'],r.get('accn'))==
+                     (total['start'],total['end'],total['filed'],total.get('accn')) and r.get('accn')]
+            if not matches:continue
+            span=(total['start'],total['end']);rank=(total['filed'],total.get('accn',''))
+            equal=all(_number(r['val'])==_number(total['val']) for r in matches)
+            if span not in paired or rank>paired[span][0]:paired[span]=(rank,equal)
+            elif rank==paired[span][0]:paired[span]=(rank,paired[span][1] and equal)
     ordinary = {}
     for priority, tag in enumerate(ordinary_tags):
         for span, row in _sec_latest(_sec_rows(taxonomy, tag, cutoff, as_of, unit)).items():
-            rank = (row['filed'], row.get('accn', ''), -priority)
+            same_total=paired.get(span,(None,False))[1]
+            rank = (priority < 2 or same_total, row['filed'], row.get('accn', ''), -priority)
             if span not in ordinary or rank > ordinary[span][0]:
-                ordinary[span] = (rank, dict(row, **_REPORTED))
+                metadata=dict(_REPORTED)
+                if priority==2 and same_total:
+                    metadata['revenue_note']='동일 기간·동일 공시에서 총수익과 일치한 계정의 최신 제출값'
+                ordinary[span] = (rank, dict(row, **metadata))
+    # This is a separate valid standard total-revenue concept. Do not merge its
+    # tax basis into an excluding-tax series or replace a stronger total.
+    for span,row in _sec_latest(_sec_rows(taxonomy,'RevenueFromContractWithCustomerIncludingAssessedTax',cutoff,as_of,unit)).items():
+        if span not in ordinary:
+            ordinary[span]=((),dict(row,**dict(_REPORTED,comparison_key='reported_revenue_including_assessed_tax',
+                revenue_note='세금 포함 기준의 공시 고객계약 매출')))
     if not banking:
         return [ordinary[k][1] for k in sorted(ordinary)]
 
@@ -162,14 +191,17 @@ def select_sec_revenue(taxonomy, *, cutoff, as_of, unit='USD'):
     noninterest = _sec_latest(_sec_rows(taxonomy, 'NoninterestIncome', cutoff, as_of, unit))
     result = {}
     for span, row in totals.items():
-        result[span] = dict(row, **_REPORTED)
+        alias = net.get(span)
+        same_net = (alias and row.get('val') is not None and row.get('val') == alias.get('val')
+                    and row.get('accn') and (row['filed'], row['accn']) == (alias['filed'], alias.get('accn')))
+        result[span] = dict(row, **(_BANK if same_net else _REPORTED))
     for span, row in net.items():
         result.setdefault(span, dict(row, **_BANK))
     for span in interest.keys() & noninterest.keys():
         if span in result:
             continue
         a, b = interest[span], noninterest[span]
-        if not a.get('accn') or (a['filed'], a['accn']) != (b['filed'], b.get('accn')):
+        if a.get('val') is None or b.get('val') is None or not a.get('accn') or (a['filed'], a['accn']) != (b['filed'], b.get('accn')):
             continue
         components = [dict(tag=r['tag'], value=_number(r['val']), accession=r.get('accn')) for r in (a, b)]
         result[span] = dict(a, tag='derived_BankNetRevenue', val=_number(a['val']) + _number(b['val']),

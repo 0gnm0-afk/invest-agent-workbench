@@ -33,6 +33,24 @@ class RecalculateSaved(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_cached_version_is_explicit_without_changing_snapshot(self):
+        from financial_store import VERSION
+        with patch('financial_store.settings',return_value={}):
+            result=self.store.read(self.key)
+        self.assertTrue(result['result_stale'])
+        self.assertEqual(result['calculation_version'],VERSION)
+        for name,raw in self.original.items():
+            self.assertEqual((self.base/name).read_bytes(),raw)
+
+    def test_start_reuses_current_but_rebuilds_stale_cached_result(self):
+        stock={'market':'US','symbol':'ABC'}
+        for stale in (False,True):
+            packet={'result':{'snapshot_id':self.sid},'result_stale':stale}
+            with patch.object(self.store,'read',return_value=packet), patch('financial_store.lock_file',return_value=None) as lock:
+                result=self.store.start(self.key,stock)
+            self.assertEqual(result.get('state'), 'running' if stale else None)
+            self.assertEqual(lock.call_count,int(stale))
+
     def test_recalculate_retains_raw_date_and_original_snapshot(self):
         with patch('financial_store.Collector') as collector, patch('financial_store.sec_normalize', return_value={'ok': True}), patch('financial_store.summarize', return_value={'summary': [], 'calculation_version': 'new'}):
             result = self.store.recalculate_saved(self.key)

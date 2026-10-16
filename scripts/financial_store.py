@@ -4,6 +4,7 @@ import json
 import os
 import re
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,7 +20,12 @@ def packed(v):
 def save(path,v,atomic=False):
     path=Path(path);path.parent.mkdir(parents=True,exist_ok=True)
     if atomic:
-        tmp=path.with_name(path.name+'.'+uuid.uuid4().hex+'.tmp');tmp.write_bytes(packed(v));os.replace(tmp,path)
+        tmp=path.with_name(path.name+'.'+uuid.uuid4().hex+'.tmp');tmp.write_bytes(packed(v))
+        for attempt in range(6):
+            try:os.replace(tmp,path);break
+            except PermissionError:
+                if attempt==5:raise
+                time.sleep(.02*(attempt+1))
     else:
         with path.open('xb') as f:f.write(packed(v))
 
@@ -79,17 +85,21 @@ class FinancialStore:
         if status.get('state')=='running':
             lease=lock_file(folder/'request.lock')
             if lease:
-                unlock(lease);status={**status,'state':'interrupted','error':'previous_collection_interrupted'}
+                unlock(lease)
+                # A worker may finish between our first read and lock probe.
+                latest=json.loads((folder/'attempt.json').read_bytes())
+                status=latest if latest.get('state')!='running' else {**status,'state':'interrupted','error':'previous_collection_interrupted'}
         conf=settings()
         return dict(key=key,state=status.get('state','saved' if result else 'not_requested'),attempt=status,result=result,
                     config=dict(dart_ready=bool(conf.get('DART_API_KEY')),sec_ready=bool(conf.get('SEC_USER_AGENT'))),
-                    reused=result is not None)
+                    reused=result is not None, calculation_version=VERSION,
+                    result_stale=result is not None and result.get('calculation_version') != VERSION)
 
     def start(self,key,stock,refresh=False):
         folder=self.folder(key)
         with self.mutex:
             cached=self.read(key)
-            if cached['result'] and not refresh:return cached
+            if cached['result'] and not cached['result_stale'] and not refresh:return cached
             lease=lock_file(folder/'request.lock')
             if lease is None:return {**cached,'state':'running'}
             save(folder/'attempt.json',dict(state='running',started_at=now(),stage='공식 자료 요청 준비'),atomic=True)
@@ -123,8 +133,15 @@ class FinancialStore:
             sources = list({s['id']:s for s in sources}.values())
             source['symbol']=stock['symbol']
             progress('공시 기간 정규화 · Python 재무 계산')
-            normal=dart_normalize(source) if source['provider']=='DART' else sec_normalize(source)
-            result=summarize(normal,stock)
+            from financial_business import unsupported,coverage
+            if source.get('eligibility',{}).get('status')=='unsupported':
+                normal=unsupported(source);result=dict(normal,calculation_version=VERSION)
+            else:
+                normal=dart_normalize(source) if source['provider']=='DART' else sec_normalize(source)
+                result=coverage(summarize(normal,stock))
+                result['format_issues']=source.get('format_issues',[])
+                result['enrichment_errors']=source.get('enrichment_errors',[])
+                result['enrichment_plan']=source.get('enrichment_plan',{})
             result.update(key=key,snapshot_id=sid,collected_at=now(),sources=sources)
             if inherited is not None:
                 result.update(collected_at=inherited['collected_at'],recalculated_at=now(),source_snapshot_id=inherited['snapshot_id'])
@@ -134,13 +151,21 @@ class FinancialStore:
             save(base/'result.json',result)
             files={str(p.relative_to(base)).replace('\\','/'):hashlib.sha256(p.read_bytes()).hexdigest() for p in base.rglob('*') if p.is_file()}
             code_files=['financial_focus.py','financial_sources.py','financial_model.py','financial_revenue.py','financial_dart_supplement.py','financial_store.py','financial_supplements.py','financial_summary.py']
+            code_files+=['financial_business.py','financial_dart_notes.py','financial_sec_filing.py','financial_cohort.py','financial_returns.py','financial_sec_tables.py','financial_sec_distributions.py','financial_sec_ifrs.py']
             save(base/'manifest.json',dict(schema=1,key=key,version=VERSION,files=files,
                                           code={name:hashlib.sha256((ROOT/'scripts'/name).read_bytes()).hexdigest() for name in code_files}))
             save(folder/'latest.json',dict(snapshot=sid,manifest_sha256=hashlib.sha256((base/'manifest.json').read_bytes()).hexdigest()),atomic=True)
-            save(folder/'attempt.json',dict(state='complete',started_at=started,finished_at=now(),snapshot=sid,stage='저장 완료'),atomic=True)
+            state='unsupported' if result.get('eligibility',{}).get('status')=='unsupported' else 'complete'
+            save(folder/'attempt.json',dict(state=state,quality=result.get('data_quality',{}).get('state'),started_at=started,finished_at=now(),snapshot=sid,stage='저장 완료'),atomic=True)
         except Exception as exc:
             # Do not expose raw exceptions: urllib errors may contain API keys.
-            error=str(exc) if isinstance(exc,SourceError) else type(exc).__name__
+            known_format={'SEC_IFRS_TAXONOMY_REQUIRES_MAPPING','SEC_IFRS_REPORTING_CURRENCY_UNVERIFIED','SEC_REPORTING_CURRENCY_AMBIGUOUS','DART_NON_DECEMBER_YEAR_REQUIRES_PERIOD_MAPPING','OFFICIAL_PERIODS_UNAVAILABLE'}
+            error='UNSUPPORTED_FINANCIAL_FORMAT' if str(exc) in known_format else str(exc) if isinstance(exc,SourceError) else type(exc).__name__
+            # Retain official sources for a future parser fix even when no table
+            # can be produced. Never turn transport failure into format failure.
+            if error=='UNSUPPORTED_FINANCIAL_FORMAT':
+                if 'source' in locals() and not (base/'source.json').exists():save(base/'source.json',source)
+                if 'sources' in locals() and not (base/'sources.json').exists():save(base/'sources.json',sources)
             save(base/'failure.json',dict(state='failed',error=error,at=now()))
             save(folder/'attempt.json',dict(state='failed',started_at=started,finished_at=now(),error=error,stage='갱신 실패 · 이전 성공 보존'),atomic=True)
         finally:unlock(lease)

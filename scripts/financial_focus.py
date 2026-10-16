@@ -2,16 +2,15 @@
 from copy import deepcopy
 from financial_model import VERSION as NORMALIZATION_VERSION, fact, calc, growth, comparable_period, days
 
-VERSION = 'financial-focus-5'
+VERSION = 'financial-focus-8'
 LABELS = {'sales':'매출액', 'operating':'영업이익', 'income':'지배주주 순이익',
           'basic_eps':'기본 EPS', 'eps':'희석 EPS', 'operating_margin':'영업이익률',
-          'net_margin':'순이익률', 'current_ratio':'유동비율', 'debt_ratio':'부채비율', 'icr':'이자보상배율 (ICR)'}
+          'net_margin':'순이익률', 'current_ratio':'유동비율', 'debt_ratio':'부채비율'}
 DEFINITIONS = {
     'net_margin':('순이익 ÷ 매출액', '공시 순이익이 같은 기간 매출에서 차지하는 비중. 원값의 귀속 범위를 확인하세요.', 'percent'),
     'current_ratio':('유동자산 ÷ 유동부채', '동일 기말 유동부채 대비 유동자산', 'percent'),
     'operating_margin':('영업이익 ÷ 매출액', '동일 기간 영업이익이 매출에서 차지하는 비중', 'percent'),
-    'debt_ratio':('총부채 ÷ 자본총계', '기말 총부채/자본총계. 종전 이자부부채/지배주주자본과 다른 정의', 'percent'),
-    'icr':('영업이익 ÷ 이자비용', '동일 기간 공시 이자비용 대비 영업이익. 금융비용·현금 이자지급으로 대체하지 않음', 'multiple')}
+    'debt_ratio':('총부채 ÷ 자본총계', '기말 총부채/자본총계. 종전 이자부부채/지배주주자본과 다른 정의', 'percent')}
 
 
 def origin(cell):
@@ -35,7 +34,7 @@ def compatible(a, b, *, same_period=False):
         return '필수 공시 원값 미확보'
     if a.get('unit') != b.get('unit'):
         return '통화·단위 불일치'
-    for field in ('accounting_basis','revision_basis'):
+    for field in (('accounting_basis',) if same_period else ('accounting_basis','revision_basis')):
         if a.get(field) != b.get(field):
             return '회계 범위 또는 정정 공시 비교 기준 불일치'
     if any(c.get('period_coverage') == 'unknown' or c.get('accounting_basis_verified') is False for c in (a,b)):
@@ -43,7 +42,13 @@ def compatible(a, b, *, same_period=False):
     if same_period and (a.get('start'),a.get('end')) != (b.get('start'),b.get('end')):
         return '서로 다른 기간의 원값은 비율로 결합하지 않음'
     if same_period and any(a.get(k) and b.get(k) and a[k]!=b[k] for k in ('receipt','accession')):
-        return '동일 기간 원값의 공시 버전 불일치'
+        lineages=[set([c.get('receipt'),c.get('accession'),*c.get('equivalent_filings',[])])-{None} for c in (a,b)]
+        if not lineages[0]&lineages[1]:return '동일 기간 원값의 공시 버전 불일치'
+    if same_period and a.get('period_disclosures') and b.get('period_disclosures'):
+        left,right=a['period_disclosures'],b['period_disclosures']
+        if len(left)!=len(right) or any((x.get('start'),x.get('end'))!=(y.get('start'),y.get('end')) or
+                not set(x.get('filings',[]))&set(y.get('filings',[])) for x,y in zip(left,right)):
+            return '분기 차감에 사용한 누적 원값의 공시 묶음 불일치'
     if a.get('comparison_key') != b.get('comparison_key') and not same_period:
         return '비교 정의 불일치'
     if not same_period:
@@ -74,42 +79,24 @@ def movement(cell, previous, *, reverse=False, ratio=False):
     return result
 
 
-def select_interest(values, industry):
-    """Resolve the explicit expense against its numerator before alias priority.
-
-    A populated legacy tag must not hide a compatible current-filing alias.
-    Financial companies do not inherit the general-company nonoperating alias.
-    Never fall back to finance costs, cash interest, or an incompatible filing.
-    """
-    operating=values.get('operating')
-    keys=['interest_expense']+(['interest_nonoperating'] if industry=='general' else [])
-    candidates=[(key,values.get(key)) for key in keys]
-    for key,candidate in candidates:
-        if compatible(operating,candidate,same_period=True) is None:
-            selected=deepcopy(candidate)
-            if industry=='general' and selected.get('tag') in ('InterestExpense','InterestExpenseNonoperating'):
-                selected['interest_definition']='general_explicit_interest_expense'
-            selected['comparison_note']='영업이익과 기간·통화·회계 범위·공시 버전을 검증한 명시 이자비용. 금융비용·현금 이자지급액 아님.'
-            selected['selection_key']=key
-            return selected
-    # Keep the failed candidate and its provenance so ratio() explains rejection.
-    return deepcopy(values.get('interest_expense') or fact(reason='같은 기간·공시의 명시 이자비용 미확보'))
-
-
 def ratio(values, key):
     formula,explanation,kind=DEFINITIONS[key]
-    numerator,denominator={'net_margin':('net_income' if values.get('net_income',{}).get('value') is not None else 'income','sales'),'current_ratio':('current_assets','current_liabilities'),'operating_margin':('operating','sales'),'debt_ratio':('liabilities','total_equity'),
-                           'icr':('operating','interest_expense')}[key]
+    total_net=values.get('net_income')
+    use_total=compatible(total_net,values.get('sales'),same_period=True) is None
+    if not use_total and compatible(values.get('income'),values.get('sales'),same_period=True) is not None:
+        use_total=(total_net or {}).get('value') is not None
+    numerator,denominator={'net_margin':('net_income' if use_total else 'income','sales'),'current_ratio':('current_assets','current_liabilities'),'operating_margin':('operating','sales'),'debt_ratio':('liabilities','total_equity')}[key]
     a,b=values.get(numerator),values.get(denominator)
     denominator_tag=(b or {}).get('tag')
     cell=calc(formula,[a,b],lambda x,y:x/y,'ratio' if kind=='percent' else 'multiple',positive=(1,))
     reason=compatible(a,b,same_period=True)
     if reason:cell.update(value=None,reason=reason)
+    elif b['value']<=0:
+        cell.update(status='not_computable',display_text='산출 불가',reason='분모가 0 이하인 공시값: 이 비율의 정의상 산출하지 않습니다.')
     # Explicit direct ratios can only supersede calculations with a verified contract.
     direct=values.get(key)
     if direct and direct.get('value') is not None and direct.get('definition')==formula and direct.get('unit')==cell['unit'] and direct.get('source_type') in ('company_reported','opendart_indicator') and direct.get('definition_verified') is True and (direct.get('start'),direct.get('end'))==((a or {}).get('start'),(a or {}).get('end')):
         cell=deepcopy(direct)
-    if key=='icr':cell['comparison_key']='icr:'+((b or {}).get('interest_definition') or str(sorted({denominator_tag} if denominator_tag else {x.get('tag') or '' for x in (b or {}).get('inputs',[])})))
     if key=='net_margin':
         cell['comparison_key']='net_margin:'+numerator+':'+str((b or {}).get('comparison_key'))
         if numerator=='income':explanation='지배주주/공시 순이익 ÷ 매출액. 분자의 귀속 범위는 공시 근거에서 확인.'
@@ -121,13 +108,36 @@ def ratio(values, key):
 def summarize(normal, stock):
     """No forecasts, market-price multiples, thresholds, or synthetic missing values."""
     result=deepcopy(normal)
-    if not any(result.get(frame) for frame in ('annual','quarterly')):
+    for frame in ('annual','quarterly'):
+        result[frame]=[row for row in result.get(frame,[]) if any(row['values'].get(k,{}).get('value') is not None
+                      for k in ('sales','operating','income','net_income'))]
+    if not any(row['values'].get(k,{}).get('value') is not None for frame in ('annual','quarterly')
+               for row in result.get(frame,[]) for k in ('sales','operating','income','net_income')):
         raise ValueError('OFFICIAL_PERIODS_UNAVAILABLE')
+    from financial_cohort import select_bundles
+    for frame in ('annual','quarterly'):
+        for row in result.get(frame,[]):select_bundles(row['values'])
     keys=['sales','operating','income']
+    # A complete consolidated profit series is an explicit alternative scope,
+    # never a per-cell substitution labelled as profit attributable to owners.
+    all_rows=[row for f in ('annual','quarterly') for row in result.get(f,[])]
+    use_total=(normal['provider']=='DART' or sum(r['values'].get('net_income',{}).get('value') is not None for r in all_rows)>sum(r['values'].get('income',{}).get('value') is not None for r in all_rows)) and any(r['values'].get('income',{}).get('value') is None and
+        r['values'].get('net_income',{}).get('value') is not None for r in all_rows)
+    labels=dict(LABELS)
+    if normal.get('security_basis',{}):
+        labels['basic_eps']='기본 EPS (보통주)'
+        labels['eps']='희석 EPS (보통주)'
+    if use_total:
+        labels['income']='순이익 (전체)'
+        for row in all_rows:
+            row['values']['parent_income']=deepcopy(row['values'].get('income',fact()))
+            row['values']['income']=deepcopy(row['values'].get('net_income',fact()))
+            row['values']['income']['comparison_key']='total_net_income'
+        result['income_scope']='total_net_income'
     if normal['provider']=='SEC':
         keys += [key for key in ('basic_eps','eps') if any(row['values'].get(key,{}).get('value') is not None
                  for frame in ('annual','quarterly') for row in result.get(frame,[]))]
-    result['performance_metrics']=[dict(id=key,label=LABELS[key]) for key in keys]
+    result['performance_metrics']=[dict(id=key,label=labels[key]) for key in keys]
     result['display_range']={'annual':5,'quarterly':12}
     for frame in ('annual','quarterly'):
         rows=sorted(result.get(frame,[]),key=lambda r:r['date'])
@@ -137,14 +147,22 @@ def summarize(normal, stock):
             if normal['provider']=='SEC' and v.get('total_equity',{}).get('tag')=='StockholdersEquity':
                 # Parent equity is not total equity. Derive only from one balance sheet.
                 v['total_equity']=total_equity(v,normal['currency'])
-            v['interest_expense']=select_interest(v,normal.get('industry_model','general'))
             for key in keys:
                 v.setdefault(key,fact(unit=normal['currency']+('/share' if 'eps' in key else ''),end=row['date']))
-                v[key].update(id=key,label=(v[key].get('account_label') or LABELS[key]) if key=='sales' else LABELS[key],kind='money',source_type=origin(v[key]))
+                v[key].update(id=key,label=(v[key].get('account_label') or labels[key]) if key=='sales' else labels[key],kind='money',source_type=origin(v[key]))
             if normal['provider']=='SEC':
                 v.setdefault('shares',fact(unit='shares',end=row['date']))
                 v['shares'].update(id='shares',label='기말 유통주식수',kind='shares')
             row['metrics']={key:ratio(v,key) for key in DEFINITIONS}
+            if normal['provider']=='SEC':
+                from financial_returns import attach_returns
+                attach_returns(v,row['metrics'],normal['currency'])
+            if normal.get('industry_model')=='bank':
+                for group,ids in ((v,('operating',)),(row['metrics'],('operating_margin','current_ratio'))):
+                    for key in ids:
+                        if group[key]['value'] is None:
+                            group[key].update(status='not_applicable',display_text='업종 해당 없음',
+                                reason='은행은 일반 사업회사의 영업이익·유동성 분류 정의를 적용하지 않습니다.')
             equity=v.get('total_equity') or fact(unit=normal['currency'],end=row['date'])
             row['warnings']=[dict(code='NON_POSITIVE_EQUITY',message='자본총계가 0 이하입니다.',evidence=deepcopy(equity))] if equity['value'] is not None and equity['value']<=0 else []
             row['growth']={};row['qoq']={}
@@ -155,7 +173,7 @@ def summarize(normal, stock):
                     cell=growth(v[key],prior_cell)
                     reason=compatible(v[key],prior_cell)
                     if reason:cell.update(value=None,display_text='비교불가',reason=reason)
-                    cell.update(id=key+'_'+('yoy' if target=='growth' else 'qoq'),label=LABELS[key]+(' 증가율 (YoY)' if target=='growth' else ' 증가율 (QoQ)'),source_type='calculated',comparison='YoY' if target=='growth' else 'QoQ')
+                    cell.update(id=key+'_'+('yoy' if target=='growth' else 'qoq'),label=labels[key]+(' 증가율 (YoY)' if target=='growth' else ' 증가율 (QoQ)'),source_type='calculated',comparison='YoY' if target=='growth' else 'QoQ')
                     row[target][key]=cell
         original=deepcopy(rows)
         for row in rows:
@@ -164,11 +182,11 @@ def summarize(normal, stock):
             row['performance']={};row['performance_qoq']={}
             prior_quarter=comparable_period(original,row,quarter=True) if frame=='quarterly' else None
             # Display comparisons share the same period/basis validation as performance.
-            display_keys=set(keys) | {'net_income','dividend','total_equity','liabilities','current_assets','current_liabilities','interest_expense'}
-            if normal['provider']=='SEC':display_keys.add('shares')
+            display_keys=set(keys) | {'net_income','dividend','total_equity','liabilities','current_assets','current_liabilities'}
+            if normal['provider']=='SEC':display_keys.update(('shares','cash_dividends','buybacks','shareholder_return'))
             for target,prior in (('value_movements',previous),('value_movements_qoq',prior_quarter)):
                 row[target]={key:movement(row['values'][key],prior['values'].get(key) if prior else None,
-                    reverse=key in {'liabilities','current_liabilities','interest_expense','shares'})
+                    reverse=key in {'liabilities','current_liabilities','shares'})
                     for key in sorted(display_keys) if key in row['values']}
             for key in keys:
                 row['performance'][key]=movement(row['values'][key],previous['values'].get(key) if previous else None)

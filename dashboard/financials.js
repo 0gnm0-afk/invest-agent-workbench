@@ -53,7 +53,14 @@ window.WorkbenchFinancials = (() => {
     if(!cell)return '공시 자료 미확보';
     const dynamic=/(^eps|^annual_eps|^latest_quarter_eps|^pe$|^pe_annual$|^sales$|^dividend$|^yield$|^payout$)/.test(cell.id||'')||cell.status||cell.eps_basis||cell.revenue_basis||cell.revenue_note;
     const base=dynamic?[cell.label,cell.reason?'자료 사유: '+cell.reason:'산식: '+(cell.formula||'공시 원값'),'기간: '+(cell.start||'시점')+' ~ '+(cell.end||result.financial_as_of||'미확인'),'공시: '+(cell.filed||'미확인'),'값을 클릭하면 원자료와 계산 입력을 확인할 수 있습니다.'].filter(Boolean).join('\n'):WorkbenchHelp.financial({...cell,id:cell.id||''},result);
-    return [base,...metadata(cell)].filter(Boolean).join('\n');
+    return [base,...metadata(cell),...qualityMetadata(cell)].filter(Boolean).join('\n');
+  }
+  function qualityMetadata(cell){
+    const causes=items=>(items||[]).flatMap(x=>[x.reason,...causes(x.causes)]).filter(Boolean);
+    return [cell?.dividend_basis?'배당 기준: '+({paid:'지급',declared:'선언'}[cell.dividend_basis]||cell.dividend_basis):'',
+      cell?.period_note||'',cell?.period_coverage==='unknown'?'실제 공시기간 미확인':'',
+      cell?.revision_history?.length?'과거 공시값 '+cell.revision_history.length+'건의 변경 이력 보존':'',
+      ...[...new Set(causes(cell?.missing_inputs))].map(x=>'필수 입력 결측: '+x)].filter(Boolean);
   }
   function shell(){return '<section class="panel financial-panel" id="financials" aria-label="재무정보"><div class="panel-head"><div><h2>재무정보</h2><p class="chart-caption">버튼을 누를 때 공식 자료 수집·계산 · 이후 저장 결과 재사용</p></div><div class="financial-actions"><button id="financial-load">재무요약 만들기</button><button id="financial-refresh" hidden>재무요약 다시 만들기</button></div></div><div class="panel-body"><p id="financial-status" role="status">저장된 재무자료 확인 중…</p><div id="financial-content"></div></div></section>';}
   function clearCharts(ctx){ctx.charts.splice(0).forEach(c=>WorkbenchCharts.remove(c));}
@@ -121,8 +128,9 @@ window.WorkbenchFinancials = (() => {
   function showEvidence(ctx,cell){
     if(!cell)return;
     const d=ctx.el.querySelector('#financial-evidence');d.open=true;
-    const detail=metadata(cell);
+    const detail=[...metadata(cell),...qualityMetadata(cell)];
     ctx.el.querySelector('#financial-evidence-body').innerHTML=`<strong>${esc(cell.label||cell.tag||'공시 값')} · ${esc(value(cell,ctx.result.currency))} ${esc(cell.unit)}</strong><p>${esc(cell.reason||cell.formula||'공시 원값')}</p>${detail.length?'<p>'+detail.map(esc).join(' · ')+'</p>':''}<p>기간 ${esc(cell.start||'시점')} ~ ${esc(cell.end||'미확인')} · 공시 ${esc(cell.filed||'해당 없음/미확인')}</p><p>${sources(ctx,cell)}</p>${cell.inputs?'<ul>'+cell.inputs.map(x=>`<li>${esc(x.formula||x.account_label||x.tag||'계산 입력')} · ${esc(value(x,ctx.result.currency))} ${esc(x.unit)} · ${esc(x.end)}${metadata(x).length?' · '+metadata(x).map(esc).join(' · '):''}</li>`).join('')+'</ul>':''}`;
+    if(cell.revision_history?.length)ctx.el.querySelector('#financial-evidence-body').innerHTML+='<ul>'+cell.revision_history.map(x=>`<li>과거 공시 ${esc(x.filed)} · ${esc(value({...cell,value:x.value},ctx.result.currency))} ${esc(cell.unit)} · ${esc(x.explained_by_split_or_rounding?'분할·공시 정밀도 범위에서 일치':'변경 원인 확인 필요')} · ${sources(ctx,{...x,sources:[]})}</li>`).join('')+'</ul>';
   }
   function renderPeriods(ctx,rows){
     const r=ctx.result;ctx.evidenceCells=[];

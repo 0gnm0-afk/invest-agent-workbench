@@ -92,6 +92,9 @@ class Collector:
         company = self.dart('company', 'company.json', corp_code=corp)
         if company.get('stock_code') != symbol or company.get('corp_code') != corp:
             raise SourceError('DART_IDENTITY_MISMATCH')
+        from financial_business import eligibility
+        scope=eligibility(company,'DART')
+        if scope['status']=='unsupported':return dict(provider='DART',identity=company,eligibility=scope)
         if company.get('acc_mt') != '12':
             raise SourceError('DART_NON_DECEMBER_YEAR_REQUIRES_PERIOD_MAPPING')
         reports = []
@@ -107,8 +110,19 @@ class Collector:
                 # Never silently mix separate and consolidated accounts.
                 shares = self.dart('stockTotqySttus',prefix+'-shares.json',**args)
                 reports.append(dict(year=year,quarter=quarter,end=end.isoformat(),fs=fs,shares=shares,prefix=prefix))
+        statement_scope='CFS'
+        if not any(r['fs'].get('status')=='000' for r in reports):
+            statement_scope='OFS'
+            for report in reports:
+                code={1:'11013',2:'11012',3:'11014',4:'11011'}[report['quarter']]
+                report['prefix']+='-OFS'
+                report['fs']=self.dart('fnlttSinglAcntAll',report['prefix']+'-statements.json',
+                    fs_div='OFS',corp_code=corp,bsns_year=str(report['year']),reprt_code=code)
+                # The share report is independent of CFS/OFS; retain its real source id.
+                report['shares_source_id']=report['prefix'].removesuffix('-OFS')+'-shares.json'
         from financial_dart_supplement import collect_annual_supplements
-        return collect_annual_supplements(self, dict(provider='DART',identity=company,reports=reports))
+        return collect_annual_supplements(self, dict(provider='DART',identity=company,
+            reports=reports,statement_scope=statement_scope,eligibility=scope))
 
     def usa(self, symbol):
         listing = self.fetch('https://www.sec.gov/files/company_tickers.json','tickers.json',sec=True)
@@ -119,9 +133,15 @@ class Collector:
         submission = self.fetch(f'https://data.sec.gov/submissions/CIK{cik}.json','submissions.json',sec=True)
         if symbol not in submission.get('tickers',[]) or str(submission['cik']).zfill(10) != cik:
             raise SourceError('SEC_IDENTITY_MISMATCH')
+        from financial_business import eligibility
+        scope=eligibility(submission,'SEC')
+        if scope['status']=='unsupported':return dict(provider='SEC',identity=submission,eligibility=scope)
         facts = self.fetch(f'https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json','companyfacts.json',sec=True)
         if str(facts['cik']).zfill(10) != cik:
             raise SourceError('SEC_FACTS_IDENTITY_MISMATCH')
         from financial_supplements import sec_supplement, nvidia_supplement
-        source = dict(provider='SEC', identity=submission, facts=facts)
-        return nvidia_supplement(self, sec_supplement(self, source))
+        scope=eligibility(submission,'SEC',facts)
+        source = dict(provider='SEC', identity=submission, facts=facts,eligibility=scope)
+        if scope['status']=='unsupported':return source
+        from financial_sec_filing import enrich_sec
+        return enrich_sec(self,nvidia_supplement(self, sec_supplement(self, source)))

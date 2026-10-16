@@ -82,5 +82,16 @@ const result={snapshot_id:'new',collected_at:'2026-10-04T00:00:00Z',recalculated
   assert.match(bank.root.querySelector('#financial-evidence-body').innerHTML,/업종 비적용/);assert.match(bank.root.querySelector('#financial-evidence-body').innerHTML,/유동성 순서/);
   bank.root.querySelectorAll('[data-metric]').find(b=>b.dataset.metric==='eps_cagr5').onclick();
   assert.match(bank.root.querySelector('#financial-evidence-body').innerHTML,/EPS 기준: 공시 EPS/);assert.match(bank.root.querySelector('#financial-evidence-body').innerHTML,/공시 비교열: 전기/);assert.match(bank.root.querySelector('#financial-evidence-body').innerHTML,/공시 기간: 2024년/);
-  console.log('Financial UI: six columns, estimates excluded, actuals/growth, EPS basis, 3y/8q, bank evidence, USD/KRW, legacy, missing and immutability: PASS');
+  const qualityResult={...result,snapshot_id:'quality',summary:[
+    summary('dividend','지급 주당배당 · TTM',.495,'USD/share',{dividend_basis:'paid'}),
+    summary('pe','P/E · 실적 분기 합산 TTM',null,'ratio',{reason:'필수 입력 결측',missing_inputs:[{reason:'TTM 미확보',causes:[{reason:'직접 분기 EPS 미확보'}]}]}),
+    summary('sales','매출 · TTM',27951000,'USD',{revision_history:[{value:27950687,filed:'2025-02-01',explained_by_split_or_rounding:true}]})]};
+  const qualityBefore=JSON.stringify(qualityResult),quality=harness(qualityResult);await quality.mount();
+  const qualityHtml=quality.root.querySelector('#financial-content').innerHTML;
+  assert.match(qualityHtml,/배당 기준: 지급/);assert.match(qualityHtml,/직접 분기 EPS 미확보/);
+  quality.root.querySelectorAll('[data-metric]').find(b=>b.dataset.metric==='sales').onclick();
+  assert.match(quality.root.querySelector('#financial-evidence-body').innerHTML,/27,950,687\.00/);
+  assert.match(quality.root.querySelector('#financial-evidence-body').innerHTML,/분할·공시 정밀도 범위에서 일치/);
+  assert.equal(JSON.stringify(qualityResult),qualityBefore);
+  console.log('Financial UI: six columns, actuals/growth, EPS/dividend basis, 3y/8q, bank evidence, missing causes, revision history and immutability: PASS');
 })().catch(error=>{console.error(error);process.exitCode=1;});

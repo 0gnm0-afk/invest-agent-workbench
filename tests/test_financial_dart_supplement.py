@@ -45,6 +45,25 @@ class FakeCollector:
 
 
 class SupplementCandidates(unittest.TestCase):
+    def test_unclassified_dividend_needs_independent_single_class(self):
+        payload=raw(2025);payload['list'][1]['stock_knd']='-'
+        s=source(envelope(2025,payload))
+        self.assertFalse(any(c['key']=='dividend' for c in annual_supplement_candidates(s,as_of=TODAY)))
+        s['reports']=[dict(year=2025,quarter=4,prefix='2025-Q4',shares=dict(status='000',list=[dict(corp_code='001',se=k,istc_totqy='100') for k in ['보통주','합계']]))]
+        d=[c for c in annual_supplement_candidates(s,as_of=TODAY) if c['key']=='dividend']
+        self.assertEqual([(c['fy'],c['value']) for c in d],[(2025,30)])
+        self.assertIn('2025-Q4-shares.json',d[0]['sources'])
+
+    def test_reported_dash_zero_needs_total_and_single_class(self):
+        payload=raw(2025);row=payload['list'][1];row['thstrm']='-'
+        payload['list'].append(dict(row,se='현금배당금총액(백만원)'))
+        s=source(envelope(2025,payload));s['reports']=[dict(year=2025,quarter=4,prefix='2025-Q4',shares=dict(status='000',list=[dict(corp_code='001',se=k,istc_totqy='100') for k in ['보통주','합계']]))]
+        def current():return [c for c in annual_supplement_candidates(s,as_of=TODAY) if c['key']=='dividend' and c['fy']==2025]
+        self.assertEqual(current()[0]['value'],0);self.assertTrue(current()[0]['confirmed_zero'])
+        for bad in ['',None,'100']:
+            payload['list'][-1]['thstrm']=bad
+            self.assertEqual(current(),[])
+
     def test_three_columns_have_own_period_and_original_values(self):
         rows = annual_supplement_candidates(source(envelope(2022)), as_of=TODAY)
         eps = {r['fy']: r for r in rows if r['key'] == 'reported_eps'}

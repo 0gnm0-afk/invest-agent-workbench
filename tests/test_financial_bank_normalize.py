@@ -77,12 +77,12 @@ class DartNormalization(unittest.TestCase):
         rep['shares']['list']=[shares(rep,'보통주','-')]
         self.assertIsNone(dart_normalize(source(rep))['share_history'][0]['values']['shares']['value'])
 
-    def test_bank_applicability_and_preferred_unknown_preserve_common_pb(self):
+    def test_bank_applicability_and_unknown_preferred_block_common_pb(self):
         rep=report(2025);rep['fs']['list']=[row(rep,'eps',10),row(rep,'equity',1000)]
         bank=row(rep,'sales',50);bank.update(account_id='ifrs-full_InterestRevenueExpense',account_nm='순이자손익');rep['fs']['list'].append(bank)
         rep['shares']['list']=[shares(rep,'의결권 있는 보통주'),shares(rep,'의결권 없는 우선주','-')]
         _,_,cells=result(source(rep))
-        self.assertEqual(cells['pb']['value'],9);self.assertIn('지배주주자본',cells['pb']['label'])
+        self.assertIsNone(cells['pb']['value']);self.assertIn('보통주자본',cells['pb']['label'])
         self.assertIsNone(cells['all_market_cap']['value']);self.assertEqual(cells['market_cap']['value'],9000)
         for key in ('fcf','pfcf','current','quick','evsales'):
             self.assertEqual(cells[key]['status'],'not_applicable');self.assertIsNone(cells[key]['value'])
@@ -124,10 +124,12 @@ class AnnualSupplement(unittest.TestCase):
         _,r,cells=result(self.data())
         self.assertEqual(cells['annual_eps']['value'],300)
         self.assertEqual(r['annual'][-1]['values']['reported_eps']['value'],200)
-        self.assertAlmostEqual(cells['eps_cagr5']['value'],2**.2-1)
+        # A common endpoint is not evidence of an unchanged accounting basis.
+        self.assertIsNone(cells['eps_cagr5']['value'])
+        self.assertIn('회계 기준',cells['eps_cagr5']['reason'])
         self.assertEqual(cells['eps_cagr5']['eps_basis'],'reported')
         self.assertEqual(cells['eps_cagr5']['label'],'공시 EPS 5년 CAGR')
-        self.assertEqual(cells['eps_cagr5']['status'],'comparison_warning')
+        self.assertEqual(cells['eps_cagr5']['status'],'unavailable')
 
     def test_incomplete_reported_series_cannot_be_mixed_to_fill_cagr(self):
         data=self.data();data['annual_supplements']=[r for r in data['annual_supplements'] if r['year']!=2022]

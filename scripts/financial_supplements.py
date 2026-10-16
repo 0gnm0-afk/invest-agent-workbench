@@ -9,7 +9,7 @@ def inline_shares(raw,cik,filing,source_id):
     for ctx in soup.find_all('xbrli:context'):
         ident=ctx.find('xbrli:identifier');instant=ctx.find('xbrli:instant')
         members=ctx.find_all('xbrldi:explicitmember')
-        if not ident or not instant or int(ident.get_text())!=int(cik):continue
+        if not ident or not instant or not ident.get_text().strip().isdigit() or int(ident.get_text())!=int(cik):continue
         # Only total common stock, never a share class, subsidiary or stock plan dimension.
         if any(m.get('dimension')!='us-gaap:StatementEquityComponentsAxis' or m.get_text()!='us-gaap:CommonStockMember' for m in members):continue
         if ctx.find('xbrldi:typedmember'):continue
@@ -17,7 +17,9 @@ def inline_shares(raw,cik,filing,source_id):
     for node in soup.find_all('ix:nonfraction',attrs={'name':'us-gaap:CommonStockSharesOutstanding'}):
         end=contexts.get(node.get('contextref'))
         unit=soup.find('xbrli:unit',id=node.get('unitref'))
-        if not end or not unit or 'shares' not in unit.get_text().lower():continue
+        measures=unit.find_all('xbrli:measure') if unit else []
+        if (not end or not unit or unit.find('xbrli:divide') or len(measures)!=1
+                or measures[0].get_text().strip().lower().split(':')[-1]!='shares'):continue
         text=node.get_text().replace(',','').strip()
         if not re.fullmatch(r'\d+(\.\d+)?',text):continue
         value=float(text)*10**int(node.get('scale','0'))
@@ -30,7 +32,7 @@ def sec_supplement(collector,source):
     identity=source['identity'];cik=str(int(identity['cik']));facts=source['facts']['facts'].get('us-gaap',{})
     shares=facts.get('CommonStockSharesOutstanding',{}).get('units',{}).get('shares',[])
     ends={r['end'] for r in shares};cutoff=str(date.today().year-6)+'-01-01'
-    revenue=[r for tag in ('Revenues','RevenueFromContractWithCustomerExcludingAssessedTax','SalesRevenueNet') for r in facts.get(tag,{}).get('units',{}).get('USD',[]) if r.get('end','')>=cutoff]
+    revenue=[r for tag in ('Revenues','RevenueFromContractWithCustomerExcludingAssessedTax','RevenueFromContractWithCustomerIncludingAssessedTax','SalesRevenueNet') for r in facts.get(tag,{}).get('units',{}).get('USD',[]) if r.get('end','')>=cutoff]
     need={r['end'] for r in revenue}-ends
     recent=identity['filings']['recent'];records=[dict(zip(recent,values)) for values in zip(*recent.values())]
     # Fetch older filing metadata only when needed; these are issuer metadata, not all-company financials.

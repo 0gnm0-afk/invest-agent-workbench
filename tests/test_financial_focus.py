@@ -26,42 +26,13 @@ def normal(provider='SEC', basic=True, diluted=True):
 class FocusTests(unittest.TestCase):
     def test_korea_six_metrics_and_five_twelve(self):
         r=summarize(normal('DART'),{})
-        self.assertEqual(len(r['summary']),8)
+        self.assertEqual(len(r['summary']),7)
         self.assertEqual((len(r['annual']),len(r['quarterly'])),(5,12))
         self.assertEqual([m['id'] for m in r['performance_metrics']],['sales','operating','income'])
         self.assertEqual(r['quarterly'][-1]['metrics']['debt_ratio']['value'],1.5)
-        self.assertEqual(r['quarterly'][-1]['metrics']['icr']['value'],13)
-    def test_interest_alias_is_selected_by_compatible_filing_not_presence(self):
-        for frame in ('annual','quarterly'):
-            n=normal();v=n[frame][-1]['values']
-            v['operating']['accession']='current'
-            v['interest_expense'].update(tag='InterestExpense',accession='old',value=99)
-            v['interest_nonoperating']=dict(v['interest_expense'],tag='InterestExpenseNonoperating',accession='current',value=2)
-            before=copy.deepcopy(n);row=summarize(n,{})[frame][-1]
-            self.assertEqual(row['metrics']['icr']['value'],13)
-            self.assertEqual(row['values']['interest_expense']['selection_key'],'interest_nonoperating')
-            self.assertEqual(row['metrics']['icr']['inputs'][1]['accession'],'current')
-            self.assertEqual(n,before)
+        self.assertNotIn('icr',r['quarterly'][-1]['metrics'])
 
-    def test_interest_alias_cannot_bypass_validation_or_financial_scope(self):
-        for field,bad in [('accession','other'),('start','2025-02-01'),('unit','KRW'),('accounting_basis','separate')]:
-            n=normal();v=n['annual'][-1]['values'];v['operating']['accession']='current'
-            v['interest_nonoperating']=dict(v['interest_expense'],tag='InterestExpenseNonoperating',accession='current')
-            v['interest_expense']['accession']='old';v['interest_nonoperating'][field]=bad
-            self.assertIsNone(summarize(n,{})['annual'][-1]['metrics']['icr']['value'])
-        n=normal();n['industry_model']='bank';v=n['annual'][-1]['values']
-        v['interest_nonoperating']=v.pop('interest_expense')
-        self.assertIsNone(summarize(n,{})['annual'][-1]['metrics']['icr']['value'])
 
-    def test_compatible_primary_wins_and_alias_change_keeps_definition(self):
-        n=normal()
-        for row in n['annual']:
-            row['values']['interest_expense']['tag']='InterestExpense'
-        v=n['annual'][-1]['values'];v['interest_nonoperating']=dict(v['interest_expense'],tag='InterestExpenseNonoperating',value=4)
-        self.assertEqual(summarize(n,{})['annual'][-1]['metrics']['icr']['value'],13)
-        v['operating']['accession']='new';v['interest_expense']['accession']='old';v['interest_nonoperating']['accession']='new'
-        row=summarize(n,{})['annual'][-1]
-        self.assertIsNotNone(row['metrics']['icr']['change']['value'])
 
     def test_added_toss_ratios(self):
         n=normal();v=n['quarterly'][-1]['values']
@@ -96,17 +67,16 @@ class FocusTests(unittest.TestCase):
             if equity is None or equity<=0:self.assertIsNone(row['metrics']['debt_ratio']['value'])
     def test_icr_does_not_substitute_finance_cost_or_cash_interest(self):
         n=normal();v=n['quarterly'][-1]['values'];v.pop('interest_expense');v['finance_cost']=fact(9);v['cash_interest_paid']=fact(7)
-        self.assertIsNone(summarize(n,{})['quarterly'][-1]['metrics']['icr']['value'])
+        self.assertNotIn('icr',summarize(n,{})['quarterly'][-1]['metrics'])
     def test_period_currency_and_scope_mismatch(self):
         for field,value in [('start','2025-01-01'),('unit','KRW'),('accounting_basis','separate'),('period_coverage','unknown')]:
             n=normal();n['quarterly'][-1]['values']['interest_expense'][field]=value
-            self.assertIsNone(summarize(n,{})['quarterly'][-1]['metrics']['icr']['value'])
+            self.assertNotIn('icr',summarize(n,{})['quarterly'][-1]['metrics'])
     def test_units_and_reversed_debt_color(self):
         n=normal();n['annual'][-1]['values']['liabilities']['value']=50
         row=summarize(n,{})['annual'][-1]
         self.assertEqual(row['metrics']['debt_ratio']['trend'],'improved')
         self.assertEqual(row['metrics']['debt_ratio']['change']['unit'],'percentage_point')
-        self.assertEqual(row['metrics']['icr']['change']['unit'],'multiple')
     def test_missing_neutral_and_growth_acceleration(self):
         n=normal();n['annual'][-1]['values']['sales']['value']=200
         r=summarize(n,{})['annual'][-1]
@@ -126,16 +96,13 @@ class FocusTests(unittest.TestCase):
         self.assertIsNone(summarize(n,{})['quarterly'][-1]['metrics']['debt_ratio']['value'])
     def test_direct_ratio_requires_definition_unit_and_period(self):
         v=normal()['annual'][-1]['values']
-        v['icr']=fact(42,unit='multiple',start=v['operating']['start'],end=v['operating']['end'],source_type='company_reported',definition='영업이익 ÷ 이자비용',definition_verified=True)
-        self.assertEqual(ratio(v,'icr')['value'],42)
-        v['icr']['definition_verified']=False
-        self.assertEqual(ratio(v,'icr')['value'],13)
+        v['operating_margin']=fact(.42,unit='ratio',start=v['operating']['start'],end=v['operating']['end'],source_type='company_reported',definition='영업이익 ÷ 매출액',definition_verified=True)
+        self.assertEqual(ratio(v,'operating_margin')['value'],.42)
+        v['operating_margin']['definition_verified']=False
+        self.assertAlmostEqual(ratio(v,'operating_margin')['value'],26/106)
     def test_revision_and_eps_basis_comparability(self):
         n=normal();n['annual'][-1]['values']['basic_eps']['revision_basis']='new'
         self.assertIsNone(summarize(n,{})['annual'][-1]['growth']['basic_eps']['value'])
-    def test_missing_derived_interest_tags(self):
-        v=normal()['annual'][-1]['values'];v['interest_expense'].update(value=None,inputs=[{'tag':None},{'tag':'InterestExpense'}])
-        self.assertIsNone(ratio(v,'icr')['value'])
 
     def test_display_value_colors_in_both_period_modes(self):
         for frame in ('annual','quarterly'):
@@ -145,12 +112,12 @@ class FocusTests(unittest.TestCase):
                     for key in ('net_income','dividend','current_assets','current_liabilities'):
                         row['values'][key]=dict(row['values']['sales'],value=100)
                 row=n[frame][-1]
-                for key in ('liabilities','interest_expense','net_income','dividend','current_assets','current_liabilities'):
+                for key in ('liabilities','net_income','dividend','current_assets','current_liabilities'):
                     row['values'][key]['value']+=delta
                 out=summarize(n,{})[frame][-1]
                 for group in ('value_movements','value_movements_qoq') if frame=='quarterly' else ('value_movements',):
-                    for key in ('liabilities','interest_expense','net_income','dividend','current_assets','current_liabilities'):
-                        sign=delta*(-1 if key in ('liabilities','interest_expense','current_liabilities') else 1)
+                    for key in ('liabilities','net_income','dividend','current_assets','current_liabilities'):
+                        sign=delta*(-1 if key in ('liabilities','current_liabilities') else 1)
                         expected='improved' if sign>0 else 'worsened' if sign<0 else 'neutral'
                         self.assertEqual(out[group][key]['trend'],expected,(frame,group,key,delta))
                         self.assertEqual(out[group][key]['change']['trend'],expected)

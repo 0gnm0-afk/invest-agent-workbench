@@ -32,6 +32,19 @@ def _number(value):
     return result if math.isfinite(result) else None
 
 
+def only_common_stock(source,year):
+    reports=[r for r in source.get('reports',[]) if r.get('year')==year and r.get('quarter')==4 and r.get('shares',{}).get('status')=='000']
+    for report in reports:
+        rows=report['shares'].get('list',[])
+        if any(str(r.get('corp_code'))!=str(source['identity']['corp_code']) for r in rows):continue
+        common=[r for r in rows if _label(r.get('se')) in COMMON_STOCK]
+        totals=[r for r in rows if _label(r.get('se'))=='합계']
+        if len(common)!=1 or len(totals)!=1:continue
+        a,b=[_number(r.get('istc_totqy')) for r in [common[0],totals[0]]]
+        if a is not None and a>0 and a==b:return report.get('shares_source_id') or report['prefix']+'-shares.json'
+    return None
+
+
 def annual_supplement_candidates(source, *, as_of=None):
     """Return all valid candidates, including old filings and conflicting rows.
 
@@ -64,7 +77,7 @@ def annual_supplement_candidates(source, *, as_of=None):
             stock = _label(row.get('stock_knd'))
             if label in EPS_LABELS and stock in COMMON_STOCK | {'', '-'}:
                 key = 'reported_eps'
-            elif label in DPS_LABELS and stock in COMMON_STOCK:
+            elif label in DPS_LABELS and stock in COMMON_STOCK | {'','-'}:
                 key = 'dividend'
             else:
                 continue
@@ -80,14 +93,25 @@ def annual_supplement_candidates(source, *, as_of=None):
                 continue
             for offset, column in enumerate(('thstrm', 'frmtrm', 'lwfr')):
                 value = _number(row.get(column))
-                if value is None:
-                    continue
                 fy = year - offset
+                stock_source=only_common_stock(source,fy) if key=='dividend' else None
+                confirmed_zero=False
+                if key=='dividend':
+                    if stock not in COMMON_STOCK and not stock_source:continue
+                    dividend_rows=[x for x in rows if _label(x.get('se')) in DPS_LABELS]
+                    numeric={_number(x.get(column)) for x in dividend_rows}-{None}
+                    cash_totals=[x for x in rows if _label(x.get('se'))=='현금배당금총액(백만원)']
+                    # Exact reported dashes in BOTH applicable rows, with a
+                    # separately verified sole common class, denote no dividend.
+                    if value is None and str(row.get(column)).strip()=='-' and stock_source and not numeric and cash_totals and all(str(x.get(column)).strip()=='-' for x in cash_totals):
+                        value=0;confirmed_zero=True
+                    if stock not in COMMON_STOCK and value is not None and numeric and numeric!={value}:continue
+                if value is None:continue
                 comparison_note = ('배당에 관한 사항의 연간 공시값. 서로 다른 제출본은 회계정책 변경·'
                                    '과거 비교수치 재작성·주식수 조정 기준이 다를 수 있습니다.')
                 item = dict(key=key, fy=fy, value=value, unit='KRW/share',
                             start=f'{fy}-01-01', end=f'{fy}-12-31', filed=filed,
-                            sources=[source_id], receipt=receipt, account=row.get('se'),
+                            sources=[source_id]+([stock_source] if stock_source else []), receipt=receipt, account=row.get('se'),
                             tag='alotMatter.' + column, reported_value=row[column],
                             report_year=year, report_column=column, source_endpoint='alotMatter',
                             stock_class=row.get('stock_knd'), period_type='annual',
@@ -100,6 +124,7 @@ def annual_supplement_candidates(source, *, as_of=None):
                 else:
                     item.update(dividend_basis='annual_common_cash', scope='common_stock',
                                 dividend_basis_note='해당 사업연도 보통주 주당 현금배당금 · 최근 12개월 배당과 구분')
+                if key=='dividend':item.update(confirmed_zero=confirmed_zero,stock_class_evidence=stock_source)
                 output.append(item)
     return output
 
