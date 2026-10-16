@@ -126,7 +126,7 @@ def us_stock(out,record):
            'bars':len(g),'missing_or_stale_cap_bars':int((~np.isfinite(caps)).sum()),'first':str(g.date.min().date()),'last':str(g.date.max().date())}
 
 
-def prepare_kr(out):
+def prepare_kr(out, *, audit_out=None):
  sys.path.insert(0,str(out/'dependencies'))
  raw=out/'raw/kr-marcap';frames=[];audit=[]
  for path in sorted(raw.glob('*.parquet')):
@@ -158,7 +158,7 @@ def prepare_kr(out):
   g.loc[invalid,['open','high','low','close']]=np.nan
   source.append((code,g,{'market':'KR','symbol':code,'bars':len(g),'factor_changes':int((abs(factor-1)>1e-8).sum()),
                        'invalid_factors':int(invalid.sum()),'last':str(g.date.max().date())}))
- write(out/'kr_sources.json',{'commit':(raw/'commit.txt').read_text(),'files':audit,'symbols':len(chosen),'calendar_sessions':len(calendar),
+ write((audit_out or out)/'kr_sources.json',{'commit':(raw/'commit.txt').read_text(),'files':audit,'symbols':len(chosen),'calendar_sessions':len(calendar),
                              'rank_last':str(calendar.max().date()),'cap_unit':'KRW; verified Marcap == Close*Stocks'})
  return source,calendar
 
