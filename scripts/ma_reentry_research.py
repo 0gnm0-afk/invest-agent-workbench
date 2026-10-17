@@ -1,6 +1,7 @@
 """Frozen six-strategy research. Offline sources, next-open ledger, no operations."""
 from __future__ import annotations
 import argparse, csv, gzip, json, sys, math
+import shutil
 from pathlib import Path
 from datetime import datetime, timezone
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,8 +32,21 @@ def signal_arrays(close):
                 sellB=B & ~np.r_[False, B[:-1]] & warm, C=C, G=G, E=C | G)
 
 
+def trading_segments(g, calendar):
+    original, qa = segment_indices(g, calendar)
+    segments = []
+    positions = calendar.get_indexer(g.date)
+    for ix in original:
+        if segments and positions[ix[0]] == positions[segments[-1][-1]] + 1:
+            segments[-1] = np.concatenate([segments[-1], ix])
+        else: segments.append(ix)
+    qa['calendar_only_breaks_merged'] = len(original) - len(segments)
+    qa['segments'] = len(segments)
+    return segments, qa
+
+
 def build_arrays(g, calendar, market):
-    segments, qa = segment_indices(g, calendar)
+    segments, qa = trading_segments(g, calendar)
     ix = np.concatenate(segments) if segments else np.array([], dtype=int)
     x = g.iloc[ix].reset_index(drop=True)
     z = {k: x[k].to_numpy(float) for k in ('open', 'high', 'low', 'close', 'cap', 'rank')}
@@ -87,6 +101,7 @@ def prepare(out, source=SOURCE):
             g = g[g.date <= '2026-10-15'].reset_index(drop=True)
             z, qa, ix = build_arrays(g, calendar, market)
             if not len(ix): continue
+            if not np.any(z['eligible'] & (z['date'] >= '2016-01-01')): continue
             if market == 'US':
                 ch = read(source / 'raw/us' / symbol / 'chart_daily.json')['chart']['result'][0]
                 adj = np.asarray(ch['indicators'].get('adjclose', [{}])[0].get('adjclose', [np.nan] * len(g)), float)[:len(g)]
@@ -116,6 +131,43 @@ def prepare(out, source=SOURCE):
     write(out / 'prepared.json', dict(protocol_sha256=sha(out / 'protocol.json'), stocks=manifest,
                                      input_hashes=input_hashes, failures=failed, markets=markets))
     print('prepared', len(manifest), 'stocks', len(input_hashes), 'hashes', failed, flush=True)
+
+
+def repair_calendar(out, draft):
+    """Reuse hashed unfinished derived inputs; normal prepare also uses corrected session logic."""
+    out.mkdir(parents=True, exist_ok=True); (out/'arrays').mkdir(exist_ok=True)
+    meta=read(draft/'prepared.json'); records=[]; vols=[]; merged=0
+    proxy=pd.read_csv(draft/'KR_market_proxy.csv'); n=len(proxy)
+    ret_sum=np.zeros(n);ret_n=np.zeros(n)
+    for rec in meta['stocks']:
+        p=draft/'arrays'/Path(rec['path']).name;assert sha(p)==rec['sha256']
+        r=dict(rec);r['path']=str(p.resolve())
+        if r['market']=='KR':
+            z=load_arrays(p);newseg=np.cumsum(np.r_[0,np.diff(z['pos'])!=1])
+            delta=len(np.unique(z['segment']))-len(np.unique(newseg));merged+=delta
+            z['segment']=newseg
+            for seg in np.unique(newseg):
+                ix=np.flatnonzero(newseg==seg)
+                for k,v in signal_arrays(z['close'][ix]).items():z[k][ix]=v
+                z['sigma'][ix]=features(pd.DataFrame({k:z[k][ix] for k in ('close','high','low')}))['sigma']
+            valid=np.r_[False,z['eligible'][:-1]&(np.diff(z['pos'])==1)]
+            rr=np.r_[0,z['close'][1:]/z['close'][:-1]-1]
+            np.add.at(ret_sum,z['pos'][valid],rr[valid]);np.add.at(ret_n,z['pos'][valid],1)
+            train=z['eligible']&(z['date']>='2016-01-01')&(z['date']<='2022-12-31')&np.isfinite(z['sigma'])
+            vols.append(z['sigma'][train])
+            dst=out/'arrays'/p.name;np.savez_compressed(dst,**z)
+            r.update(path=str(dst.resolve()),sha256=sha(dst),segments=len(np.unique(newseg)),calendar_only_breaks_merged=delta)
+        records.append(r)
+    rr=np.divide(ret_sum,ret_n,out=np.zeros(n),where=ret_n>0);index=np.cumprod(1+rr)
+    ma=pd.Series(index).rolling(200).mean().to_numpy();regime=np.where(~np.isfinite(ma),'unknown',np.where(index>=ma,'up','down'))
+    proxy=pd.DataFrame(dict(date=proxy.date,sample_return=rr,contributors=ret_n,index=index,regime=np.concatenate([['unknown'],regime[:-1]])))
+    proxy.to_csv(out/'KR_market_proxy.csv',index=False)
+    for name in ['US_market_proxy.csv','kr_sources.json']:shutil.copyfile(draft/name,out/name)
+    (out/'protocol.json').write_bytes((ROOT/'scripts/ma_reentry_protocol.json').read_bytes())
+    meta['protocol_sha256']=sha(out/'protocol.json');meta['stocks']=records
+    meta['markets']['KR'].update(vol_cuts=np.quantile(np.concatenate(vols),[.25,.5,.75]).tolist(),train_vol_rows=sum(len(v) for v in vols))
+    meta['calendar_correction']=dict(merged_boundaries=merged,draft=str(draft),reason='Calendar-adjacent sessions across long national holiday must not reset SMA; stopped unfinished simulation before summary/outcome inspection.')
+    write(out/'prepared.json',meta);print('reused inputs, merged holiday boundaries',merged,flush=True)
 
 
 def load_arrays(path):
@@ -331,5 +383,7 @@ def run(out):
 
 
 if __name__ == '__main__':
-    p = argparse.ArgumentParser(); p.add_argument('command', choices=['prepare', 'run']); p.add_argument('--out', type=Path, required=True)
-    a = p.parse_args(); globals()[a.command](a.out)
+    p = argparse.ArgumentParser(); p.add_argument('command', choices=['prepare', 'run','repair-calendar']); p.add_argument('--out', type=Path, required=True);p.add_argument('--draft',type=Path)
+    a = p.parse_args()
+    if a.command=='repair-calendar':repair_calendar(a.out,a.draft)
+    else:globals()[a.command](a.out)

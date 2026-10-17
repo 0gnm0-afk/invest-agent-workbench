@@ -2,7 +2,7 @@
 import argparse, math, re, sys
 from pathlib import Path
 from ma_reentry_research import (ROOT, SOURCE, BASE, STRATEGIES, read, write, sha, load_arrays,
-                                 prepare_kr, us_stock, segment_indices)
+                                 prepare_kr, us_stock, trading_segments)
 import numpy as np
 import pandas as pd
 
@@ -59,6 +59,7 @@ def scalar_replay(z, flags, strategy, market, start='2016-01-01'):
 
 def verify(out, report=None):
     meta=read(out/'prepared.json');assert meta['protocol_sha256']==sha(out/'protocol.json')==sha(ROOT/'scripts/ma_reentry_protocol.json')
+    array_paths={(r['market'],r['symbol']):r['path'] for r in meta['stocks']}
     hashes=0
     for x in meta['input_hashes']: assert sha(x['path'])==x['sha256'];hashes+=1
     for x in meta['stocks']: assert sha(x['path'])==x['sha256']
@@ -95,9 +96,9 @@ def verify(out, report=None):
     count=0;paths=0;prices=0;signals=0;replayed=[]
     for market in ('KR','US'):
         for symbol in chosen[market]:
-            z=load_arrays(out/'arrays'/f'{market}_{symbol}.npz')
+            z=load_arrays(array_paths[(market,symbol)])
             raw=kr_raw[symbol] if market=='KR' else us_stock(SOURCE,us_records[symbol])[0]
-            seg,_=segment_indices(raw,kr_calendar if market=='KR' else us_calendar);ix=np.concatenate(seg)
+            seg,_=trading_segments(raw,kr_calendar if market=='KR' else us_calendar);ix=np.concatenate(seg)
             for k in ('open','high','low','close','cap','rank'):
                 np.testing.assert_allclose(z[k],raw.iloc[ix][k].to_numpy(),equal_nan=True,atol=1e-10);prices+=len(ix)
             flags=independent_signals(z)

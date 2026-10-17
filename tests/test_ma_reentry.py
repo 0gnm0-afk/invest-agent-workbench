@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from ma_reentry_research import signal_arrays, cycles, wealth, cycle_rows, progression, fill_index, mdd
+from ma_reentry_research import signal_arrays, cycles, wealth, cycle_rows, progression, fill_index, mdd, trading_segments
 from ma_reentry_statistics import km, crossed_bootstrap
 from verify_ma_reentry import independent_signals, scalar_replay
 
@@ -119,5 +119,13 @@ class ResearchTests(unittest.TestCase):
         g=pd.DataFrame(dict(symbol=['a','a','b','b'],quarter=['q1','q2','q1','q2']))
         r=crossed_bootstrap(g,np.ones(4)*.03,reps=100)
         np.testing.assert_allclose(r['ci95'],[.03,.03])
+
+    def test_long_holiday_is_not_missing_session(self):
+        dates=pd.to_datetime(['2017-09-28','2017-09-29','2017-10-10','2017-10-11'])
+        g=pd.DataFrame(dict(date=dates,open=100.,close=100.,high=101.,low=99.,volume=100.))
+        seg,qa=trading_segments(g,pd.DatetimeIndex(dates))
+        self.assertEqual(len(seg),1);self.assertEqual(qa['calendar_only_breaks_merged'],1)
+        g.loc[2,'volume']=0
+        seg,_=trading_segments(g,pd.DatetimeIndex(dates));self.assertEqual(len(seg),2)
 
 if __name__=='__main__': unittest.main()

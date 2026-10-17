@@ -1,6 +1,7 @@
 {
   "id": "MA-REENTRY-20261017-v1",
   "frozen_before_strategy_results": true,
+  "calendar_amendment_before_outcome_review": "After input preparation and before summary/statistical outcome inspection, identified2017-09-29 to2017-10-10 as adjacent KR market sessions separated by a national holiday. Stopped unfinished simulation and preserved calendar-draft outputs. Indicators/fills now break only at invalid bars or missing market sessions, not merely >10 elapsed calendar days. No signals, costs, outcome thresholds or OOS splits changed. The original MA-DD source/code behavior remains reproducible. Existing shares and cash continue across true gaps.",
   "input": "Reuse pinned MA-DD raw KR marcap and US Yahoo/SEC sources only; 2016-01-01 through available completed 2026-10-15. No old DD events, peak definitions, optimized strategies or source recollection. Check original hashes. US missing delisted population is NOT repaired by historical cap screening; inference is conditional on observed coverage.",
   "signals": {"A": "SMA5<SMA20 and SMA10<SMA20", "B": "SMA5<SMA10<SMA20"},
   "entry": "False to true state transition only; previous and current SMA20 finite in same valid segment. Floating equality relative tolerance 1e-12. Eligibility at signal close: KR rank1..200; US point-in-time estimated cap>=USD2bn. No future rank.",
