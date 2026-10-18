@@ -85,7 +85,7 @@ def cohort_stats(out):
                         daily = np.diff(np.log(np.r_[1., v])) - np.diff(np.log(np.r_[1., b]))
                         quarters = pd.Series(daily).groupby(dates.dt.to_period('Q')).sum().to_numpy()
                         rng = np.random.default_rng(SEED)
-                        boot = rng.choice(quarters, (2000, len(quarters)), replace=True).mean(axis=1) * 4
+                        boot = rng.choice(quarters, (2000, len(quarters)), replace=True).sum(axis=1) / years
                         row['annual_log_difference'] = float(np.log(v[-1] / b[-1]) / years)
                         row['annual_log_ci95_low'], row['annual_log_ci95_high'] = np.quantile(boot, [.025, .975])
                         row['annual_log_family_low'], row['annual_log_family_high'] = np.quantile(boot, [.025 / 12, 1 - .025 / 12])

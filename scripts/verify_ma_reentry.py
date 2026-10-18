@@ -88,6 +88,8 @@ def verify(out, report=None):
     for market in ('KR','US'):
         names=sorted(g.loc[g.market==market,'symbol'].unique())
         chosen[market]=[names[i] for i in np.linspace(0,len(names)-1,12,dtype=int)]
+        tails=complete[complete.market==market].assign(magnitude=lambda x:x.net_share.abs()).nlargest(8,'magnitude').symbol.unique()
+        chosen[market]=sorted(set(chosen[market])|set(tails))
     rawpool,kr_calendar=prepare_kr(SOURCE,audit_out=out)
     kr_raw={s:x for s,x,_ in rawpool if s in chosen['KR']}
     us_records={x['symbol']:x for x in read(SOURCE/'us_acquisition.json') if x['status']=='ready'}
