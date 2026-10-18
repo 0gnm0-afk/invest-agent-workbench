@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 
-def crossed_bootstrap(g, value, reps=2000):
+def crossed_bootstrap(g, value, reps=2000, family=12):
     # Whole symbol and whole sale-quarter resampling; preserve within-cell observations.
     cells = g.assign(value=value).groupby(['symbol', 'quarter']).value.agg(['sum', 'count'])
     sy = sorted(g.symbol.unique()); qu = sorted(g.quarter.unique())
@@ -18,7 +18,7 @@ def crossed_bootstrap(g, value, reps=2000):
     num = np.sum((ws @ sums) * wt, axis=1); den = np.sum((ws @ counts) * wt, axis=1)
     draws = num[den > 0] / den[den > 0]
     return dict(ci95=np.quantile(draws, [.025, .975]).tolist(),
-                family_ci95=np.quantile(draws, [.025 / 12, 1 - .025 / 12]).tolist(),
+                family_ci95=np.quantile(draws, [.025 / family, 1 - .025 / family]).tolist(),
                 stock_clusters=len(sy), quarter_clusters=len(qu), reps=len(draws))
 
 
