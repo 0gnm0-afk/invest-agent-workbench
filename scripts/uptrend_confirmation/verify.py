@@ -31,6 +31,16 @@ def synthetic():
             tol=1e-12*max(abs(c[t]),abs(ma[t]));ptol=1e-12*max(abs(c[t-1]),abs(ma[t-1]))
             expected=int(c[t]-ma[t]>tol and c[t-1]-ma[t-1]<=ptol)
             assert f[t,ids.index(f'price{k}')]==expected
+    # Independent Wilder seed/recursion; no use of indicator helper.
+    rr=np.full(len(c),np.nan);g=np.maximum(np.diff(c),0);loss=np.maximum(-np.diff(c),0)
+    avgg=g[:14].mean();avgl=loss[:14].mean();rr[14]=100*avgg/(avgg+avgl)
+    for t in range(15,len(c)):
+        avgg=(13*avgg+g[t-1])/14;avgl=(13*avgl+loss[t-1])/14;rr[t]=100*avgg/(avgg+avgl)
+    assert np.allclose(rr[14:],cv[14:,5])
+    for q in [30,40,50,60]:
+        for t in range(65,len(c)):
+            tol=1e-12*max(abs(rr[t]),q);ptol=1e-12*max(abs(rr[t-1]),q)
+            assert f[t,ids.index(f'rsi{q}')]==int(rr[t]-q>tol and rr[t-1]-q<=ptol)
     zz=dict(z,segment=np.zeros(450,int));pp=forward(zz)
     for t in [65,123,280]:
         for h in [5,21,63]:

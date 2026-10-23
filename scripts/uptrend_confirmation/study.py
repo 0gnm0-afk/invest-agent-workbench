@@ -146,8 +146,11 @@ def process(rec,stage):
         for a,b in zip(lab['starts'],lab['ends']):
             if b-a>=10:before[max(0,a-5):a]=True
         before&=(cl==0)
-        for q in np.unique(qu[valid]):
-            sel=valid&(qu==q);a=add_stats(f,sel,lab,paths,rise,before)
+        # Only TEST needs monthly blocks. TRAIN/all use quarters for compact
+        # descriptive summaries; this changes no event/episode totals.
+        grouping=qu if pi==1 else qu//3
+        for q in np.unique(grouping[valid]):
+            sel=valid&(grouping==q);a=add_stats(f,sel,lab,paths,rise,before)
             for c in range(8):
                 sub=sel&(ctx==c);yes=f[sub]==1;no=f[sub]==0;early=(cl[sub]==1)[:,None]
                 ns=yes.sum(0);nn=no.sum(0);supported=nn>0
@@ -155,7 +158,7 @@ def process(rec,stage):
                 a[:,C['match_early']]+=(yes&early).sum(0)*supported
                 a[:,C['match_control_expected']]+=np.divide((no&early).sum(0)*ns,nn,out=np.zeros(p),where=supported)
             totals[pi]+=a
-            yearrows.append([pi,q//12]);yearstats.append(a)
+            yearrows.append([pi,q//12 if pi==1 else q//4]);yearstats.append(a)
             if pi==1:cells.append(a);cellquarters.append(q)
         # Episode capture counts one first confirmed event; recurring signals
         # still remain separate alerts in the precision denominator above.
