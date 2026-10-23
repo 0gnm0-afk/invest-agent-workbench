@@ -49,7 +49,15 @@ def synthetic():
     # A signal before onset remains a false onset confirmation, not removed.
     mask=np.array([1,1,1,0,0,0,0,1]+[0]*(len(fit)-8));idx=np.flatnonzero(mask)
     assert (lab['cls'][idx]==1).sum()/len(idx)==.5
-    result=dict(status='PASS',prefix_cells=checked,singles=len(ids),synthetic_groups=7,checked_utc=datetime.now(timezone.utc).isoformat())
+    from infer import weights,classify
+    assert (weights(np.random.default_rng(7),100,30,3).sum(1)==30).all()
+    a=np.zeros((1,20));a[0,:10]=[100,10,4,2,1,8,42,1,49,3];a[0,10:]=[10,4,0,1,1,1,1,0,.2,4]
+    pp,bb,mm=classify(a);assert np.allclose(pp,[[.4,.6,.7]]) and np.allclose(bb,[[.08,.5,.51]]) and np.isclose(mm[0,0],.4)
+    ns=2;yc=np.array([[0.,.1],[.2,.3],[.4,.5]]);mean=yc.mean(0);correction=ns/len(yc)*(yc-mean)
+    assert np.allclose(correction.sum(0),0)
+    eps=1e-6;ww=np.array([1+eps,1,1]);finite=(ns*(ww@yc/ww.sum())-ns*mean)/eps
+    assert np.allclose(finite,correction[0],atol=1e-6)
+    result=dict(status='PASS',prefix_cells=checked,singles=len(ids),synthetic_groups=9,checked_utc=datetime.now(timezone.utc).isoformat())
     OUT.mkdir(exist_ok=True);write(OUT/'verification-synthetic.json',result);print(result)
 
 def freeze():
