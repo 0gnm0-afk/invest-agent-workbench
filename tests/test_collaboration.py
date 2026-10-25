@@ -253,6 +253,28 @@ class CollaborationTests(unittest.TestCase):
             self.assertEqual(self.read()['active_plans'][0]['record']['id'],plan['id'])
         finally:server.shutdown();server.server_close();thread.join()
 
+    def test_offline_blocks_refresh_but_saved_chart_remains_available(self):
+        from dashboard import handler_for, ThreadingHTTPServer
+        handler = handler_for(self.data, {'US:SYNTH': self.stock}, ROOT/'dashboard', 'browser', self.store.path,
+                              analysis_dependencies={'histories': self.hist, 'financials': self.fin}, offline=True)
+        server = ThreadingHTTPServer(('127.0.0.1', 0), handler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True); worker.start()
+        origin = 'http://127.0.0.1:' + str(server.server_port)
+        conn = http.client.HTTPConnection('127.0.0.1', server.server_port)
+        headers = {'Origin': origin, 'X-Workbench-Token': 'browser', 'Content-Type': 'application/json'}
+        try:
+            conn.request('GET', '/health'); response = conn.getresponse()
+            self.assertTrue(json.loads(response.read())['offline'])
+            for path, body, expected in [
+                ('/api/chart-history/US%3ASYNTH', {'retry': True}, 200),
+                ('/api/financials/US%3ASYNTH', {'refresh': True}, 403),
+                ('/api/analysis-rpc', {'op': 'refresh', 'arguments': {'analysis_key': self.cid, 'mode': 'price_history'}}, 403),
+            ]:
+                conn.request('POST', path, json.dumps(body), headers); response = conn.getresponse()
+                self.assertEqual(response.status, expected, response.read())
+        finally:
+            conn.close(); server.shutdown(); server.server_close(); worker.join()
+
     def test_http_capability_cookie_origin_and_mcp_transport(self):
         from dashboard import handler_for,ThreadingHTTPServer
         import analysis_bridge
