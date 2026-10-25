@@ -124,6 +124,34 @@ class WorkspaceStore:
         return {'revision': revision + 1, 'updated_at': now}
 
 
+    def read_shared(self, db, identity):
+        """Read saved state in the caller's transaction; no migration or commit."""
+        row = db.execute(
+            'SELECT revision,payload,updated_at FROM shared_chart_workspaces WHERE identity=?',
+            (identity,)).fetchone()
+        if row is None:
+            return None
+        return dict(revision=row[0], payload=json.loads(row[1]), updated_at=row[2])
+
+    def shared_versions(self, db, identity):
+        """Read ordered saved versions, including a legacy head without history.
+
+        Reuse the caller's transaction so a monitor update observes one coherent
+        drawing history and can roll back all of its own writes together.
+        """
+        current = self.read_shared(db, identity)
+        if current is None:
+            return []
+        versions = []
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chart_workspace_versions'").fetchone():
+            versions = [dict(revision=row[0], payload=json.loads(row[1]), updated_at=row[2])
+                        for row in db.execute(
+                            'SELECT revision,payload,updated_at FROM chart_workspace_versions WHERE identity=? ORDER BY revision',
+                            (identity,))]
+        if not versions or versions[-1]['revision'] != current['revision']:
+            versions.append(current)
+        return versions
+
     def shared(self, identity, frame='1d', *, revision=None, state=None):
         """Atomically migrate legacy rows once; drawings and revision are symbol-wide."""
         if frame not in ('1d', '1w', '1mo'):

@@ -148,9 +148,9 @@ class ScenarioStore:
         self.workspace.shared(stock_key, timeframe)
         with closing(self.connect()) as db, db:
             db.execute('BEGIN IMMEDIATE')
-            row = db.execute('SELECT revision,payload FROM shared_chart_workspaces WHERE identity=?',(stock_key,)).fetchone()
-            if row[0] != workspace_revision: raise Conflict('workspace_changed_elsewhere')
-            drawing = next((d for d in json.loads(row[1])['drawings'] if d['id']==drawing_id), None)
+            workspace = self.workspace.read_shared(db, stock_key)
+            if workspace['revision'] != workspace_revision: raise Conflict('workspace_changed_elsewhere')
+            drawing = next((d for d in workspace['payload']['drawings'] if d['id']==drawing_id), None)
             if not drawing: raise ValueError('saved_drawing_required')
             if drawing['kind'] not in ('box','channel','riskreward','horizontal','trend'): raise ValueError('unsupported_monitor_drawing')
             allowed = {'box':('both','lower','upper'), 'channel':('both','lower','upper'), 'riskreward':('both','entry','stop','target'), 'horizontal':('both','line'), 'trend':('both','line')}
@@ -172,18 +172,16 @@ class ScenarioStore:
     def sync_workspace(self, stock_key):
         with closing(self.connect()) as db, db:
             db.execute('BEGIN IMMEDIATE')
-            row = db.execute('SELECT revision,payload FROM shared_chart_workspaces WHERE identity=?',(stock_key,)).fetchone()
-            if not row: return
-            versions = [(row[0],row[1])]
-            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chart_workspace_versions'").fetchone():
-                versions = db.execute('SELECT revision,payload FROM chart_workspace_versions WHERE identity=? ORDER BY revision',(stock_key,)).fetchall()
-                if not versions or versions[-1][0] != row[0]: versions.append((row[0],row[1]))
+            versions = self.workspace.shared_versions(db, stock_key)
+            if not versions: return
+            current_revision = versions[-1]['revision']
             for payload, in db.execute('SELECT payload FROM scenario_monitors').fetchall():
                 m = json.loads(payload)
-                if m['stock_key'] != stock_key or not m['active'] or m['workspace_revision'] == row[0]: continue
-                for version,body in versions:
+                if m['stock_key'] != stock_key or not m['active'] or m['workspace_revision'] == current_revision: continue
+                for workspace in versions:
+                    version = workspace['revision']
                     if version <= m['workspace_revision']: continue
-                    drawing = next((d for d in json.loads(body)['drawings'] if d['id']==m['drawing_id']),None)
+                    drawing = next((d for d in workspace['payload']['drawings'] if d['id']==m['drawing_id']),None)
                     reason = 'saved_drawing_changed' if drawing else 'saved_drawing_deleted'
                     if drawing and drawing == m['drawing'] and m.get('issue')!='saved_drawing_deleted_or_type_changed':
                         m['workspace_revision'] = version

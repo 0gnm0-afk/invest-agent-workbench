@@ -1,3 +1,4 @@
+from contextlib import closing
 import copy
 import http.client
 import json
@@ -163,6 +164,33 @@ class Workspaces(unittest.TestCase):
 class SharedWorkspaces(unittest.TestCase):
     setUp = Workspaces.setUp
     tearDown = Workspaces.tearDown
+    def test_shared_queries_keep_caller_transaction_and_legacy_head(self):
+        state=defaults();state['drawings']=[drawing()]
+        self.store.shared('US:QUERY',revision=0,state=state)
+        with closing(self.store.connect()) as db:
+            db.execute('BEGIN IMMEDIATE')
+            # An uncommitted head is visible through this exact connection.
+            db.execute('UPDATE shared_chart_workspaces SET revision=2 WHERE identity=?',('US:QUERY',))
+            current=self.store.read_shared(db,'US:QUERY')
+            versions=self.store.shared_versions(db,'US:QUERY')
+            self.assertEqual(current['revision'],2)
+            self.assertEqual([v['revision'] for v in versions],[0,1,2])
+            self.assertEqual(versions[-1],current)
+            self.assertTrue(db.in_transaction)
+            db.rollback()
+            self.assertEqual(self.store.read_shared(db,'US:QUERY')['revision'],1)
+            self.assertIsNone(self.store.read_shared(db,'US:MISSING'))
+            self.assertEqual(self.store.shared_versions(db,'US:MISSING'),[])
+
+    def test_shared_queries_do_not_recreate_missing_legacy_history(self):
+        self.store.shared('US:LEGACY',revision=0,state=defaults())
+        with closing(self.store.connect()) as db,db:
+            db.execute('DROP TABLE chart_workspace_versions')
+        with closing(self.store.connect()) as db:
+            current=self.store.read_shared(db,'US:LEGACY')
+            self.assertEqual(self.store.shared_versions(db,'US:LEGACY'),[current])
+            self.assertFalse(db.execute("SELECT 1 FROM sqlite_master WHERE name='chart_workspace_versions'").fetchone())
+
     def test_legacy_merge_collision_averages_and_original_preserved(self):
         original={}
         for frame in ('1d','1w','1mo'):

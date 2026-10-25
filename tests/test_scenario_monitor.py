@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from chart_workspace import WorkspaceStore, defaults, Conflict
 from scenario_monitor import ScenarioStore, levels, line_state
@@ -146,6 +147,22 @@ class Scenarios(unittest.TestCase):
   self.register(confirmed_response='전체 시나리오',confirmed_responses={'lower':'하단 재검토','upper':'상단 검토'})
   self.add(89);self.assertEqual(self.update()['events'][0]['confirmed_response'],'하단 재검토')
   self.add(120);self.assertEqual(self.update()['events'][0]['confirmed_response'],'상단 검토')
+ def test_drawing_sync_failure_rolls_back_monitor_and_history(self):
+  m=self.register();before=self.store.read();history=self.store.history(m['id'])
+  self.state['drawings'][0]['points'][0]['price']=92
+  self.ws.shared('US:S',revision=1,state=self.state)
+  original_save=self.store._save
+  def fail_after_save(db,monitor,reason=None):
+   original_save(db,monitor,reason)
+   raise RuntimeError('synthetic_sync_failure')
+  with patch.object(self.store,'_save',side_effect=fail_after_save):
+   with self.assertRaisesRegex(RuntimeError,'synthetic_sync_failure'):
+    self.store.sync_workspace('US:S')
+  self.assertEqual(self.store.read(),before)
+  self.assertEqual(self.store.history(m['id']),history)
+  self.store.sync_workspace('US:S')
+  self.assertEqual(self.store.read()['monitors'][0]['drawing']['points'][0]['price'],92)
+  self.assertEqual(len(self.store.history(m['id'])),len(history)+1)
  def test_saved_versions_recover_every_missed_hook(self):
   m=self.register();self.state['drawings'][0]['points'][0]['price']=92;self.ws.shared('US:S',revision=1,state=self.state)
   self.state['drawings'][0]['points'][0]['price']=95;self.ws.shared('US:S',revision=2,state=self.state)
