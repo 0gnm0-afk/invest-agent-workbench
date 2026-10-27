@@ -8,10 +8,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from financial_model import fact,calc,number,trailing,dart_normalize,sec_normalize,summarize
-from financial_store import FinancialStore,save,lock_file,unlock
-from financial_sources import SourceError
-from financial_supplements import inline_shares
+from financials.normalize import fact,calc,number,trailing,dart_normalize,sec_normalize,summarize
+from financials.store import FinancialStore,save,lock_file,unlock
+from financials.collect import SourceError
+from financials.providers.supplements import inline_shares
 
 
 def dart_report(year,q,sales,eps,cfo):
@@ -64,10 +64,10 @@ class StoredRequest(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory();self.store=FinancialStore(Path(self.temp.name))
     def tearDown(self):self.temp.cleanup()
     def test_get_does_not_collect(self):
-        with patch('financial_store.Collector') as collector:
+        with patch('financials.store.Collector') as collector:
             self.assertEqual(self.store.read('US:NVDA')['state'],'not_requested');collector.assert_not_called()
     def test_reuse_does_not_collect(self):
-        with patch.object(self.store,'read',return_value={'result':{'x':1},'state':'complete','result_stale':False}),patch('financial_store.Collector') as collector:
+        with patch.object(self.store,'read',return_value={'result':{'x':1},'state':'complete','result_stale':False}),patch('financials.store.Collector') as collector:
             self.assertEqual(self.store.start('US:NVDA',{},False)['result'],{'x':1});collector.assert_not_called()
     def test_cross_process_lock(self):
         f=lock_file(Path(self.temp.name)/'lock');self.assertIsNotNone(f);self.assertIsNone(lock_file(Path(self.temp.name)/'lock'));unlock(f)
@@ -77,7 +77,7 @@ class StoredRequest(unittest.TestCase):
     def test_failed_refresh_preserves_pointer(self):
         folder=self.store.folder('US:NVDA');save(folder/'latest.json',{'snapshot':'a'*32,'manifest_sha256':'old'})
         lease=lock_file(folder/'request.lock')
-        with patch('financial_store.Collector') as c:
+        with patch('financials.store.Collector') as c:
             c.return_value.usa.side_effect=SourceError('HTTP_403:companyfacts.json')
             self.store._work('US:NVDA',{'market':'US','symbol':'NVDA'},lease)
         self.assertEqual(json.loads((folder/'latest.json').read_bytes())['snapshot'],'a'*32)
@@ -103,7 +103,7 @@ class FinancialHttp(unittest.TestCase):
         c.request(method,path,body=body,headers=headers or {});r=c.getresponse();b=r.read();status=r.status;c.close();return status,b
     def headers(self):return {'Origin':'http://127.0.0.1:'+str(self.server.server_port),'Content-Type':'application/json','X-Workbench-Token':'test-token'}
     def test_saved_get_and_no_raw(self):
-        with patch('financial_store.Collector') as collector:
+        with patch('financials.store.Collector') as collector:
             self.assertEqual(self.request('GET')[0],200);collector.assert_not_called()
         self.assertEqual(self.request('GET','/secrets/financial.json')[0],404)
     def test_request_requires_origin_and_token(self):
@@ -111,7 +111,7 @@ class FinancialHttp(unittest.TestCase):
         h=self.headers();h['Origin']='https://evil.example';self.assertEqual(self.request('POST',headers=h,body='{"refresh":true}')[0],403)
     def test_unknown_or_invalid_body_cannot_collect(self):
         h=self.headers()
-        with patch('financial_store.Collector') as collector:
+        with patch('financials.store.Collector') as collector:
             self.assertEqual(self.request('POST','/api/financials/US%3AUNKNOWN',h,'{"refresh":true}')[0],404)
             self.assertEqual(self.request('POST',headers=h,body='{"refresh":"yes"}')[0],400)
             collector.assert_not_called()

@@ -1,8 +1,8 @@
 import copy,unittest
-from financial_sec_ifrs import reporting_currency,statement_tables
-from financial_sec_filing import inline_facts
-from financial_model import sec_normalize
-from financial_focus import summarize
+from financials.providers.sec_ifrs import reporting_currency,statement_tables
+from financials.providers.sec_filing import inline_facts
+from financials.normalize import sec_normalize
+from financials.calculate import summarize
 
 
 class IFRS(unittest.TestCase):
@@ -76,7 +76,7 @@ class IFRS(unittest.TestCase):
 
 
  def test_ifrs_eps_stays_with_selected_income_cohort(self):
-  from financial_cohort import select_bundles
+  from financials.cohort import select_bundles
   def cell(value,filing,unit='TWD'):
    return dict(value=value,accession=filing,filed='2026-04-01' if filing=='new' else '2026-02-01',start='2025-01-01',end='2025-12-31',unit=unit,accounting_basis='IFRS')
   values={k:cell(v,'old') for k,v in [('sales',100),('operating',40),('income',30),('net_income',31)]}

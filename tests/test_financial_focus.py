@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'scripts'))
-from financial_focus import summarize, ratio, movement
-from financial_model import fact, dart_normalize, sec_normalize
+from financials.calculate import summarize, ratio, movement
+from financials.normalize import fact, dart_normalize, sec_normalize
 
 
 def normal(provider='SEC', basic=True, diluted=True):

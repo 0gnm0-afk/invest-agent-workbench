@@ -1,6 +1,6 @@
 """Focused official performance and solvency contract, shared by UI and MCP."""
 from copy import deepcopy
-from financial_model import VERSION as NORMALIZATION_VERSION, fact, calc, growth, comparable_period, days
+from financials.normalize import VERSION as NORMALIZATION_VERSION, fact, calc, growth, comparable_period, days, compatible
 
 VERSION = 'financial-focus-8'
 LABELS = {'sales':'매출액', 'operating':'영업이익', 'income':'지배주주 순이익',
@@ -27,41 +27,6 @@ def total_equity(values, currency):
     if len(signatures)!=1 or not a.get('end') or not a.get('filed'):
         result.update(value=None,reason='같은 기말·공시의 자산총계와 부채총계 미확보')
     return result
-
-
-def compatible(a, b, *, same_period=False):
-    if not a or not b or a.get('value') is None or b.get('value') is None:
-        return '필수 공시 원값 미확보'
-    if a.get('unit') != b.get('unit'):
-        return '통화·단위 불일치'
-    for field in (('accounting_basis',) if same_period else ('accounting_basis','revision_basis')):
-        if a.get(field) != b.get(field):
-            return '회계 범위 또는 정정 공시 비교 기준 불일치'
-    if any(c.get('period_coverage') == 'unknown' or c.get('accounting_basis_verified') is False for c in (a,b)):
-        return '실제 기간 또는 회계 기준 미확인'
-    if same_period and (a.get('start'),a.get('end')) != (b.get('start'),b.get('end')):
-        return '서로 다른 기간의 원값은 비율로 결합하지 않음'
-    if same_period and any(a.get(k) and b.get(k) and a[k]!=b[k] for k in ('receipt','accession')):
-        lineages=[set([c.get('receipt'),c.get('accession'),*c.get('equivalent_filings',[])])-{None} for c in (a,b)]
-        if not lineages[0]&lineages[1]:return '동일 기간 원값의 공시 버전 불일치'
-    if same_period and a.get('period_disclosures') and b.get('period_disclosures'):
-        left,right=a['period_disclosures'],b['period_disclosures']
-        if len(left)!=len(right) or any((x.get('start'),x.get('end'))!=(y.get('start'),y.get('end')) or
-                not set(x.get('filings',[]))&set(y.get('filings',[])) for x,y in zip(left,right)):
-            return '분기 차감에 사용한 누적 원값의 공시 묶음 불일치'
-    if a.get('comparison_key') != b.get('comparison_key') and not same_period:
-        return '비교 정의 불일치'
-    if not same_period:
-        check=growth(a,b)
-        if check.get('display_text') == '비교불가':
-            # A zero base prevents a rate, but a verified absolute change remains valid.
-            if a['value'] and b['value'] != 0:
-                return check.get('reason')
-            for field in ('eps_basis','comparison_key','dividend_basis'):
-                if a.get(field)!=b.get(field):return '비교 기준 불일치'
-            if a.get('start') and b.get('start') and abs(days(a['start'],a['end'])-days(b['start'],b['end']))>25:
-                return '비교기간 길이 불일치'
-    return None
 
 
 def movement(cell, previous, *, reverse=False, ratio=False):
@@ -114,7 +79,7 @@ def summarize(normal, stock):
     if not any(row['values'].get(k,{}).get('value') is not None for frame in ('annual','quarterly')
                for row in result.get(frame,[]) for k in ('sales','operating','income','net_income')):
         raise ValueError('OFFICIAL_PERIODS_UNAVAILABLE')
-    from financial_cohort import select_bundles
+    from financials.cohort import select_bundles
     for frame in ('annual','quarterly'):
         for row in result.get(frame,[]):select_bundles(row['values'])
     keys=['sales','operating','income']
@@ -155,7 +120,7 @@ def summarize(normal, stock):
                 v['shares'].update(id='shares',label='기말 유통주식수',kind='shares')
             row['metrics']={key:ratio(v,key) for key in DEFINITIONS}
             if normal['provider']=='SEC':
-                from financial_returns import attach_returns
+                from financials.returns import attach_returns
                 attach_returns(v,row['metrics'],normal['currency'])
             if normal.get('industry_model')=='bank':
                 for group,ids in ((v,('operating',)),(row['metrics'],('operating_margin','current_ratio'))):

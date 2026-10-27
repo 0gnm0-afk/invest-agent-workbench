@@ -8,11 +8,11 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from financial_sources import Collector, SourceError, settings
-from financial_model import dart_normalize, sec_normalize
-from financial_focus import VERSION, summarize
+from financials.collect import Collector, SourceError, settings
+from financials.normalize import dart_normalize, sec_normalize
+from financials.calculate import VERSION, summarize
 
-ROOT = Path(__file__).resolve().parents[1]
+from workbench_paths import ROOT
 
 def packed(v):
     return json.dumps(v,ensure_ascii=False,sort_keys=True,allow_nan=False).encode('utf-8')
@@ -54,6 +54,23 @@ def unlock(f):
         import fcntl
         fcntl.flock(f,fcntl.LOCK_UN)
     f.close()
+
+def selected_stock(market,symbol,histories):
+    candidates=[market+':'+symbol]
+    if market=='KR' and '.' not in symbol:candidates += ['KR:'+symbol+'.KS','KR:'+symbol+'.KQ']
+    keys=[k for k in candidates if k in histories.saved.stocks]
+    if len(keys)!=1:raise ValueError('저장 시세에서 종목을 유일하게 찾지 못했습니다: '+market+':'+symbol)
+    key=keys[0];stock=histories.saved.stocks[key]
+    stock={**stock,**histories.view(stock,'1d')}
+    # Explicit company/issue mapping verified from Samsung's official listing page.
+    if key=='KR:005930.KS':
+        preferred=histories.saved.stocks.get('KR:005935.KS')
+        if preferred:
+            p=histories.view(preferred,'1d');bars=p.get('bars',[])
+            stock['preferred_price']=dict(symbol='005935.KS',currency='KRW',bar=bars[-1] if bars else None,
+                mapping_source='https://www.samsung.com/global/ir/stock-information/listing-Info/')
+    return key,stock
+
 
 class FinancialStore:
     def __init__(self, root=None):
@@ -121,7 +138,7 @@ class FinancialStore:
                     inherited=json.loads((seed/'result.json').read_bytes())
                 sources=json.loads((seed/'sources.json').read_bytes()) if (seed/'sources.json').exists() else inherited['sources']
                 if supplement and source.get('provider')=='DART':
-                    from financial_dart_supplement import collect_annual_supplements
+                    from financials.providers.dart_supplement import collect_annual_supplements
                     collector=Collector(base/'raw',progress)
                     source=collect_annual_supplements(collector,source)
                     sources=[*sources,*collector.sources]
@@ -133,7 +150,7 @@ class FinancialStore:
             sources = list({s['id']:s for s in sources}.values())
             source['symbol']=stock['symbol']
             progress('공시 기간 정규화 · Python 재무 계산')
-            from financial_business import unsupported,coverage
+            from financials.business import unsupported,coverage
             if source.get('eligibility',{}).get('status')=='unsupported':
                 normal=unsupported(source);result=dict(normal,calculation_version=VERSION)
             else:
@@ -150,10 +167,26 @@ class FinancialStore:
             save(base/'source.json',source);save(base/'normalized.json',normal);save(base/'saved-price.json',stock)
             save(base/'result.json',result)
             files={str(p.relative_to(base)).replace('\\','/'):hashlib.sha256(p.read_bytes()).hexdigest() for p in base.rglob('*') if p.is_file()}
-            code_files=['financial_focus.py','financial_sources.py','financial_model.py','financial_revenue.py','financial_dart_supplement.py','financial_store.py','financial_supplements.py','financial_summary.py']
-            code_files+=['financial_business.py','financial_dart_notes.py','financial_sec_filing.py','financial_cohort.py','financial_returns.py','financial_sec_tables.py','financial_sec_distributions.py','financial_sec_ifrs.py']
+            code_paths = {
+                'financial_sources.py': 'financials/collect.py',
+                'financial_model.py': 'financials/normalize.py',
+                'financial_focus.py': 'financials/calculate.py',
+                'financial_store.py': 'financials/store.py',
+                'financial_business.py': 'financials/business.py',
+                'financial_cohort.py': 'financials/cohort.py',
+                'financial_revenue.py': 'financials/revenue.py',
+                'financial_returns.py': 'financials/returns.py',
+                'financial_dart_notes.py': 'financials/providers/dart_notes.py',
+                'financial_dart_supplement.py': 'financials/providers/dart_supplement.py',
+                'financial_sec_distributions.py': 'financials/providers/sec_distributions.py',
+                'financial_sec_filing.py': 'financials/providers/sec_filing.py',
+                'financial_sec_ifrs.py': 'financials/providers/sec_ifrs.py',
+                'financial_sec_tables.py': 'financials/providers/sec_tables.py',
+                'financial_supplements.py': 'financials/providers/supplements.py',
+                'financial_summary.py': 'financial_summary.py',
+            }
             save(base/'manifest.json',dict(schema=1,key=key,version=VERSION,files=files,
-                                          code={name:hashlib.sha256((ROOT/'scripts'/name).read_bytes()).hexdigest() for name in code_files}))
+                                          code={label:hashlib.sha256((ROOT/'scripts'/path).read_bytes()).hexdigest() for label,path in code_paths.items()}))
             save(folder/'latest.json',dict(snapshot=sid,manifest_sha256=hashlib.sha256((base/'manifest.json').read_bytes()).hexdigest()),atomic=True)
             state='unsupported' if result.get('eligibility',{}).get('status')=='unsupported' else 'complete'
             save(folder/'attempt.json',dict(state=state,quality=result.get('data_quality',{}).get('state'),started_at=started,finished_at=now(),snapshot=sid,stage='저장 완료'),atomic=True)

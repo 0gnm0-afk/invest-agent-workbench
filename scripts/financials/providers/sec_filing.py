@@ -152,7 +152,7 @@ def balance_equation(raw,facts):
 
 
 def quarter_eps(raw,end,filing,source_id):
-    from financial_sec_tables import quarter_facts
+    from financials.providers.sec_tables import quarter_facts
     return [dict(x,eps_basis='basic' if x['tag']=='EarningsPerShareBasic' else 'diluted')
             for x in quarter_facts(raw,end,filing,source_id) if x['tag'].startswith('EarningsPerShare') and x['end']==end]
 
@@ -177,8 +177,8 @@ def enrich_quarter_eps(collector,source):
                 for idx,link in enumerate(sorted(links)):
                     if not link.startswith(base) or not re.search(r'\.html?$',link,re.I):continue
                     name=acc+f'-eps-{idx}.html';body=collector.fetch(link,name,sec=True,binary=True)
-                    from financial_sec_tables import quarter_facts
-                    from financial_returns import reporting_currency
+                    from financials.providers.sec_tables import quarter_facts
+                    from financials.returns import reporting_currency
                     found=quarter_facts(body,end,filing,name,reporting_currency(source),source['identity']['name'])
                     source.setdefault('inline_facts',[]).extend(found)
                     eps=[x for x in found if x['tag'].startswith('EarningsPerShare')]
@@ -193,9 +193,9 @@ def enrich_quarter_eps(collector,source):
 
 
 def enrichment_gaps(source):
-    from financial_model import sec_normalize
-    from financial_focus import summarize
-    from financial_business import coverage
+    from financials.normalize import sec_normalize
+    from financials.calculate import summarize
+    from financials.business import coverage
     try:
         normal=sec_normalize(source);r=coverage(summarize(normal,{}))
         gaps=r['data_quality']['missing']+r['data_quality']['supplemental_missing']
@@ -214,7 +214,7 @@ def enrich_sec(collector,source):
     source.setdefault('enrichment_errors',[]);source.setdefault('format_issues',[])
     taxonomy=source['facts']['facts'].get('us-gaap',{})
     if not taxonomy and 'ifrs-full' in source['facts']['facts']:
-        from financial_sec_ifrs import enrich_ifrs
+        from financials.providers.sec_ifrs import enrich_ifrs
         return enrich_ifrs(collector,source)
     if not taxonomy:
         source['format_issues'].append(dict(code='unsupported_taxonomy',source_id='companyfacts.json',
@@ -243,12 +243,12 @@ def enrich_sec(collector,source):
         name=acc+'-statement.html'
         try:
             raw=collector.fetch(f'https://www.sec.gov/Archives/edgar/data/{cik}/{acc.replace("-","")}/{document}',name,sec=True,binary=True)
-            from financial_returns import reporting_currency
+            from financials.returns import reporting_currency
             parsed=inline_facts(raw,cik,filing,name,reporting_currency(source))
-            from financial_sec_tables import distribution_zeros
+            from financials.providers.sec_tables import distribution_zeros
             source.setdefault('explicit_distribution_zeros',[]).extend(distribution_zeros(raw,filing,name))
             extra=untagged_annual(raw,identity,filing,name,reporting_currency(source))
-            from financial_sec_distributions import preferred_paid,financing_zeros
+            from financials.providers.sec_distributions import preferred_paid,financing_zeros
             extra.extend(preferred_paid(raw,parsed))
             source['explicit_distribution_zeros'].extend(financing_zeros(raw,parsed,filing,name,reporting_currency(source)))
             out.extend(parsed);out.extend(balance_equation(raw,parsed));out.extend(extra)
@@ -262,7 +262,7 @@ def enrich_sec(collector,source):
         except Exception as exc:
             # Transport failures are never presented as a new filing format.
             source['enrichment_errors'].append(dict(source_id=name,error=type(exc).__name__))
-    from financial_sec_distributions import common_paid_from_total
+    from financials.providers.sec_distributions import common_paid_from_total
     distribution_facts=[dict(x,tag=tag,unit=unit,source_id='companyfacts.json') for tag,concept in taxonomy.items()
         if tag in ('PaymentsOfOrdinaryDividends','PaymentsOfDividendsPreferredStockAndPreferenceStock')
         for unit,rows in concept.get('units',{}).items() for x in rows]

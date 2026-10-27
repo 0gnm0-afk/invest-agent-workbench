@@ -6,9 +6,9 @@ from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from financial_dart_supplement import (
+from financials.providers.dart_supplement import (
     annual_supplement_candidates, annual_supplement_years, collect_annual_supplements)
-from financial_sources import SourceError
+from financials.collect import SourceError
 
 TODAY = date(2026, 10, 4)
 

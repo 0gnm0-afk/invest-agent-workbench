@@ -1,12 +1,12 @@
 """Actual common shareholder distributions, never authorizations or estimates."""
 import re
 from copy import deepcopy
-from financial_model import fact,calc
+from financials.normalize import fact,calc
 
 
 def reporting_currency(source):
     if 'us-gaap' not in source['facts']['facts'] and 'ifrs-full' in source['facts']['facts']:
-        from financial_sec_ifrs import reporting_currency as ifrs_currency
+        from financials.providers.sec_ifrs import reporting_currency as ifrs_currency
         return source.get('reporting_currency') or ifrs_currency(source)
     units=set()
     for tag in ('Revenues','RevenueFromContractWithCustomerExcludingAssessedTax','SalesRevenueNet','RevenuesNetOfInterestExpense'):
@@ -18,7 +18,7 @@ def reporting_currency(source):
 
 
 def attach_returns(values,metrics,currency):
-    from financial_focus import compatible
+    from financials.normalize import compatible
     def match(a,b):
         reason=compatible(a,b,same_period=True)
         if reason=='동일 기간 원값의 공시 버전 불일치' and any(c.get('confirmed_zero') for c in (a,b)):

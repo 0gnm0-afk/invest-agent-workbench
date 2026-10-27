@@ -4,12 +4,12 @@ import unittest
 import zipfile
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from financial_business import eligibility,coverage
-from financial_dart_notes import note_interest,statement_periods
-from financial_sec_filing import untagged_annual,quarter_eps,inline_facts,balance_equation
-from financial_revenue import select_sec_revenue
-from financial_focus import compatible,ratio,summarize
-from financial_model import latest_dart_fact,fact
+from financials.business import eligibility,coverage
+from financials.providers.dart_notes import note_interest,statement_periods
+from financials.providers.sec_filing import untagged_annual,quarter_eps,inline_facts,balance_equation
+from financials.revenue import select_sec_revenue
+from financials.calculate import compatible,ratio,summarize
+from financials.normalize import latest_dart_fact,fact
 
 
 class BusinessCoverage(unittest.TestCase):

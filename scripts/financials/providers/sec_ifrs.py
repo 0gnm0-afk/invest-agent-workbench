@@ -48,7 +48,7 @@ def reporting_currency(source):
 
 
 def revenue_rows(tax,cutoff,as_of,currency):
-    from financial_revenue import select_sec_revenue
+    from financials.revenue import select_sec_revenue
     aliases={'Revenues':'Revenue','RevenueFromContractWithCustomerExcludingAssessedTax':'RevenueFromContractsWithCustomers'}
     out=select_sec_revenue({k:tax[v] for k,v in aliases.items() if v in tax},cutoff=cutoff,as_of=as_of,unit=currency)
     return [dict(row,tag=aliases[row['tag']]) for row in out]
@@ -176,7 +176,7 @@ def statement_tables(raw,identity,filing,source_id,currency):
 
 
 def enrich_ifrs(collector,source):
-    from financial_sec_filing import inline_facts
+    from financials.providers.sec_filing import inline_facts
     source=deepcopy(source);currency=reporting_currency(source);source['reporting_currency']=currency
     identity=source['identity'];cik=str(int(identity['cik']));records=source.get('filing_records',[])
     cutoff=str(date.today().year-6)+'-01-01'

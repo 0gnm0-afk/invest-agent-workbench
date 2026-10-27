@@ -345,7 +345,7 @@ class AnalysisService:
             if mode == 'financial_sources':
                 source = {**stock, **self.histories.view(stock, '1d')}
                 if case['stock_key'] == 'KR:005930.KS':
-                    from financial_summary import selected_stock
+                    from financials.store import selected_stock
                     _, source = selected_stock('KR', '005930.KS', self.histories)
                 return self.financials.start(case['stock_key'], source, refresh=True)
             if mode == 'price_history':

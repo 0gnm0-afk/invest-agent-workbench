@@ -179,7 +179,7 @@ def collect_annual_supplements(collector, source, *, years=None, as_of=None):
     skipped. An optional-source failure leaves core statements usable and has a
     sanitized diagnostic; no all-company scan or background fetch is performed.
     """
-    from financial_sources import SourceError
+    from financials.collect import SourceError
     today = as_of or date.today()
     if source.get('provider') != 'DART':
         return source

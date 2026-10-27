@@ -2,7 +2,7 @@
 import re
 from datetime import date,timedelta
 from bs4 import BeautifulSoup
-from financial_sec_tables import text
+from financials.providers.sec_tables import text
 
 
 def financing_zeros(raw,parsed,filing,source_id,currency):

@@ -129,24 +129,3 @@ def nvidia_supplement(collector,source):
                 source['guidance'].append(dict(period=f'FY {match[2]} {match[1]} quarter',standard='US GAAP · 회사 매출 가이던스',published=pub,url=link,
                                                text=f'매출 {float(match[3]):,.2f} B USD ±{match[4]}%. 회사 발표이며 실적·애널리스트 추정과 별도.',source_id=name))
     return source
-
-def samsung_preferred_price(collector,stock):
-    if stock.get('market')!='KR' or stock.get('symbol','').split('.')[0]!='005930':return
-    from market.providers.toss_client import TossMarketClient
-    from market.providers.toss_candles import daily_series
-    import hashlib,json
-    from datetime import datetime,timezone
-    end=stock.get('bars', [{}])[-1].get('date') if stock.get('bars') else None
-    if not end:return
-    url='https://www.samsung.com/global/ir/stock-information/listing-Info/'
-    raw=collector.fetch(url,'samsung-listing.html',binary=True)
-    text=BeautifulSoup(raw,'html.parser').get_text(' ',strip=True)
-    if '005930' not in text or '005935' not in text:raise ValueError('preferred_listing_identity_unverified')
-    logs=[]
-    client=TossMarketClient(observer=logs.append)
-    price=daily_series(client,'005935.KS','KR',[end],max_pages=1)
-    if len(price['bars'])!=1 or price['bars'][0]['date']!=end:raise ValueError('preferred_same_session_missing')
-    name='preferred-price.json';body=json.dumps(dict(price=price,requests=logs),ensure_ascii=False).encode('utf-8')
-    (collector.folder/name).write_bytes(body)
-    collector.sources.append(dict(id=name,url='https://openapi.tossinvest.com/api/v1/candles',fetched_at=datetime.now(timezone.utc).isoformat(),sha256=hashlib.sha256(body).hexdigest(),bytes=len(body)))
-    stock['preferred_price']=dict(symbol='005935.KS',currency='KRW',bar=price['bars'][0],mapping_source=url)

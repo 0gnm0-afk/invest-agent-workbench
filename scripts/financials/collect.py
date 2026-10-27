@@ -14,7 +14,7 @@ import zipfile
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+from workbench_paths import ROOT
 _GATE = threading.Lock()
 
 class SourceError(Exception):
@@ -92,7 +92,7 @@ class Collector:
         company = self.dart('company', 'company.json', corp_code=corp)
         if company.get('stock_code') != symbol or company.get('corp_code') != corp:
             raise SourceError('DART_IDENTITY_MISMATCH')
-        from financial_business import eligibility
+        from financials.business import eligibility
         scope=eligibility(company,'DART')
         if scope['status']=='unsupported':return dict(provider='DART',identity=company,eligibility=scope)
         if company.get('acc_mt') != '12':
@@ -120,7 +120,7 @@ class Collector:
                     fs_div='OFS',corp_code=corp,bsns_year=str(report['year']),reprt_code=code)
                 # The share report is independent of CFS/OFS; retain its real source id.
                 report['shares_source_id']=report['prefix'].removesuffix('-OFS')+'-shares.json'
-        from financial_dart_supplement import collect_annual_supplements
+        from financials.providers.dart_supplement import collect_annual_supplements
         return collect_annual_supplements(self, dict(provider='DART',identity=company,
             reports=reports,statement_scope=statement_scope,eligibility=scope))
 
@@ -133,15 +133,15 @@ class Collector:
         submission = self.fetch(f'https://data.sec.gov/submissions/CIK{cik}.json','submissions.json',sec=True)
         if symbol not in submission.get('tickers',[]) or str(submission['cik']).zfill(10) != cik:
             raise SourceError('SEC_IDENTITY_MISMATCH')
-        from financial_business import eligibility
+        from financials.business import eligibility
         scope=eligibility(submission,'SEC')
         if scope['status']=='unsupported':return dict(provider='SEC',identity=submission,eligibility=scope)
         facts = self.fetch(f'https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json','companyfacts.json',sec=True)
         if str(facts['cik']).zfill(10) != cik:
             raise SourceError('SEC_FACTS_IDENTITY_MISMATCH')
-        from financial_supplements import sec_supplement, nvidia_supplement
+        from financials.providers.supplements import sec_supplement, nvidia_supplement
         scope=eligibility(submission,'SEC',facts)
         source = dict(provider='SEC', identity=submission, facts=facts,eligibility=scope)
         if scope['status']=='unsupported':return source
-        from financial_sec_filing import enrich_sec
+        from financials.providers.sec_filing import enrich_sec
         return enrich_sec(self,nvidia_supplement(self, sec_supplement(self, source)))

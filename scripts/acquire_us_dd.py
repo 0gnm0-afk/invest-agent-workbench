@@ -6,7 +6,7 @@ from datetime import datetime,timezone
 WB=Path(__file__).resolve().parents[1] if Path(__file__).parent.name=='scripts' else Path('<user-home>/Desktop/workspace/invest-agent-workbench')
 sys.path.insert(0,str(WB/'scripts'))
 from market.history.saved import SavedHistory
-from financial_sources import settings
+from financials.collect import settings
 
 gates={'sec':threading.Lock(),'yahoo':threading.Lock()}; next_times={'sec':0.,'yahoo':0.}
 def fetch(url,path,ua,rate=None):

@@ -13,7 +13,7 @@ class Element{
 }
 function harness(result,packet={state:'complete',result}){
  const root=new Element(),charts=[],ctx={innerWidth:1200,innerHeight:800,console,setTimeout,clearTimeout,document:{querySelector:()=>root},fetch:async()=>({ok:true,json:async()=>packet}),WorkbenchCharts:{remove(){},create(el,series,options){if(!series.some(s=>s.data.some(p=>p.value!=null)))return;const chart={series,panes(){return [{setHeight(){}},{setHeight(){}}];},applyOptions(o){this.options=o;},timeScale(){return {applyOptions(){}};},subscribeClick(fn){this.click=fn;},subscribeCrosshairMove(fn){this.move=fn;}};charts.push(chart);options.onReady(chart);return chart;}}};
- ctx.window=ctx;vm.createContext(ctx);for(const name of ['format.js','financial-focus.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'../dashboard',name),'utf8'),ctx);
+ ctx.window=ctx;vm.createContext(ctx);for(const name of ['format.js','financials/financial-focus.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'../dashboard',name),'utf8'),ctx);
  return {root,charts,mount:()=>ctx.WorkbenchFinancials.mount({market:result.provider==='DART'?'KR':'US',symbol:'TEST',isCurrent:()=>true})};
 }
 function sample(provider='SEC',eps=['basic_eps','eps']){

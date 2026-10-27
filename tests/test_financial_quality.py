@@ -6,8 +6,8 @@ import sys
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-import financial_model as m
-from financial_revenue import select_sec_revenue
+import financials.normalize as m
+from financials.revenue import select_sec_revenue
 
 class FrozenDate(date):
     @classmethod

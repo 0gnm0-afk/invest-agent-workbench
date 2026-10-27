@@ -3,7 +3,7 @@ import sys
 import unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from financial_model import dart_normalize,dart_share_values,summarize,latest_dart_fact,fact
+from financials.normalize import dart_normalize,dart_share_values,summarize,latest_dart_fact,fact
 
 IDENTITY=dict(corp_code='001',stock_code='000001',corp_name='Example',acc_mt='12')
 TAGS={'eps':'ifrs-full_DilutedEarningsLossPerShare','basic':'ifrs-full_BasicEarningsLossPerShare',

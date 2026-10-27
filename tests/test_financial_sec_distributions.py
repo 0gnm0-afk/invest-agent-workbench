@@ -1,7 +1,7 @@
 import sys,unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from financial_sec_distributions import financing_zeros,preferred_paid,common_paid_from_total
+from financials.providers.sec_distributions import financing_zeros,preferred_paid,common_paid_from_total
 
 
 class Distributions(unittest.TestCase):

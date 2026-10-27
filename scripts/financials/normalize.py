@@ -2,8 +2,8 @@
 import math
 import re
 from datetime import date, timedelta
-from financial_revenue import select_dart_revenue, select_sec_revenue, revenue_metadata
-from financial_dart_supplement import annual_supplement_candidates, COMMON_STOCK
+from financials.revenue import select_dart_revenue, select_sec_revenue, revenue_metadata
+from financials.providers.dart_supplement import annual_supplement_candidates, COMMON_STOCK
 
 VERSION = 'financial-quality-common-7'
 
@@ -135,7 +135,7 @@ def dart_comparative_period(row, report, column, offset, quarter):
                 current[1]==(0 if report['quarter']==4 else report['quarter']))
 
 def latest_dart_fact(target, key, cell):
-    from financial_cohort import retain
+    from financials.cohort import retain
     old=target.get(key,{})
     candidates=[old,*old.get('disclosure_candidates',[]),cell]
     _latest_dart_fact(target,key,cell)
@@ -371,13 +371,13 @@ def per_share(key):
 
 def sec_normalize(source):
     data=source['facts']['facts']; identity=source['identity']
-    from financial_returns import reporting_currency
+    from financials.returns import reporting_currency
     currency=reporting_currency(source)
     if source['facts'].get('cik') is not None and str(source['facts']['cik']).lstrip('0')!=str(identity['cik']).lstrip('0'):
         raise ValueError('SEC_FACTS_IDENTITY_MISMATCH')
     namespace='us-gaap' if 'us-gaap' in data else 'ifrs-full' if 'ifrs-full' in data else None
     if namespace is None:raise ValueError('SEC_IFRS_TAXONOMY_REQUIRES_MAPPING')
-    from financial_sec_ifrs import IFRS_MAP,revenue_rows
+    from financials.providers.sec_ifrs import IFRS_MAP,revenue_rows
     mapping=SEC_MAP if namespace=='us-gaap' else IFRS_MAP
     if source.get('inline_facts'):
         # A normalized source remains immutable; supplement rows are explicit
@@ -556,7 +556,7 @@ def sec_normalize(source):
                 matching=[candidate for candidate in options if start and candidate[0].get('start')==start]
                 if matching:
                     values[key]=max(matching,key=rank)[0]
-                    from financial_cohort import retain
+                    from financials.cohort import retain
                     history=[to_fact(r,key) for r in histories.get(key,[]) if r.get('start')==start and r['end']==end
                              and r.get('tag')==values[key].get('tag')]
                     values[key]=retain(values[key],history)
@@ -601,7 +601,7 @@ def sec_normalize(source):
             for key in INSTANT:
                 rs=[r for r in selected.get(key,[]) if r['end']==end]
                 values[key]=to_fact(max(rs,key=lambda r:r['filed']),key) if rs else fact(unit='shares' if 'shares' in key else currency,end=end)
-                from financial_cohort import retain
+                from financials.cohort import retain
                 values[key]=retain(values[key],[to_fact(r,key) for r in histories.get(key,[]) if r['end']==end and not r.get('start')
                     and r.get('tag')==values[key].get('tag')])
             for outstanding,issued,treasury in (('shares','issued_shares','treasury_shares'),('preferred_shares','preferred_issued_shares','preferred_treasury_shares')):
@@ -633,7 +633,7 @@ def sec_normalize(source):
                 values['dividend']=dict(selected_dividend)
             else:
                 values.setdefault('dividend',fact(unit=currency+'/share',dividend_basis=basis,reason='선택한 동일 계열의 주당배당 공시 미확보'))
-    from financial_returns import apply_explicit_zeros
+    from financials.returns import apply_explicit_zeros
     apply_explicit_zeros(source,annual,quarter,currency)
     def rows(target,kind):
         return [dict(date=e,label=('연간 ' if kind=='annual' else '분기 ')+e,fy=int(e[:4]),fq=None,values=v) for e,v in sorted(target.items())]
@@ -724,6 +724,41 @@ def growth(current, previous, *, years=None):
         result['eps_basis']=a['eps_basis']
     result.update(revenue_metadata(a))
     return result
+
+def compatible(a, b, *, same_period=False):
+    if not a or not b or a.get('value') is None or b.get('value') is None:
+        return '필수 공시 원값 미확보'
+    if a.get('unit') != b.get('unit'):
+        return '통화·단위 불일치'
+    for field in (('accounting_basis',) if same_period else ('accounting_basis','revision_basis')):
+        if a.get(field) != b.get(field):
+            return '회계 범위 또는 정정 공시 비교 기준 불일치'
+    if any(c.get('period_coverage') == 'unknown' or c.get('accounting_basis_verified') is False for c in (a,b)):
+        return '실제 기간 또는 회계 기준 미확인'
+    if same_period and (a.get('start'),a.get('end')) != (b.get('start'),b.get('end')):
+        return '서로 다른 기간의 원값은 비율로 결합하지 않음'
+    if same_period and any(a.get(k) and b.get(k) and a[k]!=b[k] for k in ('receipt','accession')):
+        lineages=[set([c.get('receipt'),c.get('accession'),*c.get('equivalent_filings',[])])-{None} for c in (a,b)]
+        if not lineages[0]&lineages[1]:return '동일 기간 원값의 공시 버전 불일치'
+    if same_period and a.get('period_disclosures') and b.get('period_disclosures'):
+        left,right=a['period_disclosures'],b['period_disclosures']
+        if len(left)!=len(right) or any((x.get('start'),x.get('end'))!=(y.get('start'),y.get('end')) or
+                not set(x.get('filings',[]))&set(y.get('filings',[])) for x,y in zip(left,right)):
+            return '분기 차감에 사용한 누적 원값의 공시 묶음 불일치'
+    if a.get('comparison_key') != b.get('comparison_key') and not same_period:
+        return '비교 정의 불일치'
+    if not same_period:
+        check=growth(a,b)
+        if check.get('display_text') == '비교불가':
+            # A zero base prevents a rate, but a verified absolute change remains valid.
+            if a['value'] and b['value'] != 0:
+                return check.get('reason')
+            for field in ('eps_basis','comparison_key','dividend_basis'):
+                if a.get(field)!=b.get(field):return '비교 기준 불일치'
+            if a.get('start') and b.get('start') and abs(days(a['start'],a['end'])-days(b['start'],b['end']))>25:
+                return '비교기간 길이 불일치'
+    return None
+
 
 def actual_periods(normal):
     """Choose one EPS basis per time series and attach same-period prior-year facts."""

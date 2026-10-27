@@ -4,11 +4,11 @@ import unittest
 import zipfile
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from financial_cohort import retain,select_bundles
-from financial_model import fact,latest_dart_fact
-from financial_focus import compatible,ratio
-from financial_dart_notes import note_interest
-from financial_sec_filing import inline_facts,untagged_annual,enrich_sec
+from financials.cohort import retain,select_bundles
+from financials.normalize import fact,latest_dart_fact
+from financials.calculate import compatible,ratio
+from financials.providers.dart_notes import note_interest
+from financials.providers.sec_filing import inline_facts,untagged_annual,enrich_sec
 
 
 class Stage12(unittest.TestCase):
@@ -44,7 +44,7 @@ class Stage12(unittest.TestCase):
         self.assertIsNotNone(compatible(a,b))
 
     def test_derived_quarters_keep_operand_filing_cohorts(self):
-        from financial_model import period_difference
+        from financials.normalize import period_difference
         total=self.cell(100);total.update(start='2025-01-01',end='2025-12-31')
         previous=self.cell(60,'Q');previous.update(start='2025-01-01',end='2025-09-30')
         a=period_difference('difference',total,previous,'USD')
@@ -106,7 +106,7 @@ class Stage12(unittest.TestCase):
             for end,acc in [('2021-09-30','old'),('2025-09-30','needed')]]
         source=dict(identity=dict(cik=123,name='Test Inc.'),facts={'facts':{'us-gaap':{'Assets':{}}}},filing_records=filings)
         gaps=[dict(frame='annual',date='2021-12-31',field='dividend'),dict(frame='quarterly',date='2025-09-30',field='interest_expense')]
-        with patch('financial_sec_filing.enrichment_gaps',return_value=(gaps,False)),patch('financial_sec_filing.enrich_quarter_eps',side_effect=lambda c,s:s):
+        with patch('financials.providers.sec_filing.enrichment_gaps',return_value=(gaps,False)),patch('financials.providers.sec_filing.enrich_quarter_eps',side_effect=lambda c,s:s):
             enrich_sec(c,source)
         self.assertEqual(c.names,['needed-statement.html'])
 

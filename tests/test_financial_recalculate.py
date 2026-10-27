@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from financial_store import FinancialStore, packed, save
+from financials.store import FinancialStore, packed, save
 
 
 class RecalculateSaved(unittest.TestCase):
@@ -34,8 +34,8 @@ class RecalculateSaved(unittest.TestCase):
         self.temp.cleanup()
 
     def test_cached_version_is_explicit_without_changing_snapshot(self):
-        from financial_store import VERSION
-        with patch('financial_store.settings',return_value={}):
+        from financials.store import VERSION
+        with patch('financials.store.settings',return_value={}):
             result=self.store.read(self.key)
         self.assertTrue(result['result_stale'])
         self.assertEqual(result['calculation_version'],VERSION)
@@ -46,13 +46,13 @@ class RecalculateSaved(unittest.TestCase):
         stock={'market':'US','symbol':'ABC'}
         for stale in (False,True):
             packet={'result':{'snapshot_id':self.sid},'result_stale':stale}
-            with patch.object(self.store,'read',return_value=packet), patch('financial_store.lock_file',return_value=None) as lock:
+            with patch.object(self.store,'read',return_value=packet), patch('financials.store.lock_file',return_value=None) as lock:
                 result=self.store.start(self.key,stock)
             self.assertEqual(result.get('state'), 'running' if stale else None)
             self.assertEqual(lock.call_count,int(stale))
 
     def test_recalculate_retains_raw_date_and_original_snapshot(self):
-        with patch('financial_store.Collector') as collector, patch('financial_store.sec_normalize', return_value={'ok': True}), patch('financial_store.summarize', return_value={'summary': [], 'calculation_version': 'new'}):
+        with patch('financials.store.Collector') as collector, patch('financials.store.sec_normalize', return_value={'ok': True}), patch('financials.store.summarize', return_value={'summary': [], 'calculation_version': 'new'}):
             result = self.store.recalculate_saved(self.key)
             collector.assert_not_called()
         self.assertEqual(result['state'], 'complete')
@@ -77,14 +77,14 @@ class RecalculateSaved(unittest.TestCase):
         self.assertEqual(json.loads((self.folder / 'latest.json').read_bytes())['snapshot'], self.sid)
 
     def test_failed_calculation_keeps_old_success(self):
-        with patch('financial_store.sec_normalize', side_effect=ValueError('bad period')):
+        with patch('financials.store.sec_normalize', side_effect=ValueError('bad period')):
             result = self.store.recalculate_saved(self.key)
         self.assertEqual(result['state'], 'failed')
         self.assertEqual(result['result']['snapshot_id'], self.sid)
         self.assertEqual(json.loads((self.folder / 'latest.json').read_bytes())['snapshot'], self.sid)
 
     def test_lock_prevents_concurrent_recalculation(self):
-        from financial_store import lock_file, unlock
+        from financials.store import lock_file, unlock
         lease = lock_file(self.folder / 'request.lock')
         try:
             with self.assertRaisesRegex(ValueError, 'busy'):
@@ -112,7 +112,7 @@ class RecalculateSaved(unittest.TestCase):
             save(collector.folder / 'annual-extra.json', {'status':'000','list':[]})
             collector.sources.append(dict(id='annual-extra.json', url='https://opendart.fss.or.kr/api/alotMatter.json'))
             return dict(source, annual_supplements=[{'year':2025,'raw':{'status':'000','list':[]}}])
-        with patch('financial_dart_supplement.collect_annual_supplements', side_effect=supplement) as supplement_call, patch('financial_store.dart_normalize', return_value={'ok':True}), patch('financial_store.summarize', return_value={'summary':[], 'calculation_version':'new'}):
+        with patch('financials.providers.dart_supplement.collect_annual_supplements', side_effect=supplement) as supplement_call, patch('financials.store.dart_normalize', return_value={'ok':True}), patch('financials.store.summarize', return_value={'summary':[], 'calculation_version':'new'}):
             response = self.store.recalculate_saved(self.key, supplement=True)
         supplement_call.assert_called_once()
         self.assertEqual(response['state'], 'complete')
@@ -128,14 +128,14 @@ class RecalculateSaved(unittest.TestCase):
 
     def test_failed_supplement_keeps_previous_success(self):
         self._make_dart_fixture()
-        with patch('financial_dart_supplement.collect_annual_supplements', side_effect=ValueError('bad identity')):
+        with patch('financials.providers.dart_supplement.collect_annual_supplements', side_effect=ValueError('bad identity')):
             response = self.store.recalculate_saved(self.key, supplement=True)
         self.assertEqual(response['state'], 'failed')
         self.assertEqual(response['result']['snapshot_id'], self.sid)
         self.assertEqual(json.loads((self.folder / 'latest.json').read_bytes())['snapshot'], self.sid)
 
     def test_sec_supplement_stays_offline(self):
-        with patch('financial_store.Collector') as collector, patch('financial_store.sec_normalize', return_value={'ok':True}), patch('financial_store.summarize', return_value={'summary':[]}):
+        with patch('financials.store.Collector') as collector, patch('financials.store.sec_normalize', return_value={'ok':True}), patch('financials.store.summarize', return_value={'summary':[]}):
             response = self.store.recalculate_saved(self.key, supplement=True)
         collector.assert_not_called()
         self.assertEqual(response['state'], 'complete')

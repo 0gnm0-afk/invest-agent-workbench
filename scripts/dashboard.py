@@ -22,8 +22,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from dashboard_data import ROOT, build, StockSearch
 from market.history.chart import HistoryStore, timeframe
-from financial_store import FinancialStore
-from financial_summary import selected_stock
+from financials.store import FinancialStore
+from financials.store import selected_stock
 from drawings.store import WorkspaceStore, Conflict, moving_averages
 from analysis.service import AnalysisService
 from market.history.price_events import build as price_events
@@ -161,7 +161,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                     if excluded:
                         value = {**value,'state':'excluded','reason':excluded['reason'],'bars':[]}
                 return self.send(json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8'))
-            names = {'/report-reader.js':'analysis/report-reader.js','/report-reader.css':'analysis/report-reader.css','/chart-events.js':'chart-events.js', '/trailing.js':'alerts/trailing.js', '/market-exclusions.js':'market/market-exclusions.js', '/market-exclusions.css':'market/market-exclusions.css', '/risk-workbench.js': 'risk-workbench.js', '/risk-workbench.css': 'risk-workbench.css', '/collaboration.js': 'analysis/collaboration.js', '/analysis.js': 'analysis/analysis.js', '/': 'index.html', '/app.js': 'app.js', '/tooltips.js': 'tooltips.js', '/financial-focus.js': 'financial-focus.js', '/financial-focus.css': 'financial-focus.css', '/financials.css': 'financials.css', '/style.css': 'style.css',
+            names = {'/report-reader.js':'analysis/report-reader.js','/report-reader.css':'analysis/report-reader.css','/chart-events.js':'chart-events.js', '/trailing.js':'alerts/trailing.js', '/market-exclusions.js':'market/market-exclusions.js', '/market-exclusions.css':'market/market-exclusions.css', '/risk-workbench.js': 'risk-workbench.js', '/risk-workbench.css': 'risk-workbench.css', '/collaboration.js': 'analysis/collaboration.js', '/analysis.js': 'analysis/analysis.js', '/': 'index.html', '/app.js': 'app.js', '/tooltips.js': 'tooltips.js', '/financial-focus.js': 'financials/financial-focus.js', '/financial-focus.css': 'financials/financial-focus.css', '/financials.css': 'financials/financials.css', '/style.css': 'style.css',
                      '/trade-cycle.js':'cycles/trade-cycle.js', '/trade-cycle.css':'cycles/trade-cycle.css', '/scenario-preview.js':'scenarios/scenario-preview.js', '/scenario-monitor.js':'scenarios/scenario-monitor.js', '/scenario-monitor.css':'scenarios/scenario-monitor.css',
                      '/stock-chart.js': 'stock-chart.js', '/drawing-tools.js': 'drawings/drawing-tools.js', '/chart-workspace.js': 'drawings/chart-workspace.js', '/chart-tools.css': 'drawings/chart-tools.css', '/format.js': 'format.js', '/charts.js': 'charts.js', '/workbench.png': 'workbench.png',
                      '/vendor/lightweight-charts.js': 'vendor/lightweight-charts.js',
@@ -383,7 +383,7 @@ def main():
     ready = {'url': 'http://127.0.0.1:' + str(server.server_port), 'output': str(output), 'token': token}
     if args.ready_file:
         args.ready_file.write_text(json.dumps(ready), encoding='utf-8')
-    from financial_store import save as save_endpoint
+    from financials.store import save as save_endpoint
     save_endpoint(ROOT / 'runtime/dashboard/analysis-endpoint.json', {**ready, 'analysis_capabilities':capabilities}, atomic=True)
     print(json.dumps(ready), flush=True)
     if args.open_browser:

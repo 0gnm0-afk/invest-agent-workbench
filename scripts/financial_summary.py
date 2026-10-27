@@ -4,24 +4,7 @@ import json
 import time
 from pathlib import Path
 from market.history.chart import HistoryStore
-from financial_store import FinancialStore, ROOT
-
-
-def selected_stock(market,symbol,histories):
-    candidates=[market+':'+symbol]
-    if market=='KR' and '.' not in symbol:candidates += ['KR:'+symbol+'.KS','KR:'+symbol+'.KQ']
-    keys=[k for k in candidates if k in histories.saved.stocks]
-    if len(keys)!=1:raise ValueError('저장 시세에서 종목을 유일하게 찾지 못했습니다: '+market+':'+symbol)
-    key=keys[0];stock=histories.saved.stocks[key]
-    stock={**stock,**histories.view(stock,'1d')}
-    # Explicit company/issue mapping verified from Samsung's official listing page.
-    if key=='KR:005930.KS':
-        preferred=histories.saved.stocks.get('KR:005935.KS')
-        if preferred:
-            p=histories.view(preferred,'1d');bars=p.get('bars',[])
-            stock['preferred_price']=dict(symbol='005935.KS',currency='KRW',bar=bars[-1] if bars else None,
-                mapping_source='https://www.samsung.com/global/ir/stock-information/listing-Info/')
-    return key,stock
+from financials.store import FinancialStore, ROOT, selected_stock
 
 
 def main():

@@ -1,10 +1,10 @@
 import sys,unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from financial_model import fact
-from financial_returns import attach_returns,reporting_currency
-from financial_sec_tables import quarter_facts,distribution_zeros
-from financial_focus import summarize
+from financials.normalize import fact
+from financials.returns import attach_returns,reporting_currency
+from financials.providers.sec_tables import quarter_facts,distribution_zeros
+from financials.calculate import summarize
 from test_financial_focus import normal
 
 
@@ -67,7 +67,7 @@ class ReturnsTests(unittest.TestCase):
         with self.assertRaises(ValueError):reporting_currency(src({'JPY':[{'form':'20-F'}],'USD':[{'form':'20-F'}]}))
 
     def test_dividend_currency_typo_requires_exact_original_label(self):
-        from financial_sec_filing import inline_facts
+        from financials.providers.sec_filing import inline_facts
         raw='''<xbrli:context id="c"><xbrli:entity><xbrli:identifier>1</xbrli:identifier></xbrli:entity><xbrli:period><xbrli:startdate>2024-07-01</xbrli:startdate><xbrli:enddate>2025-06-30</xbrli:enddate></xbrli:period></xbrli:context><xbrli:unit id="u"><xbrli:divide><xbrli:unitnumerator><xbrli:measure>iso4217:USD</xbrli:measure></xbrli:unitnumerator><xbrli:unitdenominator><xbrli:measure>xbrli:shares</xbrli:measure></xbrli:unitdenominator></xbrli:divide></xbrli:unit><p>Cash dividends declared (¥ <ix:nonfraction name="us-gaap:CommonStockDividendsPerShareDeclared" contextref="c" unitref="u">3</ix:nonfraction> per share)</p>'''
         f=dict(filingDate='2025-10-30',accessionNumber='a',form='20-F')
         rows=inline_facts(raw.encode(),'1',f,'x','JPY')

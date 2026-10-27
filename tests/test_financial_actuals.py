@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from financial_model import fact, growth, actual_periods, actual_ttm, summarize, trailing, dart_normalize, sec_normalize
+from financials.normalize import fact, growth, actual_periods, actual_ttm, summarize, trailing, dart_normalize, sec_normalize
 
 
 def period(year, quarter=0, *, sales=100, operating=20, income=10, eps=1, basic_eps=1.1):
