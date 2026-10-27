@@ -1,8 +1,14 @@
 """Independent scalar SMA/cycle/capital replay plus complete ledger checks."""
+
+if not __package__:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from workbench_paths import ROOT
+
 import argparse, math, re, sys
 from pathlib import Path
-from ma_reentry_research import (ROOT, SOURCE, BASE, STRATEGIES, read, write, sha, load_arrays,
-                                 prepare_kr, us_stock, trading_segments)
+from research.reentry.ma_reentry_research import SOURCE, BASE, STRATEGIES, read, write, sha, load_arrays, prepare_kr, us_stock, trading_segments
 import numpy as np
 import pandas as pd
 
@@ -58,7 +64,7 @@ def scalar_replay(z, flags, strategy, market, start='2016-01-01'):
 
 
 def verify(out, report=None):
-    meta=read(out/'prepared.json');assert meta['protocol_sha256']==sha(out/'protocol.json')==sha(ROOT/'scripts/ma_reentry_protocol.json')
+    meta=read(out/'prepared.json');assert meta['protocol_sha256']==sha(out/'protocol.json')==sha(ROOT/'scripts/research/reentry/ma_reentry_protocol.json')
     array_paths={(r['market'],r['symbol']):r['path'] for r in meta['stocks']}
     hashes=0
     for x in meta['input_hashes']: assert sha(x['path'])==x['sha256'];hashes+=1
@@ -150,7 +156,7 @@ def verify(out, report=None):
         limitations='Scalar replay checks implementation, not missing delisted returns, exchange open liquidity, actual taxes or KR dividends.')
     write(out/'verification.json',receipt)
     files=[p for p in out.iterdir() if p.is_file() and p.name!='manifest.json']
-    files += [ROOT/'scripts'/x for x in ('ma_reentry_research.py','ma_reentry_statistics.py','ma_reentry_report.py','verify_ma_reentry.py','ma_reentry_protocol.json')]
+    files += [ROOT/'scripts/research/reentry'/x for x in ('ma_reentry_research.py','ma_reentry_statistics.py','ma_reentry_report.py','verify_ma_reentry.py','ma_reentry_protocol.json')]
     files += [ROOT/'tests/test_ma_reentry.py']
     if report: files.append(report)
     write(out/'manifest.json',dict(files=[dict(path=str(p),sha256=sha(p)) for p in files if p.exists()],raw_hash_manifest='prepared.json'))

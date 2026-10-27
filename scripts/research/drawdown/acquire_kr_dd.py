@@ -1,4 +1,10 @@
 """Pin public KRX-derived annual source files, not a KRX login workaround."""
+
+if not __package__:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 import argparse,hashlib,json,re,urllib.request
 from datetime import datetime,timezone
 from pathlib import Path

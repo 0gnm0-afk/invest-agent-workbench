@@ -1,4 +1,10 @@
 """Resolve specific vendor discrepancies against12 public Naver daily bars."""
+
+if not __package__:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 import argparse,ast,hashlib,json,sys,urllib.request
 from pathlib import Path
 def run(out):

@@ -60,5 +60,5 @@ evidence={'run':str(run),'prefix_replay':prefixes,'preserved':preserved,'html_pa
     'concentrated_sectors':sum(s['current'].get('concentrated',False) for s in states['sectors']),
     'current_examples':[{k:s[k] for k in ('market','group_name','current')} for s in states['sectors'] if s['current']['state']!='mixed'],
     'browser_validation':'not_run_local_file_protocol_blocked; static links and isolated filter unit test only'}
-(root/'docs/sector-state-evidence-2026-09-29.json').write_text(json.dumps(evidence,ensure_ascii=False,indent=2),encoding='utf-8')
+(root/'docs/history/sector-state-evidence-2026-09-29.json').write_text(json.dumps(evidence,ensure_ascii=False,indent=2),encoding='utf-8')
 print(json.dumps({k:v for k,v in evidence.items() if k!='current_examples'},ensure_ascii=False,indent=2))

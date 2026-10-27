@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from invest_agent.trading import momentum_entry as model
 from invest_agent.trading.market import usable_tail,check_bars
-from display_names import stock_label
+from display_format import stock_label
 from display_format import money, currency_for, price_text, display_analysis
 
 SOURCE={'title':'최고의 주식을 고르는 대가들의 노하우','publisher':'DB금융투자','date':'2023-08-21',

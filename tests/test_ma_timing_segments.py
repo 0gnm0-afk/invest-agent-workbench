@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from ma_timing_segments import flags,transactions,segments,ledger,PAIRS,BUYS,SELLS
+from research.timing.ma_timing_segments import flags,transactions,segments,ledger,PAIRS,BUYS,SELLS
 from test_ma_reentry import fixture
 
 

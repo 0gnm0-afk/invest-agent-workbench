@@ -1,12 +1,19 @@
 """Raw scalar replay and artifact invariants for descriptive drawdown statistics."""
+
+if not __package__:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from workbench_paths import ROOT
+
 import argparse,re,sys,math
 from pathlib import Path
 from urllib.parse import unquote
-from ma_dd_describe import read,write,sha,prepare_kr,us_stock,features,segment_indices,SIGNALS
+from research.drawdown.ma_dd_describe import read,write,sha,prepare_kr,us_stock,features,segment_indices,SIGNALS
 import numpy as np,pandas as pd
 
 def verify(root,out,report):
- result=read(out/'results.json');assert result['protocol_sha256']==sha(out/'protocol.json')==sha(root/'scripts/ma_dd_protocol.json')
+ result=read(out/'results.json');assert result['protocol_sha256']==sha(out/'protocol.json')==sha(root/'scripts/research/drawdown/ma_dd_protocol.json')
  receipt={'protocol_frozen':True};raw_count=0;cross_count=0;scalar_count=0;cap_count=0;volcells=0
  identity=read(out/'us_population.json')['source_identity'];pointer=Path(identity['history_pointer'])
  assert sha(pointer)==identity['pointer_sha256']
@@ -89,10 +96,10 @@ def verify(root,out,report):
  write(out/'verification.json',receipt)
  paths=[report]+[p for p in out.glob('*.json') if p.name!='manifest.json']
  paths += [p for p in out.iterdir() if p.is_file() and p.suffix in ('.csv','.png')]
- paths += [root/'scripts'/n for n in ('ma_dd_describe.py','ma_dd_report.py','verify_ma_dd.py','acquire_us_dd.py','acquire_kr_dd.py','corroborate_kr_dd.py')]
+ paths += [root/'scripts/research/drawdown'/n for n in ('ma_dd_describe.py','ma_dd_report.py','verify_ma_dd.py','acquire_us_dd.py','acquire_kr_dd.py','corroborate_kr_dd.py')]
  write(out/'manifest.json',{'protocol_sha256':sha(out/'protocol.json'),'files':[{'path':str(p),'sha256':sha(p)} for p in paths],
                          'raw_sources':'Raw price/share/annual-file hashes are in KR_audit.json,US_audit.json,kr_sources.json; originals retained.'})
  print(receipt,flush=True)
 
 if __name__=='__main__':
- p=argparse.ArgumentParser();p.add_argument('--root',type=Path,default=Path(__file__).resolve().parents[1]);p.add_argument('--out',type=Path,required=True);p.add_argument('--report',type=Path,required=True);a=p.parse_args();verify(a.root,a.out,a.report)
+ p=argparse.ArgumentParser();p.add_argument('--root',type=Path,default=ROOT);p.add_argument('--out',type=Path,required=True);p.add_argument('--report',type=Path,required=True);a=p.parse_args();verify(a.root,a.out,a.report)

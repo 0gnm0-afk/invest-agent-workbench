@@ -1,8 +1,15 @@
 """Nine locked MA timing pairs: exhaustive alternating segments and capital paths."""
 from __future__ import annotations
+
+if not __package__:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from workbench_paths import ROOT
+
 import argparse,csv,gzip,math
 from pathlib import Path
-from ma_reentry_research import ROOT,read,write,sha,load_arrays,less,fill_index,inception,BASE,STRESS,mdd
+from research.reentry.ma_reentry_research import read, write, sha, load_arrays, less, fill_index, inception, BASE, STRESS, mdd
 import numpy as np
 import pandas as pd
 
@@ -116,7 +123,7 @@ class Stream:
 def run(out,source=SOURCE):
     out.mkdir(parents=True,exist_ok=True)
     if (out/'paths.csv.gz').exists():raise FileExistsError('immutable run output exists')
-    (out/'protocol.json').write_bytes((ROOT/'scripts/ma_timing_protocol.json').read_bytes())
+    (out/'protocol.json').write_bytes((ROOT/'scripts/research/timing/ma_timing_protocol.json').read_bytes())
     meta=read(source/'prepared.json');proxies={m:pd.read_csv(source/f'{m}_market_proxy.csv') for m in ('KR','US')}
     streams={m:Stream(out/f'{m}_segments.csv.gz') for m in ('KR','US')};paths=Stream(out/'paths.csv.gz');trades=Stream(out/'trades.csv.gz')
     cohorts={};audits=[]

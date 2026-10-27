@@ -1,10 +1,16 @@
 """Independent saved-data checks; no network or operating imports."""
+
+if not __package__:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 import argparse,re
 from pathlib import Path
 from urllib.parse import unquote
 import numpy as np
 import pandas as pd
-from ma_warning_research import read,write,sha,load_market,matching_covariates,distribution
+from research.warning.ma_warning_research import read,write,sha,load_market,matching_covariates,distribution
 
 
 def verify(out,report):

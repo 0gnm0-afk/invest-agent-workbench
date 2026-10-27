@@ -1,7 +1,13 @@
 """Locked statistics, crossed clusters, right censoring and fixed-cohort comparisons."""
+
+if not __package__:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 import argparse
 from pathlib import Path
-from ma_reentry_research import read, write, sha, STRATEGIES, SEED, mdd
+from research.reentry.ma_reentry_research import read, write, sha, STRATEGIES, SEED, mdd
 import numpy as np
 import pandas as pd
 

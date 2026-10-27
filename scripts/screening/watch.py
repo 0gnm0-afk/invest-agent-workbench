@@ -6,7 +6,7 @@ import csv,html,json
 from pathlib import Path
 from invest_agent.trading import momentum_watch as watch, momentum_entry as engine, base_structure as base
 from invest_agent.trading.market import usable_tail
-from display_names import stock_label
+from display_format import stock_label
 from screening.momentum import ordered_structure
 from display_format import money, currency_for, display_analysis
 

@@ -1,4 +1,10 @@
 """Render the completed, frozen research as a strategy-first Korean report."""
+
+if not __package__:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 import argparse
 from pathlib import Path
 import json
@@ -8,7 +14,7 @@ import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from ma_exit4_research import read_json, sha, load, cycle_metrics, METRICS
+from research.exit4.ma_exit4_research import read_json, sha, load, cycle_metrics, METRICS
 
 
 def pct(x): return '해당 없음' if x is None else f'{100*x:+.2f}%'
@@ -275,11 +281,11 @@ G5 보류는 S3에서 무보류 대비 {pp(strategies[2]['hold_ablation']['same_
 ```powershell
 $researchPython = '<user-home>/Desktop/workspace/invest-agent-engine/.venv/Scripts/python.exe'
 # prepare는 새 결과 경로에만 실행. 원 최종 결과를 덮어쓰지 않는다.
-& $researchPython scripts/ma_exit4_research.py prepare --out runtime/ma-exit4-replay
-& $researchPython scripts/ma_exit4_research.py optimize --out runtime/ma-exit4-replay
-& $researchPython scripts/ma_exit4_research.py evaluate --out runtime/ma-exit4-replay
-& $researchPython scripts/ma_exit4_diagnostics.py --out runtime/ma-exit4-replay
-& $researchPython scripts/ma_exit4_report.py --out runtime/ma-exit4-replay --report docs/ma-exit4-replay.md
+& $researchPython scripts/research/exit4/ma_exit4_research.py prepare --out runtime/ma-exit4-replay
+& $researchPython scripts/research/exit4/ma_exit4_research.py optimize --out runtime/ma-exit4-replay
+& $researchPython scripts/research/exit4/ma_exit4_research.py evaluate --out runtime/ma-exit4-replay
+& $researchPython scripts/research/exit4/ma_exit4_diagnostics.py --out runtime/ma-exit4-replay
+& $researchPython scripts/research/exit4/ma_exit4_report.py --out runtime/ma-exit4-replay --report docs/research/ma-exit4-replay.md
 ```
 
 - [사전 고정 프로토콜](../runtime/ma-exit4-20261016-v1/protocol.json) · [원자료/실매수 감사](../runtime/ma-exit4-20261016-v1/data_audit.json) · [사이클 목록](../runtime/ma-exit4-20261016-v1/episodes.csv)

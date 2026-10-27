@@ -1,15 +1,21 @@
 """Frozen six-strategy research. Offline sources, next-open ledger, no operations."""
 from __future__ import annotations
+
+if not __package__:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from workbench_paths import ROOT
+
 import argparse, csv, gzip, json, sys, math
 import shutil
 from pathlib import Path
 from datetime import datetime, timezone
-ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'runtime/ma-dd-describe-20261017'
 sys.path.insert(0, str(SOURCE / 'dependencies'))
 import numpy as np
 import pandas as pd
-from ma_dd_describe import read, write, sha, prepare_kr, us_stock, segment_indices, features
+from research.drawdown.ma_dd_describe import read, write, sha, prepare_kr, us_stock, segment_indices, features
 
 STRATEGIES = ['AC', 'AG', 'AE', 'BC', 'BG', 'BE']
 BASE = {'KR': (.0035, .0005), 'US': (.0005, .0005)}
@@ -71,7 +77,7 @@ def prepare(out, source=SOURCE):
     out.mkdir(parents=True, exist_ok=True)
     (out / 'arrays').mkdir(exist_ok=True)
     if (out / 'prepared.json').exists(): raise FileExistsError('prepared outputs immutable')
-    (out / 'protocol.json').write_bytes((ROOT / 'scripts/ma_reentry_protocol.json').read_bytes())
+    (out / 'protocol.json').write_bytes((ROOT / 'scripts/research/reentry/ma_reentry_protocol.json').read_bytes())
     manifest = []; input_hashes = []; failed = []; markets = {}
     for market in ('KR', 'US'):
         if market == 'KR':
@@ -163,7 +169,7 @@ def repair_calendar(out, draft):
     proxy=pd.DataFrame(dict(date=proxy.date,sample_return=rr,contributors=ret_n,index=index,regime=np.concatenate([['unknown'],regime[:-1]])))
     proxy.to_csv(out/'KR_market_proxy.csv',index=False)
     for name in ['US_market_proxy.csv','kr_sources.json']:shutil.copyfile(draft/name,out/name)
-    (out/'protocol.json').write_bytes((ROOT/'scripts/ma_reentry_protocol.json').read_bytes())
+    (out/'protocol.json').write_bytes((ROOT/'scripts/research/reentry/ma_reentry_protocol.json').read_bytes())
     meta['protocol_sha256']=sha(out/'protocol.json');meta['stocks']=records
     meta['markets']['KR'].update(vol_cuts=np.quantile(np.concatenate(vols),[.25,.5,.75]).tolist(),train_vol_rows=sum(len(v) for v in vols))
     meta['calendar_correction']=dict(merged_boundaries=merged,draft=str(draft),reason='Calendar-adjacent sessions across long national holiday must not reset SMA; stopped unfinished simulation before summary/outcome inspection.')

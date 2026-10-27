@@ -4,6 +4,14 @@ Protocol fixed in Git BEFORE computations. Commands prepare -> select -> test.
 Raw audited price loader is reused; operating universe/trades are never imported.
 """
 from __future__ import annotations
+
+if not __package__:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from workbench_paths import ROOT
+from atomic_io import sha, load_json_bytes as read
+
 import argparse
 from collections import defaultdict
 from datetime import datetime,timezone
@@ -22,14 +30,8 @@ NAMES=[f'{b}__c{k}' for b,k in SIGNALS]
 TARGETS=[10,20,15]
 
 
-def sha(path):
-    h=hashlib.sha256()
-    with Path(path).open('rb') as f:
-        for b in iter(lambda:f.read(1024*1024),b''): h.update(b)
-    return h.hexdigest()
 
 
-def read(path): return json.loads(Path(path).read_bytes())
 
 
 def write(path,value):
@@ -220,7 +222,7 @@ def prepare(root,out,protocol,lookback=None):
     out.mkdir(parents=True,exist_ok=True); write(out/'protocol.json',p)
     histories,samples,audit=choose_sample(root,p); pd.DataFrame([{k:v for k,v in s.items() if k!='bars'} for s in samples]).to_csv(out/'sample.csv',index=False)
     audit.update(created_at=datetime.now(timezone.utc).isoformat(),protocol_sha256=sha(out/'protocol.json'),
-                 threshold_review_sha256=sha(root/'docs/ma-warning-thresholds-2026-10-16.md'),
+                 threshold_review_sha256=sha(root/'docs/research/ma-warning-thresholds-2026-10-16.md'),
                  previous_sample_overlap=0,lookback=lookback or p['peak_lookback'],exclusions={})
     for market,h in histories.items():
         stocks=[s for s in samples if s['market']==market]; returns=[]
@@ -574,7 +576,7 @@ def test(out,frozen_from=None):
 
 def main():
     parser=argparse.ArgumentParser(); parser.add_argument('command',choices=['prepare','select','test'])
-    parser.add_argument('--root',type=Path,default=Path(__file__).resolve().parents[1]); parser.add_argument('--out',type=Path,required=True)
+    parser.add_argument('--root',type=Path,default=ROOT); parser.add_argument('--out',type=Path,required=True)
     parser.add_argument('--protocol',type=Path,default=Path(__file__).with_name('ma_warning_protocol.json'))
     parser.add_argument('--lookback',type=int)
     parser.add_argument('--frozen-from',type=Path)

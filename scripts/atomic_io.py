@@ -77,3 +77,8 @@ def write_new_json(path, payload):
 def utc_now():
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()
+
+
+def load_json_bytes(path):
+    """Preserve the research readers' JSON byte-encoding detection."""
+    return json.loads(Path(path).read_bytes())

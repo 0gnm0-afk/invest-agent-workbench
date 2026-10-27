@@ -4,6 +4,14 @@ Use prepare, optimize, then evaluate. Selection is committed to disk BEFORE test
 performance is calculated. Input histories reuse the workbench's audited loader.
 """
 from __future__ import annotations
+
+if not __package__:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from workbench_paths import ROOT
+from atomic_io import sha, load_json_bytes as read_json
+
 import argparse
 import hashlib
 import itertools
@@ -26,11 +34,6 @@ FEATURES = ['c','o','h','l','v','m5','m10','m20','s5','s5prev','s20','gap','gapp
             'lo5','lo10','hi5','lowrise','cprev','m5prev','m10prev','m20prev','peak63']
 
 
-def sha(path):
-    h = hashlib.sha256()
-    with Path(path).open('rb') as f:
-        for b in iter(lambda:f.read(1024*1024),b''): h.update(b)
-    return h.hexdigest()
 
 
 def write_json(path, data):
@@ -43,7 +46,6 @@ def write_json(path, data):
     Path(path).write_text(json.dumps(nullable(data), ensure_ascii=False, indent=2, allow_nan=False),encoding='utf-8')
 
 
-def read_json(path): return json.loads(Path(path).read_bytes())
 
 
 def features(bars):
@@ -518,7 +520,7 @@ def evaluate(out):
 
 def main():
     parser=argparse.ArgumentParser(); parser.add_argument('command',choices=['prepare','optimize','evaluate'])
-    parser.add_argument('--root',type=Path,default=Path(__file__).resolve().parents[1]); parser.add_argument('--out',type=Path,required=True)
+    parser.add_argument('--root',type=Path,default=ROOT); parser.add_argument('--out',type=Path,required=True)
     parser.add_argument('--protocol',type=Path,default=Path(__file__).with_name('ma_exit4_protocol.json'))
     args=parser.parse_args()
     if args.command=='prepare': prepare(args.root,args.out,args.protocol)

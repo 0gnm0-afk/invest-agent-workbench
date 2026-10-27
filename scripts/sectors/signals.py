@@ -8,7 +8,7 @@ import html
 import math
 import statistics as st
 from collections import Counter, defaultdict
-from display_names import stock_label
+from display_format import stock_label
 from pathlib import Path
 
 from sectors.basis import series_basis, comparison_issue

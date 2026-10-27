@@ -1,11 +1,17 @@
 """Descriptive signed-drawdown tables and scientific figures."""
+
+if not __package__:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 import argparse,os,sys
 from pathlib import Path
 import numpy as np,pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from ma_dd_describe import read,write,sha,SIGNALS
+from research.drawdown.ma_dd_describe import read,write,sha,SIGNALS
 
 NAMES=['종가↓MA5','MA5↓MA10','MA5↓MA20'];GROUPS={'KR_top200':'한국 당시 KOSPI 시총 상위200','US_total':'미국 전체(아래3그룹 합계)','mega':'미국 메가캡 ≥$200.00B','large':'미국 라지캡 $10.00B–$200.00B','mid':'미국 미드캡 $2.00B–$10.00B'}
 def num(x,d=2): return '—' if x is None or pd.isna(x) else f'{x:.{d}f}'
@@ -138,10 +144,10 @@ KRX 직접 경로는 이번 연결에서 LOGOUT/인증키 부족 응답을 반�
 ```powershell
 $researchPython = '<user-home>/Desktop/workspace/invest-agent-engine/.venv/Scripts/python.exe'
 # 별도 폴더에 PyArrow와 고정 커밋 한국 원본·SEC/Yahoo 원본을 먼저 준비한다.
-& $researchPython scripts/ma_dd_describe.py prepare --out runtime/ma-dd-replay --market KR
-& $researchPython scripts/ma_dd_describe.py prepare --out runtime/ma-dd-replay --market US
-& $researchPython scripts/ma_dd_describe.py describe --out runtime/ma-dd-replay
-& $researchPython scripts/ma_dd_report.py --out runtime/ma-dd-replay --report docs/ma-dd-replay.md
+& $researchPython scripts/research/drawdown/ma_dd_describe.py prepare --out runtime/ma-dd-replay --market KR
+& $researchPython scripts/research/drawdown/ma_dd_describe.py prepare --out runtime/ma-dd-replay --market US
+& $researchPython scripts/research/drawdown/ma_dd_describe.py describe --out runtime/ma-dd-replay
+& $researchPython scripts/research/drawdown/ma_dd_report.py --out runtime/ma-dd-replay --report docs/research/ma-dd-replay.md
 ```
 ''')
  plt.rcParams.update({'font.family':'Malgun Gothic','axes.unicode_minus':False,'font.size':10})

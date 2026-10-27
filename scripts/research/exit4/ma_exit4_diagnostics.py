@@ -1,11 +1,17 @@
 """Final-test-only explanatory diagnostics; NEVER used to tune selection."""
+
+if not __package__:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 import argparse
 import json
 from pathlib import Path
 import sys
 import numpy as np
 import pandas as pd
-from ma_exit4_research import (FEATURES, METRICS, features, sha, read_json, write_json,
+from research.exit4.ma_exit4_research import (FEATURES, METRICS, features, sha, read_json, write_json,
     load, timing, recovery, bootstrap_paired, cycle_metrics, aggregate)
 
 

@@ -1,9 +1,15 @@
 """User-requested15% early-warning revision. Preserve all v1 artifacts."""
+
+if not __package__:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 import argparse
 from datetime import datetime,timezone
 from pathlib import Path
 import numpy as np
-from ma_warning_research import (read,write,sha,load_market,SIGNALS,NAMES,matching_covariates,
+from research.warning.ma_warning_research import (read,write,sha,load_market,SIGNALS,NAMES,matching_covariates,
     control_bank,match_indices,matched_statistics,signal_summary,holm)
 
 

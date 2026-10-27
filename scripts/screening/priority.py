@@ -5,7 +5,7 @@ import hashlib
 import html
 import json
 import math
-from display_names import stock_label
+from display_format import stock_label
 from pathlib import Path
 from unittest.mock import patch
 

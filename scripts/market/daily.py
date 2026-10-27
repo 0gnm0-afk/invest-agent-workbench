@@ -15,7 +15,7 @@ import socket
 import sys
 import time
 from datetime import datetime, timezone
-from display_names import stock_label
+from display_format import stock_label
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4

@@ -2,7 +2,7 @@ import sys,unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import numpy as np,pandas as pd
-from ma_dd_describe import features,excursions,historical_us_caps,segment_indices
+from research.drawdown.ma_dd_describe import features,excursions,historical_us_caps,segment_indices
 
 def bars(c):
  c=np.asarray(c,float);return pd.DataFrame({'date':pd.date_range('2015-01-01',periods=len(c),freq='B'),'close':c,'open':c,'high':c*1.01,'low':c*.99,'volume':100})

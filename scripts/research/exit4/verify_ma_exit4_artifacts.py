@@ -1,11 +1,17 @@
 """Direct research acceptance checks, including an independent scalar ledger."""
+
+if not __package__:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 import argparse
 import re
 from pathlib import Path
 from datetime import datetime,timezone
 import numpy as np
 import pandas as pd
-from ma_exit4_research import read_json,write_json,sha,load
+from research.exit4.ma_exit4_research import read_json,write_json,sha,load
 
 
 def verify(root,out,report):
@@ -59,7 +65,7 @@ def verify(root,out,report):
              'real_trade_database_unchanged':database_unchanged,'report_local_links_valid':len(links),
              'all_5_test_cycle_ledgers':'PASS','frozen_selection_unchanged':True,
              'scope':'exit-only research; no production/UAT/deployment claim',
-             'code_sha256':{n:sha(root/'scripts'/n) for n in ['ma_exit4_research.py','ma_exit4_diagnostics.py','ma_exit4_report.py','ma_exit4_protocol.json','verify_ma_exit4_artifacts.py']}}
+             'code_sha256':{n:sha(root/'scripts/research/exit4'/n) for n in ['ma_exit4_research.py','ma_exit4_diagnostics.py','ma_exit4_report.py','ma_exit4_protocol.json','verify_ma_exit4_artifacts.py']}}
     write_json(out/'verification.json',summary)
     manifest={str(f.relative_to(out)):sha(f) for f in out.iterdir() if f.is_file() and f.name!='manifest.json'}
     manifest['report_sha256']=sha(report); write_json(out/'manifest.json',manifest)

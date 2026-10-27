@@ -4,8 +4,8 @@ from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import numpy as np
 import pandas as pd
-from ma_warning_research import indicators,detect_events,forward_extreme,SIGNALS
-from ma_warning_research import signal_summary,matching_covariates,control_bank,match_indices,holm
+from research.warning.ma_warning_research import indicators,detect_events,forward_extreme,SIGNALS
+from research.warning.ma_warning_research import signal_summary,matching_covariates,control_bank,match_indices,holm
 
 
 class WarningCoreTests(unittest.TestCase):

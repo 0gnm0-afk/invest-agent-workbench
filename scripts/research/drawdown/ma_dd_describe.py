@@ -1,22 +1,27 @@
 """Three crossings, online excursion peaks, pre-signal volatility. Descriptive only."""
 from __future__ import annotations
-import argparse,csv,gzip,hashlib,json,math,sys
+
+if not __package__:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from workbench_paths import ROOT
+from atomic_io import sha, load_json_bytes as read
+
+import argparse,csv,gzip,json,math,sys
 from collections import Counter
 from datetime import datetime,timezone,date
 from pathlib import Path
-_out_hint=Path(sys.argv[sys.argv.index('--out')+1]) if '--out' in sys.argv else Path(__file__).resolve().parents[1]/'runtime/ma-dd-describe-20261017'
+_out_hint=Path(sys.argv[sys.argv.index('--out')+1]) if '--out' in sys.argv else ROOT/'runtime/ma-dd-describe-20261017'
 if (_out_hint/'dependencies').exists(): sys.path.insert(0,str(_out_hint/'dependencies'))
 import numpy as np
 import pandas as pd
 
-ROOT=Path(__file__).resolve().parents[1]
 SIGNALS=['close_cross_below_sma5','sma5_cross_below_sma10','sma5_cross_below_sma20']
 METHODS=[('primary',.05,'high'),('rebound3',.03,'high'),('rebound8',.08,'high'),('close_peak',.05,'close'),('atr2',None,'high')]
 FIELDS=['market','symbol','method','segment','leg','parent','signal','date','peak_date','peak','close','dd','elapsed',
         'sigma','atrpct','cap','cap_group','rank','previous_rank','shares_end','shares_filed','shares_age','repeat']
 
-def read(p): return json.loads(Path(p).read_bytes())
-def sha(p): return hashlib.sha256(Path(p).read_bytes()).hexdigest()
 def write(p,value):
  def clean(x):
   if isinstance(x,dict): return {str(k):clean(v) for k,v in x.items()}
@@ -164,9 +169,9 @@ def prepare_kr(out, *, audit_out=None):
 
 
 def prepare(root,out,market):
- out.mkdir(parents=True,exist_ok=True);p=read(root/'scripts/ma_dd_protocol.json')
- if (out/'protocol.json').exists(): assert sha(out/'protocol.json')==sha(root/'scripts/ma_dd_protocol.json')
- else: (out/'protocol.json').write_bytes((root/'scripts/ma_dd_protocol.json').read_bytes())
+ out.mkdir(parents=True,exist_ok=True);p=read(root/'scripts/research/drawdown/ma_dd_protocol.json')
+ if (out/'protocol.json').exists(): assert sha(out/'protocol.json')==sha(root/'scripts/research/drawdown/ma_dd_protocol.json')
+ else: (out/'protocol.json').write_bytes((root/'scripts/research/drawdown/ma_dd_protocol.json').read_bytes())
  if (out/f'{market}_events.csv.gz').exists(): raise FileExistsError('immutable prepared market already exists')
  if market=='KR': stocks,calendar=prepare_kr(out)
  else:

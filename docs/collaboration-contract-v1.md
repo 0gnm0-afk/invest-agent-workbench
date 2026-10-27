@@ -2,7 +2,7 @@
 
 ## Current scope — 2026-10-08
 
-The historical B/risk-calculation descriptions below are preserved as the original contract, not active tools. `risk_review_save`, `analysis_save_risk_review` and the old calculation engine were retired on 2026-10-06. `analysis_plan_input` remains read-only historical input; it does not request new risk calculations. Current implementation: [scenario monitor guide](scenario-monitor-2026-10-08.md).
+The historical B/risk-calculation descriptions below are preserved as the original contract, not active tools. `risk_review_save`, `analysis_save_risk_review` and the old calculation engine were retired on 2026-10-06. `analysis_plan_input` remains read-only historical input; it does not request new risk calculations. Current implementation: [scenario monitor guide](history/scenario-monitor-2026-10-08.md).
 
 Additive drawing-reference lines include `low`/`high` for boxes and `entry`/`stop`/`target` for risk/reward drawings. Existing line/other_line geometry and immutable snapshot semantics remain unchanged.
 
@@ -12,7 +12,7 @@ Browser-only `monitor_register`, `monitor_update`, `monitor_conversion` require 
 
 Owner: session A. Baseline a6388cb, branch `codex/collaboration-workflow`. This is the implementation contract for B; account calculations remain B-owned. Additive fields may be introduced; incompatible changes require a new contract version.
 
-Implementation evidence: [collaboration-workflow-2026-10-05.md](collaboration-workflow-2026-10-05.md). `unincorporated_notes` additionally returns browser utterances newer than current summary. Never consume test_record cases as operational plans.
+Implementation evidence: [collaboration-workflow-2026-10-05.md](history/collaboration-workflow-2026-10-05.md). `unincorporated_notes` additionally returns browser utterances newer than current summary. Never consume test_record cases as operational plans.
 
 ## Transport and authority
 

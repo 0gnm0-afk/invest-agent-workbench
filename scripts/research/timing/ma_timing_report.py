@@ -1,8 +1,14 @@
 """Korean report centered on alternating holding/avoidance intervals."""
+
+if not __package__:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 import argparse,os
 from pathlib import Path
-from ma_timing_segments import ROOT,SOURCE,PAIRS,BUYS,SELLS,read,load_arrays,flags,transactions,ledger
-from ma_reentry_report import pct,prob,num,table,LABEL
+from research.timing.ma_timing_segments import SOURCE, PAIRS, BUYS, SELLS, read, load_arrays, flags, transactions, ledger
+from research.reentry.ma_reentry_report import pct,prob,num,table,LABEL
 import numpy as np
 import pandas as pd
 
@@ -199,7 +205,7 @@ def render(out,report):
           '주된 실패 경로는 잦은 교차에 따른 비용, 매도 후 빠른 회복, 느린 골든크로스 확인까지 놓치는 상승이다. 보유 구간 평균의 양수만 보고 유리하다고 판단하면 이 회피 비용을 빠뜨리게 된다. 사용자의 기업 선정이 이 표본과 다른 분포를 만들 가능성은 남지만, 본 연구로 그 조건부 우위를 입증하지는 못했다.\n',
           '실제 계좌·주문·운영 알림·예약에는 적용하지 않았다. 재현 코드와 모든 구간/거래 원장을 분리 저장했다.\n',
           '\n'.join('- '+link(n) for n in ['protocol.json','simulation.json','results.json','KR_segments.csv.gz','US_segments.csv.gz','trades.csv.gz','paths.csv.gz','segment_summary.csv','path_summary.csv','cohort_summary.csv','conditions.csv','annual_segments.csv','cohort_annual.csv','cohort_leave_year_out.csv','leave_one_year_out.csv','segment_counts.csv','censoring.csv','execution_audit.csv.gz','verification.json','manifest.json'])+'\n',
-          '```powershell\n$researchPython = "<user-home>/Desktop/workspace/invest-agent-engine/.venv/Scripts/python.exe"\n# 기존 source prepared.json의 실제 배열 경로를 유지한다. 새 출력 폴더 사용.\n& $researchPython scripts/ma_timing_segments.py --out runtime/ma-timing-replay\n& $researchPython scripts/ma_timing_statistics.py --out runtime/ma-timing-replay\n& $researchPython scripts/verify_ma_timing.py --out runtime/ma-timing-replay\n& $researchPython scripts/ma_timing_report.py --out runtime/ma-timing-replay --report docs/ma-timing-replay.md\n& $researchPython -m unittest discover -s tests -p test_ma_timing_segments.py\n```\n',
+          '```powershell\n$researchPython = "<user-home>/Desktop/workspace/invest-agent-engine/.venv/Scripts/python.exe"\n# 기존 source prepared.json의 실제 배열 경로를 유지한다. 새 출력 폴더 사용.\n& $researchPython scripts/research/timing/ma_timing_segments.py --out runtime/ma-timing-replay\n& $researchPython scripts/research/timing/ma_timing_statistics.py --out runtime/ma-timing-replay\n& $researchPython scripts/research/timing/verify_ma_timing.py --out runtime/ma-timing-replay\n& $researchPython scripts/research/timing/ma_timing_report.py --out runtime/ma-timing-replay --report docs/research/ma-timing-replay.md\n& $researchPython -m unittest discover -s tests -p test_ma_timing_segments.py\n```\n',
           '원본 입력은 기존 MA-DD 자료를 가리킨다. 일부 재사용 미국 파생 배열은 `ma-reentry-20261017-calendar-draft/arrays`에 있으므로, 폴더 이름만 보고 삭제하면 안 된다. 정확한 입력 경로와 해시는 참조된 prepared.json에 고정되어 있다.\n']
     report.write_text('\n'.join(t),encoding='utf-8');print(report,flush=True)
 

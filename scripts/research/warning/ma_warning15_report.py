@@ -1,4 +1,10 @@
 """15% study report; descriptive tables never select final-test winners."""
+
+if not __package__:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 import argparse,os
 from pathlib import Path
 import numpy as np
@@ -6,7 +12,7 @@ import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from ma_warning_research import read,write,sha,load_market,NAMES,signal_summary,distribution
+from research.warning.ma_warning_research import read,write,sha,load_market,NAMES,signal_summary,distribution
 
 LABELS=['종가<MA5','종가<MA10','종가<MA20','MA5<MA10','MA5<MA20','MA10<MA20',
         'MA5 기울기≤0','MA10 기울기≤0','MA20 기울기≤0','종가<MA20·기울기20≤0','MA5<MA10·기울기20≤0']
@@ -176,17 +182,17 @@ v1과 다른 종목을 선정/최종에 나누었지만 공통 시장 시대를 
 - [고정 후보의 장세·변동성별 비교]({rel}/fixed_candidate_subgroups.csv)
 - [하락률 문헌 검토](ma-warning-thresholds-2026-10-16.md) · [보존된 v1 최종 결과]({oldrel}/final_results.json)
 
-v2 동결 SHA-256 `{result['selection_hash_before']}`는 최종 검증 전후 동일하다. v1의 원 프로토콜·결과도 별도 보존했다. 코드 `scripts/ma_warning_research.py`의 prepare가 원자료·사건을 준비하고 `ma_warning15_research.py select/test`가 v2를 실행한다. 재현 시 새 출력 폴더를 사용한다. 최신 포인터에 의존하는 표본 준비는 감사에 기록된 원본 경로/해시를 먼저 고정해야 한다.
+v2 동결 SHA-256 `{result['selection_hash_before']}`는 최종 검증 전후 동일하다. v1의 원 프로토콜·결과도 별도 보존했다. 코드 `scripts/research/warning/ma_warning_research.py`의 prepare가 원자료·사건을 준비하고 `ma_warning15_research.py select/test`가 v2를 실행한다. 재현 시 새 출력 폴더를 사용한다. 최신 포인터에 의존하는 표본 준비는 감사에 기록된 원본 경로/해시를 먼저 고정해야 한다.
 
 핵심10검사(미래가격 변경 시 지표/사건 불변·연속하락 단일 사건·오경보 회복·국지고점 재설정·1/2봉 최초 발생·목표 후 신호와 갭 실행 제외·미래 결과와 무관한 매칭 등)를 통과했다. 원본1,339개 해시·가격 원행40개·경보178,482행·대응쌍120,174개를 직접 대조했고 목표 도달 후 경보41,573행은 성공 후보에서 제외됨을 확인했다. 여기의 행 수는 두 코호트·여러 신호의 중복 검사량이며 독립 표본 수가 아니다. 그림2개도 직접 열어 축·문자·범례를 확인했다.
 
 ```powershell
 $researchPython = '<user-home>/Desktop/workspace/invest-agent-engine/.venv/Scripts/python.exe'
-& $researchPython scripts/ma_warning15_research.py select --source runtime/ma-warning-20261016-v1 --out runtime/ma-warning15-replay
-& $researchPython scripts/ma_warning15_research.py test --out runtime/ma-warning15-replay
-& $researchPython scripts/ma_warning15_diagnostics.py --out runtime/ma-warning15-replay --secondary runtime/ma-warning-20261016-peak126
-& $researchPython scripts/ma_warning15_report.py --out runtime/ma-warning15-replay --report docs/ma-warning15-replay.md
-& $researchPython scripts/verify_ma_warning15.py --out runtime/ma-warning15-replay --report docs/ma-warning15-replay.md
+& $researchPython scripts/research/warning/ma_warning15_research.py select --source runtime/ma-warning-20261016-v1 --out runtime/ma-warning15-replay
+& $researchPython scripts/research/warning/ma_warning15_research.py test --out runtime/ma-warning15-replay
+& $researchPython scripts/research/warning/ma_warning15_diagnostics.py --out runtime/ma-warning15-replay --secondary runtime/ma-warning-20261016-peak126
+& $researchPython scripts/research/warning/ma_warning15_report.py --out runtime/ma-warning15-replay --report docs/research/ma-warning15-replay.md
+& $researchPython scripts/research/warning/verify_ma_warning15.py --out runtime/ma-warning15-replay --report docs/research/ma-warning15-replay.md
 ```
 ''')
     report.write_text('\n\n'.join(text),encoding='utf-8'); print('report',report,flush=True)

@@ -1,5 +1,5 @@
 """Independent Taver scan and two review queues over the common universe gate."""
-from display_names import stock_label
+from display_format import stock_label
 from copy import deepcopy
 from invest_agent.trading import taver_structure
 from invest_agent.trading.market import usable_tail, check_bars

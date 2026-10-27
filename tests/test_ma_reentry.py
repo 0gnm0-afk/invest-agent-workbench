@@ -3,9 +3,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from ma_reentry_research import signal_arrays, cycles, wealth, cycle_rows, progression, fill_index, mdd, trading_segments
-from ma_reentry_statistics import km, crossed_bootstrap
-from verify_ma_reentry import independent_signals, scalar_replay
+from research.reentry.ma_reentry_research import signal_arrays, cycles, wealth, cycle_rows, progression, fill_index, mdd, trading_segments
+from research.reentry.ma_reentry_statistics import km, crossed_bootstrap
+from research.reentry.verify_ma_reentry import independent_signals, scalar_replay
 
 
 def fixture(prices=None):

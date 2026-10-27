@@ -1,7 +1,14 @@
 """Verify exhaustive segment accounting and independent daily state/capital replay."""
+
+if not __package__:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from workbench_paths import ROOT
+
 import argparse,sys,re
 from pathlib import Path
-from ma_timing_segments import ROOT,SOURCE,PAIRS,read,write,sha,load_arrays,flags,transactions,ledger,BASE
+from research.timing.ma_timing_segments import SOURCE, PAIRS, read, write, sha, load_arrays, flags, transactions, ledger, BASE
 import numpy as np
 import pandas as pd
 sys.path.insert(0,str(ROOT/'tests'))
@@ -10,7 +17,7 @@ from test_ma_timing_segments import scalar_flags,scalar_ledger
 
 def verify(out,report=None):
     sim=read(out/'simulation.json');meta=read(sim['source_prepared']);assert sha(sim['source_prepared'])==sim['source_sha256']
-    assert sim['protocol_sha256']==sha(out/'protocol.json')==sha(ROOT/'scripts/ma_timing_protocol.json')
+    assert sim['protocol_sha256']==sha(out/'protocol.json')==sha(ROOT/'scripts/research/timing/ma_timing_protocol.json')
     records={(r['market'],r['symbol']):r for r in meta['stocks']}
     for r in meta['input_hashes']:assert sha(r['path'])==r['sha256']
     for r in records.values():assert sha(r['path'])==r['sha256']
@@ -101,7 +108,7 @@ def verify(out,report=None):
         scope='All interval price chains and full-sale cost chains; sampled independent new signals/state/cash. Does not prove liquidity, missing delisted returns or actual KR dividends.')
     write(out/'verification.json',receipt)
     files=[p for p in out.iterdir() if p.is_file() and p.name!='manifest.json']
-    files += [ROOT/'scripts'/n for n in ['ma_timing_protocol.json','ma_timing_segments.py','ma_timing_statistics.py','verify_ma_timing.py','ma_timing_report.py']]
+    files += [ROOT/'scripts/research/timing'/n for n in ['ma_timing_protocol.json','ma_timing_segments.py','ma_timing_statistics.py','verify_ma_timing.py','ma_timing_report.py']]
     files += [ROOT/'tests/test_ma_timing_segments.py']
     if report:files.append(report)
     write(out/'manifest.json',dict(files=[dict(path=str(p),sha256=sha(p)) for p in files if p.exists()],input_manifest=sim['source_prepared']))

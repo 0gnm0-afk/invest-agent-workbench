@@ -1,7 +1,13 @@
 """Render research evidence; no optimization or strategy selection."""
+
+if not __package__:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 import argparse, math, os
 from pathlib import Path
-from ma_reentry_research import read, STRATEGIES, ROOT
+from research.reentry.ma_reentry_research import read, STRATEGIES
 import numpy as np
 import pandas as pd
 
@@ -174,7 +180,7 @@ def render(out,report):
              '이 전략의 가치는 “역배열 뒤 하락한 적이 많다”가 아니라 **비용을 내고 현금으로 기다렸다가 신호대로 되산 뒤 자산이 더 남는가**에 달려 있다. 일부 큰 하락에서 방어가 되더라도 반등을 뒤늦게 따라사거나 반복 비용이 누적되면 장기 상승을 유지한다는 목적과 충돌한다. 위 확률·복리 신뢰구간·고정표본 자산·민감도가 함께 지지하지 않는 전략은 추천하지 않는다. 생존 편향 없는 미국 전체시장과 한국의 실제 세후 총수익에 대한 확정 결론은 현재 자료만으로 낼 수 없다.\n',
              '독립 실행·검증 경로를 보존했으며 운영 감시·계좌·주문·예약에는 적용하지 않았다. 다음 파일에서 모든 결과와 실패·누락을 추적할 수 있다.\n',
              '\n'.join('- '+link(n) for n in ['protocol.json','prepared.json','results.json','summary.csv','cycles.csv.gz','paths.csv.gz','path_summary.csv','conditions.csv','annual.csv','cohort_summary.csv','cohort_annual.csv','progression.csv.gz','open_cycles.csv','examples.csv','execution_audit.csv.gz','verification.json','manifest.json'])+'\n',
-             '```powershell\n$researchPython = "<user-home>/Desktop/workspace/invest-agent-engine/.venv/Scripts/python.exe"\n# 원본은 기존 runtime/ma-dd-describe-20261017 유지. 재현 시 새 출력 폴더 사용.\n& $researchPython scripts/ma_reentry_research.py prepare --out runtime/ma-reentry-replay\n& $researchPython scripts/ma_reentry_research.py run --out runtime/ma-reentry-replay\n& $researchPython scripts/ma_reentry_statistics.py --out runtime/ma-reentry-replay\n& $researchPython scripts/verify_ma_reentry.py --out runtime/ma-reentry-replay\n& $researchPython scripts/ma_reentry_report.py --out runtime/ma-reentry-replay --report docs/ma-reentry-replay.md\n& $researchPython -m unittest discover -s tests -p test_ma_reentry.py\n```\n']
+             '```powershell\n$researchPython = "<user-home>/Desktop/workspace/invest-agent-engine/.venv/Scripts/python.exe"\n# 원본은 기존 runtime/ma-dd-describe-20261017 유지. 재현 시 새 출력 폴더 사용.\n& $researchPython scripts/research/reentry/ma_reentry_research.py prepare --out runtime/ma-reentry-replay\n& $researchPython scripts/research/reentry/ma_reentry_research.py run --out runtime/ma-reentry-replay\n& $researchPython scripts/research/reentry/ma_reentry_statistics.py --out runtime/ma-reentry-replay\n& $researchPython scripts/research/reentry/verify_ma_reentry.py --out runtime/ma-reentry-replay\n& $researchPython scripts/research/reentry/ma_reentry_report.py --out runtime/ma-reentry-replay --report docs/research/ma-reentry-replay.md\n& $researchPython -m unittest discover -s tests -p test_ma_reentry.py\n```\n']
     report.write_text('\n'.join(text),encoding='utf-8');print(report,flush=True)
 
 

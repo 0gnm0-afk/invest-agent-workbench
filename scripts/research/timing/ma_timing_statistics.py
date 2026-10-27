@@ -1,8 +1,14 @@
 """Segment distributions and chronological wealth comparisons, no fitted winner."""
+
+if not __package__:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 import argparse
 from pathlib import Path
-from ma_timing_segments import read,write,sha,PAIRS,mdd,SOURCE
-from ma_reentry_statistics import crossed_bootstrap,km
+from research.timing.ma_timing_segments import read,write,sha,PAIRS,mdd,SOURCE
+from research.reentry.ma_reentry_statistics import crossed_bootstrap,km
 import numpy as np
 import pandas as pd
 

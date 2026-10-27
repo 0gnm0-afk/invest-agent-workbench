@@ -1,10 +1,16 @@
 """Public SEC share history and split metadata, rate-bounded, resumable."""
+
+if not __package__:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from workbench_paths import ROOT
+
 import argparse,json,sys,time,urllib.request,urllib.error,urllib.parse,threading,hashlib
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor,as_completed
 from datetime import datetime,timezone
-WB=Path(__file__).resolve().parents[1] if Path(__file__).parent.name=='scripts' else Path('<user-home>/Desktop/workspace/invest-agent-workbench')
-sys.path.insert(0,str(WB/'scripts'))
+WB=ROOT
 from market.history.saved import SavedHistory
 from financials.collect import settings
 

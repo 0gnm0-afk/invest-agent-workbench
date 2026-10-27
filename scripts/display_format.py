@@ -20,3 +20,11 @@ def display_analysis(value, currency, key=''):
         return {k: money(v, currency) if key == 'ma' and type(v) in (int, float)
                 else display_analysis(v, currency, k) for k,v in value.items()}
     return money(value, currency) if key in PRICE_KEYS and type(value) in (int,float) else value
+
+
+def stock_label(row, market=None):
+    symbol = str(row.get('symbol') or '')
+    name = str(row.get('name') or '').strip()
+    if (market or row.get('market')) == 'KR':
+        return name or symbol
+    return symbol + (' ' + name if name and name != symbol else '')

@@ -3,8 +3,8 @@ import numpy as np
 import pandas as pd
 import tempfile
 from pathlib import Path
-from ma_exit4_research import FEATURES, timing, cycle_metrics, METRICS, features, ratio_candidates, holm
-from ma_exit4_research import write_json, read_json
+from research.exit4.ma_exit4_research import FEATURES, timing, cycle_metrics, METRICS, features, ratio_candidates, holm
+from research.exit4.ma_exit4_research import write_json, read_json
 
 
 def fixture(n=2,T=186):

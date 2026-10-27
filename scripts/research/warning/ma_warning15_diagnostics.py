@@ -1,10 +1,16 @@
 """Frozen15% candidates: peak sensitivity, parent dependence and trace rows."""
+
+if not __package__:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 import argparse
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from ma_warning_research import read,write,load_market,signal_summary
-from ma_warning15_research import analyze15
+from research.warning.ma_warning_research import read,write,load_market,signal_summary
+from research.warning.ma_warning15_research import analyze15
 
 
 def run(out,secondary):
