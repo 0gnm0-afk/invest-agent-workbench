@@ -1,5 +1,5 @@
 const assert=require('node:assert/strict');
-global.window={};require('../dashboard/chart-workspace.js');
+global.window={};require('../dashboard/drawings/chart-workspace.js');
 const host={innerHTML:''},status={textContent:''};
 global.document={querySelector:s=>s==='#history-status'?status:null};
 let calls=0;global.fetch=async()=>{calls++;return {ok:true,json:async()=>({revision:1,state:{drawings:[]}})}};

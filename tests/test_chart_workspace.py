@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from chart_workspace import WorkspaceStore, defaults, validate, Conflict, moving_averages
+from drawings.store import WorkspaceStore, defaults, validate, Conflict, moving_averages
 from dashboard import handler_for, ThreadingHTTPServer
 
 

@@ -15,7 +15,7 @@ import re
 import sqlite3
 from uuid import uuid4
 
-from chart_workspace import Conflict
+from drawings.store import Conflict
 from analysis_collaboration import Forbidden
 
 VERSION = 'trade-cycle.v1'

@@ -13,7 +13,7 @@ import tempfile
 import threading
 from uuid import uuid4
 
-from chart_workspace import Conflict
+from drawings.store import Conflict
 
 
 def utc():

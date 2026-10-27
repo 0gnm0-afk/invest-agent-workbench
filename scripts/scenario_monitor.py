@@ -9,8 +9,8 @@ from pathlib import Path
 import sqlite3
 from uuid import uuid4
 
-from chart_workspace import WorkspaceStore, Conflict
-from analysis_geometry import geometry
+from drawings.store import WorkspaceStore, Conflict
+from drawings.geometry import geometry
 from chart_history import aggregate
 from trailing_warnings import indicators, packed, stamp, equity
 

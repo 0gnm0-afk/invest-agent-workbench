@@ -14,7 +14,8 @@ def main():
     fixture=CollaborationTests();fixture.setUp()
     fixture.discussion();fixture.plan()
     assets=fixture.root/'assets';assets.mkdir()
-    for name in ('collaboration.js','format.js','style.css','chart-tools.css'):
+    for name in ('collaboration.js','format.js','style.css','drawings/chart-tools.css'):
+        (assets/name).parent.mkdir(parents=True,exist_ok=True)
         shutil.copyfile(ROOT/'dashboard'/name,assets/name)
     cid=fixture.cid
     (assets/'index.html').write_text('''<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">

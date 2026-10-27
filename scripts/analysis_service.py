@@ -1,6 +1,5 @@
 """Analysis cases over existing dashboard stores. No broker/market/order writes."""
 from contextlib import closing
-from copy import deepcopy
 from datetime import datetime, timezone
 from decimal import Decimal
 import hashlib
@@ -10,8 +9,8 @@ import re
 import uuid
 from urllib.parse import urlencode, quote
 
-from chart_workspace import Conflict, validate
-from analysis_geometry import geometry
+from drawings.store import Conflict, validate
+from drawings.geometry import geometry
 from analysis_collaboration import Collaboration, OPS as COLLABORATION_OPS, Forbidden
 
 from price_events import build as price_events, validate_research
@@ -184,21 +183,15 @@ class AnalysisService:
             db.execute('BEGIN IMMEDIATE')
             items=[json.loads(r[0]) for r in db.execute('SELECT payload FROM analysis_items WHERE case_id=? AND kind=?',(case['id'],'decision'))]
             if any(i['proposal_id']==proposal_id for i in items): raise Conflict('proposal_already_decided')
-            row=db.execute('SELECT revision,payload,updated_at FROM shared_chart_workspaces WHERE identity=?',(case['stock_key'],)).fetchone()
-            if not row: raise Conflict('workspace_missing')
-            revision,payload,updated=row[0],json.loads(row[1]),row[2]
             added=[]
             if action=='adopt':
-                if revision!=proposal['base_revision']: raise Conflict('stale_proposal_read_current_and_resubmit')
-                for d in drawings if drawings is not None else proposal['drawings']:
-                    added.append(dict(d,id=ident('ai_')))
-                if not added: raise ValueError('empty_proposal')
-                before=deepcopy(payload); payload['drawings']+=added
-                validate({'schema':1,'drawings':payload['drawings'],'averages':payload['averages'][case['context']['timeframe']]},drawing_limit=300)
-                db.execute('INSERT OR IGNORE INTO chart_workspace_versions VALUES (?,?,?,?)', (case['stock_key'],revision,packed(before),updated))
-                db.execute('INSERT INTO chart_workspace_versions VALUES (?,?,?,?)', (case['stock_key'],revision+1,packed(payload),now()))
-                db.execute('UPDATE shared_chart_workspaces SET revision=?,payload=?,updated_at=? WHERE identity=?',(revision+1,packed(payload),now(),case['stock_key']))
-            else: before=None
+                added=[dict(d,id=ident('ai_')) for d in (drawings if drawings is not None else proposal['drawings'])]
+                saved=self.store.append_drawings(db,case['stock_key'],case['context']['timeframe'],proposal['base_revision'],added)
+                revision=saved['base_revision']; before=saved['original_workspace']
+            else:
+                current=self.store.read_shared(db,case['stock_key'])
+                if current is None: raise Conflict('workspace_missing')
+                revision=current['revision']; before=None
             return self.append(case['id'],'decision',{'proposal_id':proposal_id,'action':action,'reason':reason,'author':'user',
                 'snapshot_id':proposal['snapshot_id'],'base_revision':revision,'result_revision':revision+(action=='adopt'),
                 'adopted_drawings':added,'original_workspace':before,'edited_proposal':drawings,'authority':'drawing_only_not_trade_or_risk_adoption'},db)

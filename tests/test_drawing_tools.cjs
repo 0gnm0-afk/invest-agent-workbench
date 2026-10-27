@@ -1,6 +1,6 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 global.window=global;
-for(const f of ['format.js','drawing-tools.js'])vm.runInThisContext(fs.readFileSync(path.join(__dirname,'../dashboard',f),'utf8'));
+for(const f of ['format.js','drawings/drawing-tools.js'])vm.runInThisContext(fs.readFileSync(path.join(__dirname,'../dashboard',f),'utf8'));
 const bars=Array.from({length:10},(_,i)=>({date:`2026-09-${String(i+1).padStart(2,'0')}`}));
 assert.deepEqual(DrawingTools.channel([{x:0,y:100},{x:20,y:80},{x:10,y:70}]),[{x:0,y:100},{x:20,y:80},{x:20,y:60},{x:0,y:80}]);
 assert.match(DrawingTools.measure([{time:bars[0].date,price:1000},{time:bars[5].date,price:1200}],bars,'USD'),/\+200.00 USD · \+20.00% · 5봉 간격 · 5일/);

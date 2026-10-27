@@ -1,7 +1,7 @@
 'use strict';
 const fs=require('fs'),vm=require('vm'),assert=require('node:assert/strict');
 global.window={};
-vm.runInThisContext(fs.readFileSync('dashboard/drawing-tools.js','utf8'));
+vm.runInThisContext(fs.readFileSync('dashboard/drawings/drawing-tools.js','utf8'));
 global.DrawingTools=window.DrawingTools;
 vm.runInThisContext(fs.readFileSync('dashboard/scenario-preview.js','utf8'));
 const bars=[];

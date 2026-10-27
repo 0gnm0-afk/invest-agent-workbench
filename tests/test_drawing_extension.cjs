@@ -1,6 +1,6 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 global.window=global;
-for(const name of ['format.js','drawing-tools.js'])vm.runInThisContext(fs.readFileSync(path.join(__dirname,'../dashboard',name),'utf8'));
+for(const name of ['format.js','drawings/drawing-tools.js'])vm.runInThisContext(fs.readFileSync(path.join(__dirname,'../dashboard',name),'utf8'));
 class Element {
   constructor(tag){this.tag=tag;this.children=[];this.attrs={};this.events={};this.style={};this.classList={add(){}};}
   append(child){this.children.push(child);}

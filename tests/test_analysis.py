@@ -1,4 +1,5 @@
 import copy
+from contextlib import closing
 import http.client
 import json
 from pathlib import Path
@@ -8,12 +9,13 @@ import tempfile
 import threading
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'scripts'))
 from analysis_service import AnalysisService, digest
-from analysis_geometry import geometry, timeline, logical
-from chart_workspace import WorkspaceStore, defaults, Conflict
+from drawings.geometry import geometry, timeline, logical
+from drawings.store import WorkspaceStore, defaults, Conflict
 from chart_history import aggregate
 
 def drawing(kind='trend'):
@@ -62,6 +64,24 @@ class AnalysisTests(unittest.TestCase):
         for t in threads:t.start()
         for t in threads:t.join()
         self.assertCountEqual(results,['ok','conflict'])
+    def test_decision_failure_rolls_back_drawings_history_and_decision(self):
+        proposal=self.s.proposal(self.case,self.sid,[drawing()],'fixture')
+        tables=('shared_chart_workspaces','chart_workspace_versions','analysis_items')
+        def rows():
+            with closing(self.store.connect()) as db:
+                return {table:db.execute('SELECT * FROM '+table+' ORDER BY rowid').fetchall() for table in tables}
+        before=rows(); append=self.s.append
+        def fail_after_write(*args,**kwargs):
+            append(*args,**kwargs)
+            raise RuntimeError('synthetic decision failure')
+        with patch.object(self.s,'append',side_effect=fail_after_write):
+            with self.assertRaisesRegex(RuntimeError,'synthetic decision failure'):
+                self.s.decide(self.case,proposal['id'],'adopt','fixture')
+        self.assertEqual(before,rows())
+        decision=self.s.decide(self.case,proposal['id'],'adopt','retry')
+        self.assertEqual(decision['result_revision'],decision['base_revision']+1)
+        self.assertEqual(len(self.store.shared('US:NVDA')['state']['drawings']),1)
+
     def test_discard_does_not_change_workspace(self):
         p=self.s.proposal(self.case,self.sid,[drawing()],'fixture');before=self.store.shared('US:NVDA');self.s.decide(self.case,p['id'],'discard','no')
         self.assertEqual(before,self.store.shared('US:NVDA'))
@@ -86,7 +106,7 @@ class AnalysisTests(unittest.TestCase):
         js="const fs=require('fs'),vm=require('vm');global.window={};vm.runInThisContext(fs.readFileSync(process.argv[1],'utf8'));const a=JSON.parse(fs.readFileSync(0,'utf8'));const t=window.DrawingTools.timeline(a.bars,a.frame);console.log(JSON.stringify(a.days.map(d=>window.DrawingTools.index(d,t,a.frame))));"
         for frame in ('1d','1w','1mo'):
             bars=aggregate(self.bars,frame);slots=timeline(bars,frame);days=['2026-09-18','2026-09-19','2026-09-21','2026-09-22','2026-09-23','2027-01-05']
-            expected=json.loads(subprocess.check_output(['node','-e',js,str(ROOT/'dashboard/drawing-tools.js')],input=json.dumps(dict(bars=bars,frame=frame,days=days)).encode()))
+            expected=json.loads(subprocess.check_output(['node','-e',js,str(ROOT/'dashboard/drawings/drawing-tools.js')],input=json.dumps(dict(bars=bars,frame=frame,days=days)).encode()))
             for day,value in zip(days,expected):
                 actual=logical(day,slots,frame)
                 if value is None:self.assertIsNone(actual)

@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, urlsplit
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from analysis_service import AnalysisService, packed
-from chart_workspace import WorkspaceStore
+from drawings.store import WorkspaceStore
 
 
 SKILL = 'stock-qualitative-analysis'

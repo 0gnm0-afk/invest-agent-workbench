@@ -166,7 +166,7 @@ class HttpBoundary(unittest.TestCase):
         cls.addClassCleanup(cls.temp.cleanup)
         dependencies = {'histories': SimpleNamespace(saved=SimpleNamespace(stocks={}, markets={})),
                         'financials': SimpleNamespace()}
-        cls.server = ThreadingHTTPServer(('127.0.0.1', 0), handler_for({'market': {'state':'failed'}}, {}, Path('.'), 'test',
+        cls.server = ThreadingHTTPServer(('127.0.0.1', 0), handler_for({'market': {'state':'failed'}}, {}, Path(__file__).resolve().parents[1]/'dashboard', 'test',
             Path(cls.temp.name)/'chart.sqlite3', analysis_dependencies=dependencies))
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True);cls.thread.start()
 
@@ -180,6 +180,13 @@ class HttpBoundary(unittest.TestCase):
 
     def test_failed_data_is_served(self):
         status, body=self.get('/api/home');self.assertEqual(status,200);self.assertEqual(json.loads(body)['market']['state'],'failed')
+
+    def test_drawing_assets_keep_existing_urls_after_folder_move(self):
+        folder=Path(__file__).resolve().parents[1]/'dashboard/drawings'
+        for name in ('drawing-tools.js','chart-workspace.js','chart-tools.css'):
+            status,body=self.get('/'+name)
+            self.assertEqual(status,200,name)
+            self.assertEqual(body,(folder/name).read_bytes())
 
     def test_no_raw_account_or_filesystem_access(self):
         for path in ['/account-observation.private.json','/../config.json','/scripts/nh_api.py','/runtime/latest.json']:

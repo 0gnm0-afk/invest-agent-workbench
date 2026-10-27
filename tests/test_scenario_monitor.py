@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from chart_workspace import WorkspaceStore, defaults, Conflict
+from drawings.store import WorkspaceStore, defaults, Conflict
 from scenario_monitor import ScenarioStore, levels, line_state
 from telegram_warnings import dispatch, scenario_message
 

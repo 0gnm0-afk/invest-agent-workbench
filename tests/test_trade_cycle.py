@@ -12,7 +12,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from analysis_collaboration import Forbidden
-from chart_workspace import Conflict
+from drawings.store import Conflict
 from trade_cycle import TradeCycleStore, calculate, combination_id, progress
 
 

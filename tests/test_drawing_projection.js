@@ -1,5 +1,5 @@
 const assert=require('node:assert/strict');
-global.window={};require('../dashboard/drawing-tools.js');const D=window.DrawingTools;
+global.window={};require('../dashboard/drawings/drawing-tools.js');const D=window.DrawingTools;
 const daily=[{date:'2026-09-21'},{date:'2026-09-22'},{date:'2026-09-23'},{date:'2026-09-28'}];
 const weekly=[{date:'2026-09-21',first_session:'2026-09-21',last_session:'2026-09-23'},{date:'2026-09-28',first_session:'2026-09-28',last_session:'2026-09-30'}];
 const monthly=[{date:'2026-09-01',first_session:'2026-09-01',last_session:'2026-09-30'}];

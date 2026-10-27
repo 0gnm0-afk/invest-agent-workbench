@@ -2,7 +2,7 @@
 from contextlib import closing
 
 from analysis_collaboration import Forbidden, fields, integer
-from chart_workspace import Conflict
+from drawings.store import Conflict
 
 OPS = {'monitor_list', 'monitor_register', 'monitor_update', 'monitor_conversion'}
 
@@ -50,7 +50,7 @@ def dispatch(service, op, args, origin, principal, session):
         drawing = next(d for d in snap['workspace']['state']['drawings'] if d['id'] == args['drawing_id'])
         mapping = {'low':'lower', 'high':'upper', 'entry':'entry', 'stop':'stop', 'target':'target', 'line':'line'}
         if drawing['kind'] == 'channel':
-            from analysis_geometry import geometry
+            from drawings.geometry import geometry
             shape = next(d for d in geometry(snap['workspace'], snap['chart'], snap['context'])['drawings'] if d['id']==drawing['id'])
             offset = shape['calculations'].get('channel_offset')
             if offset is None: raise ValueError('drawing_projection_unavailable')

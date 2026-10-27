@@ -2,7 +2,7 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('nod
 const root=path.resolve(__dirname,'..');
 function el(){return {style:{},dataset:{},children:[],addEventListener(k,f){this[k]=f},append(...xs){this.children.push(...xs)},insertAdjacentElement(){},remove(){this.removed=true}};}
 const document={createElement:el,createTextNode:t=>({textContent:t})};const context={window:{},document,Date,Map,Math};vm.createContext(context);
-vm.runInContext(fs.readFileSync(path.join(root,'dashboard/drawing-tools.js'),'utf8'),context);context.DrawingTools=context.window.DrawingTools;
+vm.runInContext(fs.readFileSync(path.join(root,'dashboard/drawings/drawing-tools.js'),'utf8'),context);context.DrawingTools=context.window.DrawingTools;
 vm.runInContext(fs.readFileSync(path.join(root,'dashboard/chart-events.js'),'utf8'),context);
 const events=[{event_date:'2024-01-04',kind:'gap',timeframe:'1d',status:'confirmed',metrics:{}},{event_date:'2024-01-03',kind:'gap',timeframe:'1d',status:'confirmed',confirmed_at:'2024-01-03',gap_pct:4,full_gap:true,metrics:{}},{event_date:'2024-01-03',kind:'high',timeframe:'1w',status:'confirmed',confirmed_at:'2024-02-01',metrics:{}}];
 assert.equal(context.window.WorkbenchEvents.grouped(events).length,2);

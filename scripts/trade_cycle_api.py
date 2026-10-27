@@ -5,7 +5,7 @@ from urllib.parse import quote, urlencode
 
 from analysis_collaboration import Forbidden, fields, identity
 from analysis_service import digest
-from chart_workspace import Conflict
+from drawings.store import Conflict
 from trailing_warnings import equity
 
 OPS = {'cycle_list', 'cycle_read', 'cycle_context', 'cycle_request_draft',

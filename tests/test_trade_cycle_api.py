@@ -12,7 +12,7 @@ sys.path.insert(0,str(ROOT/'scripts'))
 import test_collaboration as fixtures
 from test_trade_cycle import plan, COMBO, fill
 from analysis_collaboration import Forbidden
-from chart_workspace import Conflict
+from drawings.store import Conflict
 from trade_cycle import TradeCycleStore
 from trade_cycle_agent import DraftJobs, cli_command, generate, SCHEMA
 import trade_cycle_agent

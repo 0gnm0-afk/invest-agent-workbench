@@ -1,5 +1,6 @@
 """Local user chart workspaces; independent of immutable market/broker data."""
 from contextlib import closing
+from copy import deepcopy
 import hashlib
 import json
 import math
@@ -152,6 +153,42 @@ class WorkspaceStore:
             versions.append(current)
         return versions
 
+    def _save_shared_change(self, db, identity, current, before, updated, payload):
+        """Save one revision in the caller's transaction; never commit here."""
+        body = lambda value: json.dumps(value, ensure_ascii=False, allow_nan=False)
+        saved_at = datetime.now(timezone.utc).isoformat()
+        revision = current + 1
+        db.execute('INSERT OR IGNORE INTO chart_workspace_versions VALUES (?,?,?,?)',
+                   (identity, current, body(before), updated))
+        db.execute('INSERT INTO chart_workspace_versions VALUES (?,?,?,?)',
+                   (identity, revision, body(payload), saved_at))
+        db.execute('INSERT INTO shared_chart_workspaces VALUES (?,?,?,?) ON CONFLICT(identity) DO UPDATE SET revision=excluded.revision,payload=excluded.payload,updated_at=excluded.updated_at',
+                   (identity, revision, body(payload), saved_at))
+        return revision, saved_at
+
+    def append_drawings(self, db, identity, frame, expected_revision, drawings):
+        """Append accepted drawings without changing averages or owning commit.
+
+        The caller holds BEGIN IMMEDIATE and writes the user's decision in the
+        same transaction. IDs are supplied by the caller; no approval is inferred.
+        """
+        current = self.read_shared(db, identity)
+        if current is None:
+            raise Conflict('workspace_missing')
+        if current['revision'] != expected_revision:
+            raise Conflict('stale_proposal_read_current_and_resubmit')
+        if not drawings:
+            raise ValueError('empty_proposal')
+        before = current['payload']
+        payload = deepcopy(before)
+        payload['drawings'] += drawings
+        validate({'schema': 1, 'drawings': payload['drawings'],
+                  'averages': payload['averages'][frame]}, drawing_limit=300)
+        revision, updated = self._save_shared_change(
+            db, identity, current['revision'], before, current['updated_at'], payload)
+        return dict(base_revision=current['revision'], revision=revision,
+                    updated_at=updated, original_workspace=before)
+
     def shared(self, identity, frame='1d', *, revision=None, state=None):
         """Atomically migrate legacy rows once; drawings and revision are symbol-wide."""
         if frame not in ('1d', '1w', '1mo'):
@@ -223,14 +260,11 @@ class WorkspaceStore:
             if state is not None:
                 if current != revision:
                     raise Conflict('workspace_changed_elsewhere')
-                db.execute('INSERT OR IGNORE INTO chart_workspace_versions VALUES (?,?,?,?)',
-                           (identity, current, json.dumps(payload, ensure_ascii=False, allow_nan=False), updated))
+                before = deepcopy(payload)
                 payload['drawings'] = state['drawings']
                 payload['averages'][frame] = state['averages']
-                current += 1; updated = datetime.now(timezone.utc).isoformat()
-                db.execute('INSERT INTO chart_workspace_versions VALUES (?,?,?,?)',
-                           (identity, current, json.dumps(payload, ensure_ascii=False, allow_nan=False), updated))
-            if row is None or state is not None or upgraded:
+                current, updated = self._save_shared_change(db, identity, current, before, updated, payload)
+            if state is None and (row is None or upgraded):
                 db.execute('INSERT INTO shared_chart_workspaces VALUES (?,?,?,?) ON CONFLICT(identity) DO UPDATE SET revision=excluded.revision,payload=excluded.payload,updated_at=excluded.updated_at',
                            (identity, current, json.dumps(payload, ensure_ascii=False, allow_nan=False), updated))
         return {'revision': current, 'updated_at': updated, 'drawing_limit': 300, 'drawing_kinds': list(KINDS), 'drawing_extensions': 'bounded-v1', 'extension_kinds': list(EXTENDABLE_KINDS), 'average_limit': 7,

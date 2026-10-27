@@ -100,7 +100,7 @@ class RecentTrendlineTests(unittest.TestCase):
         import http.client,threading
         from dashboard import handler_for,ThreadingHTTPServer
         from chart_history import HistoryStore
-        from chart_workspace import defaults
+        from drawings.store import defaults
         bars=example();line=r.select(bars)
         stock=dict(market='US',symbol='TEST',bars=bars,currency='USD')
         data={'market':{'entries':[dict(market='US',symbol='TEST',route_signals={'downtrend_approach':{'trendline':line}})]}}

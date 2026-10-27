@@ -12,7 +12,7 @@ from unittest.mock import Mock, patch
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from chart_history import HistoryStore, aggregate, validate_bars
-from chart_workspace import defaults, moving_averages
+from drawings.store import defaults, moving_averages
 from dashboard import handler_for, ThreadingHTTPServer
 
 def bar(day, price=10, volume=100):

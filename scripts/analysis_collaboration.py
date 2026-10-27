@@ -9,8 +9,8 @@ import secrets
 import threading
 import time
 
-from analysis_geometry import geometry, VERSION as GEOMETRY_VERSION
-from chart_workspace import Conflict
+from drawings.geometry import geometry, VERSION as GEOMETRY_VERSION
+from drawings.store import Conflict
 
 VERSION = 'collaboration.v1'
 SECTIONS = ('identity_basis', 'business_evidence', 'judgment_invalidation',

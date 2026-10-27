@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from saved_us_history import packed
 from chart_history import HistoryStore
-from chart_workspace import moving_averages
+from drawings.store import moving_averages
 from dashboard import handler_for, ThreadingHTTPServer
 
 

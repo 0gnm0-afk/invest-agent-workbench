@@ -5,7 +5,7 @@ import unittest
 
 import test_collaboration as fixtures
 from analysis_collaboration import Forbidden
-from chart_workspace import defaults, Conflict
+from drawings.store import defaults, Conflict
 
 
 class ScenarioFlowTests(unittest.TestCase):

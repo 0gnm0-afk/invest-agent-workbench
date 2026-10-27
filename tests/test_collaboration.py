@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from analysis_service import AnalysisService, digest
 from analysis_collaboration import VERSION, Forbidden
-from chart_workspace import WorkspaceStore, Conflict, defaults
+from drawings.store import WorkspaceStore, Conflict, defaults
 
 FIXTURE = json.loads((ROOT / 'tests/fixtures/collaboration-v1.json').read_text(encoding='utf-8'))
 
