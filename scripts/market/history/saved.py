@@ -14,8 +14,25 @@ def with_daily(packet, stock, listing):
     """Compose verified stored inputs only; never mutate either immutable source."""
     current = stock.get('bars') or []
     info = packet['history']
-    if not current or current[-1]['date'] <= info.get('requested_end', ''):
+    source = packet.get('series', {})
+    newer = bool(current and current[-1]['date'] > info.get('requested_end', ''))
+    reason = None
+    for old_key, new_key in (('isinCode', 'isin_code'), ('listing_exchange', 'listing_exchange_family')):
+        if (listing.get(old_key) and (newer or stock.get(new_key) is not None)
+                and listing[old_key] != stock.get(new_key)):
+            reason = 'listing_identity_changed'
+    # Metadata-only archive lookup may omit a current basis. Explicit conflicts
+    # must still be rejected even when no newer daily bar needs merging.
+    if not reason and (any((newer or stock.get(k) is not None) and source.get(k) != stock.get(k)
+                           for k in ('currency', 'price_basis'))
+                       or newer and source.get('provider') != stock.get('provider')):
+        reason = 'price_basis_changed'
+    if not newer and not reason:
         return packet
+    if not current:
+        return {'series': {**stock, 'bars': []}, 'history': {
+            **info, 'state': 'failed', 'reason': reason, 'daily_update_mode': 'unavailable',
+            'daily_update_reason': reason, 'screening_price_difference': reason == 'price_basis_changed'}}
     dates = [b['date'] for b in current]
     try:
         if dates != sorted(set(dates)):
@@ -27,17 +44,14 @@ def with_daily(packet, stock, listing):
                     or not 0 < b['low'] <= min(b['open'], b['close']) <= max(b['open'], b['close']) <= b['high']):
                 raise ValueError()
     except (ValueError, KeyError, TypeError):
+        if reason:
+            return {'series': {**stock, 'bars': []}, 'history': {
+                **info, 'state': 'failed', 'reason': reason, 'daily_update_mode': 'unavailable',
+                'daily_update_reason': 'invalid_daily_bars', 'screening_price_difference': reason == 'price_basis_changed'}}
         return {**packet, 'history': {**info, 'state': 'partial', 'daily_update_reason': 'invalid_daily_bars'}}
-    source = packet.get('series', {})
     historical = source.get('bars') or []
     prior = {b['date']: b for b in historical}
     overlap = [b for b in current if b['date'] in prior]
-    reason = None
-    for old_key, new_key in (('isinCode', 'isin_code'), ('listing_exchange', 'listing_exchange_family')):
-        if listing.get(old_key) and listing[old_key] != stock.get(new_key):
-            reason = 'listing_identity_changed'
-    if not reason and any(source.get(k) != stock.get(k) for k in ('currency', 'provider', 'price_basis')):
-        reason = 'price_basis_changed'
     if not reason and (not overlap or (historical and historical[-1]['date'] not in dates)):
         reason = 'history_overlap_unavailable'
     if not reason and any(not math.isclose(b[k], prior[b['date']][k], rel_tol=1e-8, abs_tol=1e-8)
@@ -46,6 +60,7 @@ def with_daily(packet, stock, listing):
     combined = current if reason else [b for b in historical if b['date'] < dates[0]] + current
     return {'series': {**stock, 'bars': combined}, 'history': {
         **info, 'state': 'partial' if reason or info['state'] == 'partial' else 'complete',
+        'reason': reason or info.get('reason'),
         'archive_requested_end': info.get('requested_end'), 'requested_end': dates[-1],
         'daily_as_of': dates[-1], 'daily_update_mode': 'daily_only' if reason else 'merged',
         'daily_update_reason': reason, 'overlap_count': len(overlap),

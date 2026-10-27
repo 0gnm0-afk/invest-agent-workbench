@@ -1,4 +1,5 @@
 from contextlib import closing
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import sqlite3
@@ -9,7 +10,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
 from alerts import delivery as telegram
-from alerts.trailing import TrailingStore
+from alerts.trailing import POLICY, TrailingStore, warning_id
 
 
 class TelegramWarnings(unittest.TestCase):
@@ -18,8 +19,13 @@ class TelegramWarnings(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.store = TrailingStore(self.root/'runtime/trailing-warnings.sqlite3')
+        self.now = datetime(2026,10,6,1,tzinfo=timezone.utc)
+        clock = patch('alerts.trailing.datetime', wraps=datetime)
+        self.clock = clock.start()
+        self.addCleanup(clock.stop)
+        self.clock.now.return_value = self.now
         self.config = dict(token='fake', chat='123', enabled_at='2026-10-06T00:00:00+00:00')
-        self.event = dict(id='warning1', key='private', account='ACCOUNT_PRIVATE', market='KR', symbol='005930',
+        self.event = dict(id='warning1', key='ACCOUNT_PRIVATE|KR|005930', account='ACCOUNT_PRIVATE', market='KR', symbol='005930',
             name='합성종목', currency='KRW', date='2026-10-05', created_at='2026-10-06T01:00:00+00:00',
             kind='trailing', policy='high95-approach-v2', alert_threshold=266150, tolerance=3000, close=263000, threshold=263150, line=263150, high=277000, atr=6000, ma5=266000,
             average_cost=212345, reason='종가가 최종 트레일링 경고선에 접촉·이탈')
@@ -27,8 +33,14 @@ class TelegramWarnings(unittest.TestCase):
 
     def add(self, **changes):
         e = {**self.event, **changes}
+        e['id'] = warning_id(e['key'], 1, e['date'], e['kind'])
+        position = {k:e[k] for k in ('key','account','market','symbol','currency')}
+        position.update(active=True, status='warning', issue=None, generation=1, policy=POLICY,
+                        last_date=self.event['date'], account_as_of=self.now.isoformat(),
+                        approaching={kind:True for kind in ('trailing','ma5','ma10')})
         with closing(self.store.connect()) as db, db:
             db.execute('INSERT OR REPLACE INTO warnings VALUES(?,?)',(e['id'],json.dumps(e)))
+            db.execute('INSERT OR REPLACE INTO monitors VALUES(?,?)',(position['key'],json.dumps(position)))
 
     def send(self, text):
         self.sent.append(text)
@@ -110,25 +122,83 @@ class TelegramWarnings(unittest.TestCase):
         self.assertFalse(self.sent)
         self.assertEqual(len(self.store.read()['events']),1)
 
-    def test_calculated_three_events_reach_delivery_and_no_repeat(self):
-        from datetime import datetime,timedelta,timezone
-        now=datetime(2026,10,6,1,tzinfo=timezone.utc)
-        bundle={'as_of':now.isoformat(),'query_state':'received','accounts':[
+    def calculated_events(self):
+        bundle={'as_of':self.now.isoformat(),'query_state':'received','accounts':[
             {'alias':'ACCOUNT_PRIVATE','holdings_complete':True,'positions':[
                 {'market':'US','symbol':'S','currency':'USD','quantity':2,'average_cost':90}]}]}
         bars=[{'date':(datetime(2026,9,19)+timedelta(days=i)).date().isoformat(),
                'high':102,'low':98,'close':100} for i in range(15)]
         def calculate():
             return self.store.update(bundle,{'US:S':{'currency':'USD','bars':bars}},
-                {'US':bars[-1]['date']},now,sessions={'US':[b['date'] for b in bars]})
+                {'US':bars[-1]['date']},self.now,sessions={'US':[b['date'] for b in bars]})
         calculate()
         bars.append({'date':'2026-10-04','high':105,'low':103,'close':104});calculate()
         bars.append({'date':'2026-10-05','high':96,'low':94,'close':95})
         events=calculate()['events'];self.assertEqual({e['kind'] for e in events},{'trailing','ma5','ma10'})
+        return bundle, calculate
+
+    def test_calculated_three_events_reach_delivery_and_no_repeat(self):
+        _, calculate = self.calculated_events()
         self.assertEqual(self.dispatch()['counts'],{'sent':3})
         calculate();self.dispatch();self.assertEqual(len(self.sent),3)
         self.assertTrue(all('0.5 ATR' in body for body in self.sent))
         self.assertNotIn('ACCOUNT_PRIVATE',''.join(self.sent))
+
+    def failed_calculated_events(self):
+        bundle, calculate = self.calculated_events()
+        def reject(_): raise telegram.DeliveryError('failed','telegram_http_429')
+        self.assertEqual(self.dispatch(reject)['counts'], {'failed':1})
+        return bundle, calculate
+
+    def test_closed_holding_blocks_failed_and_unsent_events(self):
+        bundle, calculate = self.failed_calculated_events()
+        bundle['accounts'][0]['positions'] = []
+        before = calculate()
+        self.assertEqual(before['positions'][0]['status'], 'closed')
+        self.assertEqual(self.dispatch()['counts'], {'failed':1})
+        self.assertFalse(self.sent)
+        self.assertEqual(self.store.read(), before)
+        with closing(sqlite3.connect(self.root/'runtime/telegram-delivery/delivery.sqlite3')) as db:
+            self.assertEqual(db.execute('SELECT state,attempts FROM deliveries').fetchall(), [('failed',1)])
+
+    def test_incomplete_holding_blocks_retry_until_confirmed_again(self):
+        bundle, calculate = self.failed_calculated_events()
+        bundle['query_state'] = 'partial'
+        bundle['accounts'][0]['holdings_complete'] = False
+        before = calculate()
+        self.assertEqual(before['positions'][0]['issue'], 'account_stale_or_incomplete')
+        self.assertEqual(self.dispatch()['counts'], {'failed':1})
+        self.assertFalse(self.sent)
+        self.assertEqual(self.store.read(), before)
+        bundle['query_state'] = 'received'
+        bundle['accounts'][0]['holdings_complete'] = True
+        calculate()
+        self.assertEqual(self.dispatch()['counts'], {'sent':3})
+        with closing(sqlite3.connect(self.root/'runtime/telegram-delivery/delivery.sqlite3')) as db:
+            self.assertEqual(sorted(r[0] for r in db.execute('SELECT attempts FROM deliveries')), [1,1,2])
+
+    def test_same_day_reentry_does_not_send_previous_generation(self):
+        bundle, calculate = self.calculated_events()
+        original = {e['id'] for e in self.store.read()['events']}
+        position = bundle['accounts'][0]['positions'].pop()
+        calculate()
+        bundle['accounts'][0]['positions'].append(position)
+        current = calculate()
+        self.assertEqual(current['positions'][0]['generation'], 2)
+        eligible = self.store.delivery_events({'US':'2026-10-05'}, self.now)
+        self.assertTrue(eligible)
+        self.assertFalse(original.intersection(e['id'] for e in eligible))
+        self.assertEqual(self.dispatch()['counts'], {'sent':len(eligible)})
+        self.assertEqual(self.store.read(), current)
+
+    def test_stale_account_blocks_delivery_without_rewriting_events(self):
+        self.calculated_events()
+        before = self.store.read()
+        self.assertEqual(len(self.store.delivery_events({'US':'2026-10-05'}, self.now+timedelta(hours=24))), 3)
+        self.clock.now.return_value = self.now+timedelta(hours=24,seconds=1)
+        self.assertEqual(self.dispatch()['counts'], {})
+        self.assertFalse(self.sent)
+        self.assertEqual(self.store.read(), before)
 
     def test_configuration_dpapi_roundtrip_no_plaintext(self):
         with patch.dict('os.environ',{'TELEGRAM_BOT_TOKEN':'123:secret','TELEGRAM_CHAT_ID':'123'}):

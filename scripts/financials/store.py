@@ -203,18 +203,17 @@ class FinancialStore:
             save(folder/'attempt.json',dict(state='failed',started_at=started,finished_at=now(),error=error,stage='갱신 실패 · 이전 성공 보존'),atomic=True)
         finally:unlock(lease)
 
-    def import_collected(self,key,stock,seed):
-        folder=self.folder(key);lease=lock_file(folder/'request.lock')
-        if lease is None:raise ValueError('busy')
-        self._work(key,stock,lease,seed=seed)
-        return self.read(key)
-
-    def recalculate_saved(self,key,supplement=False):
-        """Verify and retain saved inputs; fetch missing annual disclosures only if requested."""
+    def recalculate_saved(self,key,supplement=False,*,stock=None):
+        """Verify saved inputs before recalculating, optionally with current saved prices."""
         folder=self.folder(key);lease=lock_file(folder/'request.lock')
         if lease is None:raise ValueError('busy')
         try:
-            pointer=json.loads((folder/'latest.json').read_bytes());sid=pointer['snapshot']
+            try:
+                pointer=json.loads((folder/'latest.json').read_bytes())
+            except FileNotFoundError:
+                if stock is not None:raise ValueError('saved_financial_required') from None
+                raise
+            sid=pointer['snapshot']
             if not re.fullmatch('[a-f0-9]{32}',sid):raise ValueError('invalid_snapshot')
             seed=folder/'snapshots'/sid
             manifest_raw=(seed/'manifest.json').read_bytes()
@@ -231,7 +230,28 @@ class FinancialStore:
             prior=json.loads((seed/'result.json').read_bytes())
             if prior.get('key')!=key or prior.get('snapshot_id')!=sid:
                 raise ValueError('saved_identity_mismatch')
-            stock=json.loads((seed/'saved-price.json').read_bytes())
+            saved_stock=json.loads((seed/'saved-price.json').read_bytes())
+            if stock is not None:
+                market,symbol=key.split(':',1)
+                if (not isinstance(stock,dict) or any(
+                        value.get('market')!=market or value.get('symbol')!=symbol
+                        for value in (saved_stock,stock))):
+                    raise ValueError('saved_price_identity_mismatch')
+                for field in ('currency','isin_code','listing_exchange_family','price_basis'):
+                    if (saved_stock.get(field) is not None and stock.get(field) is not None
+                            and saved_stock[field]!=stock[field]):
+                        raise ValueError('saved_price_identity_or_basis_mismatch')
+                if stock.get('currency') not in (None,{'KR':'KRW','US':'USD'}[market]):
+                    raise ValueError('saved_price_identity_or_basis_mismatch')
+                history=stock.get('history') or {}
+                if (not stock.get('bars') or history.get('state') not in (None,'complete','partial')
+                        or history.get('daily_update_reason') in ('listing_identity_changed','price_basis_changed')
+                        or history.get('screening_price_difference')):
+                    raise ValueError('saved_price_unavailable')
+                # Retain stored auxiliary prices and provenance absent from the new view.
+                stock={**saved_stock,**stock}
+            else:
+                stock=saved_stock
         except Exception:
             unlock(lease)
             raise

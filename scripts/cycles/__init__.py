@@ -64,12 +64,12 @@ def context(service, stock_key, account_alias=None):
     selected = next((a for a in accounts if a['alias'] == account_alias), None) if account_alias else next(
         (a for a in accounts if a['cash'] is not None), accounts[0] if accounts else None)
     cases = service.rows('analysis_cases')
-    case = next((c for c in reversed(cases) if c['stock_key'] == stock_key), None)
+    case = next((c for c in reversed(cases) if c['stock_key'] == stock_key and not c.get('test_record')), None)
     chart = service.histories.view(stock, '1d')
     return {'stock_key': stock_key, 'name': stock.get('name', stock_key), 'currency': currency,
             'accounts': accounts, 'account_alias': selected['alias'] if selected else None,
             'budget': selected['cash'] if selected else None,
-            'initial_holding': deepcopy(selected['holding']) if selected else {'quantity': 0, 'average_price': '0'},
+            'initial_holding': deepcopy(selected['holding']) if selected else {'quantity': None, 'average_price': None},
             'chart': chart, 'analysis_key': case['id'] if case else None,
             'as_of': bundle.get('as_of'), 'stale': bundle.get('stale'),
             'query_state': bundle.get('query_state'), 'cash_basis': 'saved_cash_not_orderable_guarantee'}
@@ -182,7 +182,10 @@ def dispatch(service, op, args, origin, principal, session):
             # Generating a revision must preserve actual accounting and the user's edited draft.
             plan = deepcopy(cycle['draft']['plan'])
             plan['budget'] = budget if 'budget' in args else plan['budget']
-            source, _ = source_for(service,ctx,origin)
+            # An existing explicitly marked test cycle must remain a test when refreshed.
+            source_context = ({**ctx,'analysis_key':cycle['draft']['source']['analysis_key']}
+                              if cycle['draft']['source'].get('test_record') else ctx)
+            source, _ = source_for(service,source_context,origin)
             cycle = store.save_draft(cycle['stock_key'],plan,cycle_id=cycle['cycle_id'],
                                      expected_revision=cycle['revision'],source=source)
         else:

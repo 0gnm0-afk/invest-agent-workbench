@@ -1,6 +1,7 @@
 """Saved-input -> Agent draft -> 108 results -> browser adoption/fills, fully isolated."""
 from copy import deepcopy
 from contextlib import closing
+from datetime import datetime, timezone
 from pathlib import Path
 import sys
 import threading
@@ -79,6 +80,78 @@ class CycleApiTests(unittest.TestCase):
         self.assertIsNone(self.rpc('context',{'stock_key':'US:SYNTH'})['initial_holding']['quantity'])
         a.update(positions=[],holdings_complete=False)
         self.assertIsNone(self.rpc('context',{'stock_key':'US:SYNTH'})['initial_holding']['quantity'])
+
+    def test_missing_account_list_preserves_unknown_until_explicit_user_input(self):
+        self.accounts.update(accounts=[],query_state='failed',stale=True)
+        ctx=self.rpc('context',{'stock_key':'US:SYNTH'})
+        self.assertEqual(ctx['initial_holding'],{'quantity':None,'average_price':None})
+        self.assertEqual(ctx['query_state'],'failed');self.assertTrue(ctx['stale'])
+        from cycles.agent import manager_for
+        with patch.object(manager_for(self.store.path,self.root),'start',return_value={'state':'queued'}):
+            c=self.rpc('request_draft',{'stock_key':'US:SYNTH','budget':'1000'})['cycle']
+        p=plan();p.update(account_alias=None,initial_holding=ctx['initial_holding'])
+        c=self.rpc('save_draft',{'cycle_id':c['cycle_id'],'expected_revision':c['revision'],'plan':p},role='collaboration')['cycle']
+        result=self.rpc('calculate',{'cycle_id':c['cycle_id'],'plan':p})
+        self.assertIn('initial_holding.quantity',result['needs_input'])
+        self.assertEqual(result['evaluated_result_count'],0)
+        p['initial_holding']={'quantity':0,'average_price':'0'}
+        c=self.rpc('save_draft',{'cycle_id':c['cycle_id'],'expected_revision':c['revision'],'plan':p})['cycle']
+        self.assertEqual(c['draft']['plan']['initial_holding'],p['initial_holding'])
+        self.assertEqual(self.rpc('calculate',{'cycle_id':c['cycle_id'],'plan':p})['evaluated_result_count'],108)
+
+    def test_complete_empty_account_is_still_confirmed_zero(self):
+        self.prepare()
+        ctx=self.rpc('context',{'stock_key':'US:SYNTH','account_alias':'synthetic'})
+        self.assertEqual(ctx['initial_holding'],{'quantity':0,'average_price':'0'})
+
+    def test_general_creation_skips_test_cases_and_explicit_source_remains_test(self):
+        # The fixture initially has only an explicitly marked test analysis.
+        self.assertIsNone(self.rpc('context',{'stock_key':'US:SYNTH'})['analysis_key'])
+        production=self.prepare()['draft']['source']
+        self.assertFalse(production['test_record'])
+        test=self.s.dispatch('create',{'stock_key':'US:SYNTH','test_record':True},self.origin)['case']
+        ctx=self.rpc('context',{'stock_key':'US:SYNTH','account_alias':'synthetic'})
+        self.assertEqual(ctx['analysis_key'],production['analysis_key'])
+        from cycles import source_for
+        explicit,_=source_for(self.s,{**ctx,'analysis_key':test['id']},self.origin)
+        self.assertTrue(explicit['test_record'])
+        from cycles.agent import manager_for
+        with patch.object(manager_for(self.store.path,self.root),'start',return_value={'state':'queued'}):
+            c=self.rpc('request_draft',{'stock_key':'US:SYNTH','account_alias':'synthetic','budget':'1000'})['cycle']
+        self.assertEqual(c['draft']['source']['analysis_key'],production['analysis_key'])
+        self.assertFalse(c['draft']['source']['test_record'])
+
+    def test_missing_stable_identity_can_be_drafted_but_cannot_alert(self):
+        self.stock.pop('isin_code')
+        c=self.prepare();p=plan()
+        c=self.rpc('save_draft',{'cycle_id':c['cycle_id'],'expected_revision':c['revision'],'plan':p},role='collaboration')['cycle']
+        c=self.rpc('approve',{'cycle_id':c['cycle_id'],'draft_version':c['draft_version'],
+                             'combination_id':COMBO,'expected_revision':c['revision']})['cycle']
+        self.assertIsNone(c['adopted']['source']['identity']['stable_id'])
+        now=datetime.now(timezone.utc)
+        self.accounts.update(as_of=now.isoformat(),query_state='received')
+        from cycles.alerts import TradeCycleAlertStore
+        result=TradeCycleAlertStore(self.store.path).update([c],self.accounts,
+            {'US:SYNTH':{**self.stock,'isin_code':'DIFFERENT_INSTRUMENT'}},
+            {'US':self.bars[-1]['date']},now,{'US':[b['date'] for b in self.bars]})
+        self.assertEqual(result['states'][0]['status'],'deferred')
+        self.assertEqual(result['states'][0]['issue'],'cycle_identity_unconfirmed')
+        self.assertEqual(result['events'],[])
+        self.assertEqual(self.rpc('read',{'cycle_id':c['cycle_id']})['cycle'],c)
+
+    def test_existing_test_cycle_refresh_preserves_explicit_test_source(self):
+        self.prepare()
+        test=self.s.dispatch('create',{'stock_key':'US:SYNTH','test_record':True},self.origin)['case']
+        from cycles import source_for
+        ctx=self.rpc('context',{'stock_key':'US:SYNTH','account_alias':'synthetic'})
+        source,_=source_for(self.s,{**ctx,'analysis_key':test['id']},self.origin)
+        c=TradeCycleStore(self.store.path).save_draft('US:SYNTH',plan(),source=source)
+        from cycles.agent import manager_for
+        with patch.object(manager_for(self.store.path,self.root),'start',return_value={'state':'queued'}):
+            refreshed=self.rpc('request_draft',{'stock_key':'US:SYNTH','account_alias':'synthetic',
+                'cycle_id':c['cycle_id'],'expected_revision':c['revision']})['cycle']
+        self.assertTrue(refreshed['draft']['source']['test_record'])
+        self.assertEqual(refreshed['draft']['source']['analysis_key'],test['id'])
 
     def test_auto_job_saves_draft_and_stale_result_cannot_overwrite_user_edit(self):
         c=self.prepare(); store=TradeCycleStore(self.store.path)

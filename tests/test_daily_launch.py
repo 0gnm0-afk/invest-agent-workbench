@@ -57,6 +57,17 @@ class Launch(unittest.TestCase):
     def test_first_executes_second_and_new_gate_reuse(self):
         a=self.gate.once(NOW);b=self.gate.once(NOW);c=DailyLaunch(self.root,self.runner,self.plan).once(NOW)
         self.assertFalse(a['reused']);self.assertTrue(b['reused']);self.assertTrue(c['reused']);self.assertEqual(len(self.calls),1)
+    def test_cycle_state_survives_receipt_publication_and_reuse(self):
+        self.assertNotIn('trade_cycle_state', self.gate.once(NOW))
+        for state in ('evaluated', 'deferred', 'unavailable'):
+            with self.subTest(state=state):
+                self.gate.runner = lambda plan, progress: {**self.result('cycle-'+state), 'trade_cycle_state':state}
+                result = self.gate.once(NOW, retry=True)
+                persisted = self.gate.read(self.plan(NOW)['day'])
+                self.assertEqual(result['trade_cycle_state'], state)
+                self.assertEqual(persisted['trade_cycle_state'], state)
+                self.assertEqual(self.gate.public(persisted)['trade_cycle_state'], state)
+                self.assertEqual(self.gate.once(NOW)['trade_cycle_state'], state)
     def test_next_kst_day_runs_once(self):
         self.gate.once(NOW);self.gate.once(datetime(2026,9,30,16,tzinfo=timezone.utc));self.assertEqual(len(self.calls),2)
     def test_explicit_retry_only_archives_receipt(self):

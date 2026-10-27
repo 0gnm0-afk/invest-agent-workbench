@@ -70,6 +70,22 @@ class CycleAlerts(unittest.TestCase):
         result = self.update(); self.assertFalse(result['events'])
         self.assertEqual(result['states'][0]['issue'], 'market_identity_or_basis_changed')
 
+    def test_missing_stable_identity_defers_instead_of_matching_by_symbol(self):
+        self.cycle['adopted']['source']['identity']['stable_id']=None
+        self.stock['isin_code']='DIFFERENT_INSTRUMENT'
+        result=self.update()
+        self.assertEqual(result['states'][0]['status'],'deferred')
+        self.assertEqual(result['states'][0]['issue'],'cycle_identity_unconfirmed')
+        self.assertFalse(result['events'])
+
+    def test_delivery_rejects_old_evaluated_events_without_confirmed_identity(self):
+        self.assertEqual(len(self.update()['events']),1)
+        with patch('cycles.alerts.saved_cycles',return_value=[self.cycle]):
+            self.assertEqual(len(delivery_events(self.root,[],{'US':'2026-10-13'},now=self.now)),1)
+            # Simulate a pre-fix evaluated state with no immutable stable identity.
+            self.cycle['adopted']['source']['identity']['stable_id']=None
+            self.assertFalse(delivery_events(self.root,[],{'US':'2026-10-13'},now=self.now))
+
     def test_changed_history_and_session_gap_defer(self):
         self.update(); self.bars[-1]['close'] = 98; result = self.update()
         self.assertEqual(result['states'][0]['issue'], 'processed_price_history_changed')
@@ -138,15 +154,20 @@ class CycleAlerts(unittest.TestCase):
         self.assertIn('/#cycle?id=tc_synthetic', sent[0]); self.assertNotIn('PRIVATE_ACCOUNT', sent[0])
 
     def test_existing_ma_warning_enriched_without_second_cycle_notification(self):
-        from alerts.trailing import TrailingStore
+        from alerts.trailing import TrailingStore, warning_id
         self.action['kind'] = 'sell'; self.action['trigger'] = dict(kind='ma5', comparator='lte', evaluation='daily_close')
         self.assertFalse(self.update()['events'])
-        warning = dict(id='existing-ma5', kind='ma5', policy='high95-approach-v2', account='PRIVATE_ACCOUNT',
+        key='PRIVATE_ACCOUNT|US|S'
+        warning = dict(id=warning_id(key,1,'2026-10-13','ma5'), key=key, kind='ma5', policy='high95-approach-v2', account='PRIVATE_ACCOUNT',
             market='US', symbol='S', name='합성종목', currency='USD', date='2026-10-13',
             created_at=self.now.isoformat(), threshold=100, close=101, alert_threshold=102,
             tolerance=2, atr=4, high=110, reason='합성 접근', average_cost=777)
+        monitor=dict(key=key,account='PRIVATE_ACCOUNT',market='US',symbol='S',currency='USD',generation=1,
+            active=True,status='warning',issue=None,policy='high95-approach-v2',last_date='2026-10-13',
+            approaching={'ma5':True},account_as_of=self.now.isoformat())
         store = TrailingStore(self.root/'runtime/trailing-warnings.sqlite3')
         with closing(store.connect()) as db, db:
+            db.execute('INSERT INTO monitors VALUES(?,?)',(key,json.dumps(monitor)))
             db.execute('INSERT INTO warnings VALUES(?,?)', (warning['id'], json.dumps(warning)))
         config = dict(enabled_at=(self.now-timedelta(hours=1)).isoformat(), token='fake', chat='fake'); sent=[]
         with patch('cycles.alerts.saved_cycles', return_value=[self.cycle]):
@@ -157,8 +178,9 @@ class CycleAlerts(unittest.TestCase):
         self.assertIn('5일선 이하',sent[0]); self.assertIn('접근 경고와 계획 조건 충족은 다를 수 있습니다',sent[0])
         self.assertNotIn('PRIVATE_ACCOUNT', sent[0]); self.assertNotIn('777', sent[0])
         # Corrupt new-feature storage must not disable the existing warning path.
-        warning['id']='existing-after-cycle-error'
+        monitor['generation']=2;warning['id']=warning_id(key,2,'2026-10-13','ma5')
         with closing(store.connect()) as db, db:
+            db.execute('UPDATE monitors SET payload=? WHERE key=?',(json.dumps(monitor),key))
             db.execute('INSERT INTO warnings VALUES(?,?)', (warning['id'], json.dumps(warning)))
         with patch('cycles.alerts.saved_cycles',side_effect=ValueError('cycle_saved_record_integrity_failed')):
             result=telegram.dispatch(self.root,{'US':'2026-10-13'},config=config,

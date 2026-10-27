@@ -14,6 +14,10 @@ from alerts import indicators, packed, stamp, equity, number, saved_inputs
 POLICY = 'high95-approach-v2'
 
 
+def warning_id(key, generation, day, kind):
+    return hashlib.sha256(f"{key}|{generation}|{day}|{kind}|{POLICY}".encode()).hexdigest()
+
+
 def levels(bar, line):
     return {'trailing': line, 'ma5': bar['ma5'], 'ma10': bar['ma10']}
 
@@ -53,6 +57,31 @@ class TrailingStore:
             except (KeyError, TypeError, ValueError):
                 p['issue'] = 'account_stale_or_incomplete'
         return value
+
+    def delivery_events(self, targets, now=None):
+        """Current eligible warnings; other dates remain only for delivery-ledger expiry."""
+        value = self.public(now or datetime.now(timezone.utc), targets)
+        positions = {p['key']: p for p in value['positions']}
+        events = []
+        for event in value['events']:
+            if event.get('policy') != POLICY:
+                continue
+            if event['date'] != targets.get(event['market']):
+                events.append(event)  # dispatch records expired without sending.
+                continue
+            position = positions.get(event.get('key'))
+            if (not position or not position.get('active') or position.get('status') != 'warning'
+                    or position.get('issue') or position.get('policy') != POLICY
+                    or position.get('last_date') != event['date']
+                    or not position.get('approaching', {}).get(event['kind'])):
+                continue
+            generation = position.get('generation')
+            if (type(generation) is not int or generation < 1
+                    or any(event.get(k) != position.get(k) for k in ('account', 'market', 'symbol', 'currency'))
+                    or event['id'] != warning_id(position['key'], generation, event['date'], event['kind'])):
+                continue
+            events.append(event)
+        return events
 
     def update(self, bundle, stocks, targets, now=None, sessions=None):
         now = now or datetime.now(timezone.utc)
@@ -169,7 +198,7 @@ class TrailingStore:
                                     if bar['date'] == latest['date']:
                                         for kind, threshold in levels(bar, state['line']).items():
                                             if flags[kind] and approach_pending[kind]:
-                                                event_id = hashlib.sha256(f"{key}|{state['generation']}|{bar['date']}|{kind}|{POLICY}".encode()).hexdigest()
+                                                event_id = warning_id(key, state['generation'], bar['date'], kind)
                                                 label = {'trailing':'고점 대비 5% 트레일링선', 'ma5':'5일 이동평균선', 'ma10':'10일 이동평균선'}[kind]
                                                 event = dict(id=event_id, key=key, account=alias, market=p['market'], symbol=p['symbol'], currency=p['currency'],
                                                     date=bar['date'], kind=kind, policy=POLICY, close=bar['close'], threshold=threshold,

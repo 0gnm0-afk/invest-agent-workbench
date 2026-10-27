@@ -5,6 +5,14 @@ vm.runInThisContext(fs.readFileSync('dashboard/cycles/trade-cycle.js','utf8'));
 const ui=window.WorkbenchTradeCycle;
 const base=ui.incompletePlan({stock_key:'US:SYNTH',currency:'USD',budget:'1,000.50',initial_holding:{quantity:null,average_price:null}});
 const normalized=ui.normalizePlan(base);assert.equal(normalized.budget,'1000.50');assert.equal(normalized.initial_holding.quantity,null);assert.equal(normalized.buy_steps[0].confirmation_price,null);assert.equal(base.budget,'1,000.50');
+assert.deepEqual(ui.incompletePlan({currency:'USD'}).initial_holding,{quantity:null,average_price:null});
+assert.deepEqual(ui.normalizePlan({...base,initial_holding:null}).initial_holding,{quantity:null,average_price:null});
+assert.deepEqual(ui.normalizePlan({...base,initial_holding:{quantity:0,average_price:'0'}}).initial_holding,{quantity:0,average_price:'0'});
+const unavailable=ui.contextHTML({query_state:'failed',stale:true,accounts:[],as_of:'2026-10-01',initial_holding:{quantity:null,average_price:null}});
+assert.match(unavailable,/조회 실패/);assert.match(unavailable,/오래된 저장 자료/);assert.match(unavailable,/2026-10-01/);assert.match(unavailable,/시작 보유 수량 미확인/);
+const confirmed=ui.contextHTML({query_state:'received',stale:false,accounts:[{alias:'synthetic'}],as_of:'2026-10-13',initial_holding:{quantity:0,average_price:'0'}});
+assert.match(confirmed,/계좌 자료 확인됨/);assert.doesNotMatch(confirmed,/보유 수량 미확인|계좌 목록 미확보|cycle-warning/);
+assert.doesNotMatch(ui.contextHTML({context_state:'unavailable',context_error:'<script>bad</script>'}),/<script>/);
 assert.throws(()=>ui.normalizePlan({...base,budget:'10e3'}),/숫자/);assert.throws(()=>ui.normalizePlan({...base,initial_holding:{quantity:1.5,average_price:'20'}}),/정수/);
 const metric=pnl=>({phase:'holding',cash:'650.5',quantity:2,average_price:'100.50',total_pnl:pnl,realized_pnl:'0',unrealized_pnl:pnl,equity:'1100',return_pct:'10',mark_price:'150'});
 const a={id:'a',buy_ratios:[20,30,50],sell_ratios:[50,30,20],outcomes:{bullish:metric('100.05'),neutral:metric('25'),bearish:metric('-50')},pareto:true};
@@ -28,4 +36,52 @@ const progress=ui.progressHTML(cycle,'USD');assert.match(progress,/원래 확정
 assert.match(ui.progressHTML({...cycle,state:{...cycle.state,phase:'selling',cancelled_buy_steps:[2]}},'USD'),/매도 전환으로 취소/);
 assert.match(ui.editorHTML({...base,stop:null}),/data-trigger="stop:kind"/);
 const index=fs.readFileSync('dashboard/shell/index.html','utf8');assert.match(index,/src="\/trade-cycle.js"/);assert.match(index,/href="#cycles"/);
-console.log('trade-cycle UI PASS: missing values retained, 36-combination selection/sorting, currency formatting, escaped agent text, explicit triggers, actual markers/pending lines, original/current projection, re-entry and assets');
+async function storedRecordWhileContextPending(){
+ const original={fetch:global.fetch,location:global.location,document:global.document,setTimeout:global.setTimeout,clearTimeout:global.clearTimeout};
+ // A small DOM substitute records rendering and input handlers without a server.
+ class Element{
+  constructor(){this.nodes=new Map();this.textContent='';this.value='';this.isConnected=true;this.classList={add(){},contains(){return false;},toggle(){}};}
+  set innerHTML(value){this.html=value;this.nodes.clear();}
+  get innerHTML(){return this.html||'';}
+  querySelector(selector){if(selector==='[data-fill-form]')return null;if(!this.nodes.has(selector))this.nodes.set(selector,new Element());return this.nodes.get(selector);}
+  querySelectorAll(selector){return selector==='[data-plan]'?[this.querySelector('[data-plan="budget"]')]:[];}
+  addEventListener(){}
+  contains(){return false;}
+ }
+ global.setTimeout=()=>1;global.clearTimeout=()=>{};global.document={activeElement:null};
+ try{
+  for(const outcome of ['failed','ready']){
+   let resolveContext;const contextResponse=new Promise(resolve=>resolveContext=resolve),calls=[];
+   const saved={...cycle,cycle_id:'cy_synthetic',stock_key:'US:SYNTH',revision:4,draft_version:2,
+    draft:{version:2,plan,source:{as_of:'2026-10-01'}},next_steps:[]};
+   const host=new Element();host.querySelector('[data-plan="budget"]').dataset={plan:'budget'};
+   const queryAll=host.querySelectorAll.bind(host);host.querySelectorAll=selector=>{const rows=queryAll(selector);for(const row of rows)row.dataset={plan:'budget'};return rows;};
+   global.location={hash:'#cycle?id=cy_synthetic'};
+   global.fetch=async(url,options)=>{
+    if(url==='/health')return {ok:true,json:async()=>({token:'synthetic'})};
+    const request=JSON.parse(options.body);calls.push(request);
+    if(request.op==='cycle_read')return {ok:true,json:async()=>structuredClone({cycle:saved,job:{state:'idle'}})};
+    if(request.op==='cycle_context')return contextResponse;
+    if(request.op==='cycle_calculate')return {ok:true,json:async()=>result};
+    throw Error('unexpected RPC '+request.op);
+   };
+   const mounted=await Promise.race([ui.mount(host,{page:'cycle'}).then(()=>true),new Promise(resolve=>original.setTimeout(()=>resolve(false),200))]);
+   assert.equal(mounted,true,'stored record must render without waiting for current context');
+   assert.match(host.innerHTML,/현재 진행/);assert.match(host.innerHTML,/실제 거래 입력/);assert.match(host.innerHTML,/120\.00/);
+   assert.match(host.querySelector('[data-cycle-context]').innerHTML,/불러오는 중/);
+   const budget=host.querySelector('[data-plan="budget"]');budget.value='1234';budget.oninput();
+   const rendered=host.innerHTML;
+   resolveContext(outcome==='failed'?{ok:false,json:async()=>({error:'unknown_account'})}:{ok:true,json:async()=>({
+    name:'Synthetic name',currency:'USD',query_state:'received',stale:false,accounts:[{alias:'synthetic'}],
+    initial_holding:{quantity:0,average_price:'0'},as_of:'2026-10-13',chart:{bars:[{date:'2026-10-13',open:110,high:120,low:100,close:115}]}})});
+   await new Promise(resolve=>original.setTimeout(resolve,0));
+   assert.equal(host.innerHTML,rendered,'context completion must not replace the editor or actual ledger');
+   assert.equal(host.querySelector('[data-plan="budget"]'),budget);assert.equal(budget.value,'1234');
+   const notice=host.querySelector('[data-cycle-context]').innerHTML;
+   if(outcome==='failed'){assert.match(notice,/현재 계좌 목록에 해당 계좌가 없습니다/);assert.match(notice,/계속 확인/);assert.match(notice,/2026-10-01/);}
+   else{assert.match(notice,/확인됨/);assert.match(notice,/2026-10-13/);assert.match(notice,/계획 입력의 계좌 기준 2026-10-01/);assert.equal(host.querySelector('[data-cycle-name]').textContent,'Synthetic name');assert.match(host.querySelector('[data-cycle-price-date]').textContent,/2026-10-13/);}
+   assert.equal(calls.filter(c=>c.op==='cycle_context').length,1);assert.ok(calls.every(c=>['cycle_read','cycle_context','cycle_calculate'].includes(c.op)));
+  }
+ }finally{Object.assign(global,original);}
+}
+storedRecordWhileContextPending().then(()=>console.log('trade-cycle UI PASS: unknown/confirmed holdings, account status, pending/failed/current context independent of saved records and edited input, existing calculation/format/marker/asset checks')).catch(error=>{console.error(error);process.exitCode=1;});

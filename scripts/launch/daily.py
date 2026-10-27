@@ -175,6 +175,8 @@ class DailyLaunch:
                     self.save(record)
                     run = self.runner({**plan,'prior_run':record['display_run']}, progress)
                     record.update(run=run.get('output'), state=run['state'], stage='finished', telegram_state=run.get('telegram_state'), trailing_state=run.get('trailing_state'), scenario_state=run.get('scenario_state'), account_attempted=run.get('account_attempted',False), account_state=run.get('account_state'), account_error=run.get('account_error'))
+                    if 'trade_cycle_state' in run:
+                        record['trade_cycle_state'] = run['trade_cycle_state']
                     display = self.usable_run(run.get('output'))
                     if display:
                         record['display_run'] = display

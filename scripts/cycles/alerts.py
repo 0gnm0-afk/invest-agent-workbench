@@ -19,6 +19,11 @@ def active(cycle):
     return bool(cycle.get('adopted')) and cycle.get('state', {}).get('phase') != 'closed'
 
 
+def identity_ready(cycle):
+    ident = ((cycle['adopted'].get('source') or {}).get('identity') or {})
+    return all(ident.get(key) for key in ('stable_id', 'currency', 'price_basis'))
+
+
 def basis(cycle):
     # Saving an unadopted draft must not re-arm or invalidate the live plan.
     evidence = dict(version=cycle['adopted']['version'], combination_id=cycle['adopted'].get('combination_id'),
@@ -98,11 +103,11 @@ class TradeCycleAlertStore:
                     ident = source.get('identity') or {}
                     market, symbol = cycle['stock_key'].split(':', 1)
                     stock = stocks.get(cycle['stock_key'])
-                    if not ident.get('price_basis') or not ident.get('currency'):
+                    if not identity_ready(cycle):
                         raise ValueError('cycle_identity_unconfirmed')
                     if (not stock or stock.get('currency') != ident['currency'] or stock.get('price_basis') != ident['price_basis']
                             or ident.get('market', market) != market or ident.get('symbol', symbol) != symbol
-                            or (ident.get('stable_id') and (stock.get('isin_code') or stock.get('isin')) != ident['stable_id'])
+                            or (stock.get('isin_code') or stock.get('isin')) != ident['stable_id']
                             or (ident.get('exchange') and stock.get('exchange') != ident['exchange'])):
                         raise ValueError('market_identity_or_basis_changed')
                     if not account_ready(bundle, plan.get('account_alias'), now):
@@ -201,7 +206,7 @@ def delivery_events(root, events, targets, *, include_cycles=True, now=None):
         try: age = (now-datetime.fromisoformat(state['account_as_of'])).total_seconds()
         except (KeyError, TypeError, ValueError): continue
         market = state['stock_key'].split(':', 1)[0]
-        if (cycle and state['basis'] == basis(cycle) and state['status'] == 'evaluated'
+        if (cycle and identity_ready(cycle) and state['basis'] == basis(cycle) and state['status'] == 'evaluated'
                 and state.get('date') == targets.get(market) and 0 <= age <= 86400 and not state.get('test_record')):
             states[state['cycle_id']] = state
     result = []

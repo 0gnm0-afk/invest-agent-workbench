@@ -242,9 +242,7 @@ def dispatch(root=ROOT, targets=None, *, config=None, sender=None, include_trail
                 from launch.daily import plan_for
                 targets = plan_for(datetime.now(timezone.utc))['targets']
             from alerts.trailing import TrailingStore
-            # Keep legacy events in storage, but do not send obsolete warning rules.
-            events = [e for e in TrailingStore(root/'runtime/trailing-warnings.sqlite3').read()['events']
-                      if e.get('policy') == 'high95-approach-v2'] if include_trailing else []
+            events = TrailingStore(root/'runtime/trailing-warnings.sqlite3').delivery_events(targets) if include_trailing else []
             from scenarios.monitor import ScenarioStore
             scenario = ScenarioStore(root/'runtime/chart-workspaces.sqlite3').read() if include_scenarios else {'monitors':[], 'events':[]}
             monitors = {m['id']:m for m in scenario['monitors']}

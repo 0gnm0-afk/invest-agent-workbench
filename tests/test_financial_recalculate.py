@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from financials.store import FinancialStore, packed, save
@@ -14,6 +14,9 @@ from financials.store import FinancialStore, packed, save
 
 class RecalculateSaved(unittest.TestCase):
     def setUp(self):
+        for name in ('financials.store.settings','financials.collect.settings'):
+            settings = patch(name,return_value={})
+            settings.start(); self.addCleanup(settings.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.store = FinancialStore(self.temp.name)
         self.key = 'US:ABC'
@@ -75,6 +78,99 @@ class RecalculateSaved(unittest.TestCase):
                 self.store.recalculate_saved(self.key)
             work.assert_not_called()
         self.assertEqual(json.loads((self.folder / 'latest.json').read_bytes())['snapshot'], self.sid)
+
+    def signed_price(self, stock):
+        """Replace and sign only this test's synthetic saved price input."""
+        (self.base/'saved-price.json').write_bytes(packed(stock))
+        manifest=json.loads((self.base/'manifest.json').read_bytes())
+        manifest['files']['saved-price.json']=hashlib.sha256((self.base/'saved-price.json').read_bytes()).hexdigest()
+        (self.base/'manifest.json').write_bytes(packed(manifest))
+        (self.folder/'latest.json').write_bytes(packed(dict(snapshot=self.sid,
+            manifest_sha256=hashlib.sha256((self.base/'manifest.json').read_bytes()).hexdigest())))
+
+    def current_price(self, **overrides):
+        stock=dict(market='US',symbol='ABC',currency='USD',isin_code='SYNTHETIC-ABC',
+                   price_basis='adjusted',history={'state':'complete'},bars=[
+                       dict(date='2026-10-01',open=10,high=12,low=9,close=11,volume=100)])
+        return dict(stock,**overrides)
+
+    def test_price_recalculation_verifies_every_saved_input_before_work(self):
+        pointer=(self.folder/'latest.json').read_bytes()
+        for name in ('source.json','raw/facts.json','saved-price.json','result.json'):
+            with self.subTest(name=name):
+                path=self.base/name; original=path.read_bytes()
+                path.write_bytes(packed({'synthetic_tamper':True}))
+                try:
+                    with patch.object(self.store,'_work') as work:
+                        with self.assertRaisesRegex(ValueError,'saved_input_hash_mismatch'):
+                            self.store.recalculate_saved(self.key,stock=self.current_price())
+                        work.assert_not_called()
+                    self.assertEqual((self.folder/'latest.json').read_bytes(),pointer)
+                    self.assertEqual([p.name for p in (self.folder/'snapshots').iterdir()],[self.sid])
+                finally:
+                    path.write_bytes(original)
+
+    def test_price_recalculation_requires_existing_financial_snapshot(self):
+        with patch.object(self.store,'_work') as work:
+            with self.assertRaisesRegex(ValueError,'saved_financial_required'):
+                self.store.recalculate_saved('US:NEW',stock=self.current_price(symbol='NEW'))
+            work.assert_not_called()
+
+    def test_price_recalculation_preserves_auxiliary_metadata_and_partial_history(self):
+        old=self.current_price(preferred_price={'symbol':'PREFERRED','bar':{'close':5}})
+        self.signed_price(old)
+        before={str(p.relative_to(self.base)):p.read_bytes() for p in self.base.rglob('*') if p.is_file()}
+        updated=self.current_price(history={'state':'partial','reason':'saved_history_quality_flags'})
+        updated['bars'][0]['close']=12
+        with patch('financials.store.Collector') as collector, patch('financials.store.sec_normalize',return_value={}), \
+                patch('financials.store.summarize',return_value={'summary':[]}) as calculate:
+            result=self.store.recalculate_saved(self.key,stock=updated)
+            collector.assert_not_called()
+        used=calculate.call_args.args[1]
+        self.assertEqual(used['preferred_price'],old['preferred_price'])
+        self.assertEqual(used['bars'],updated['bars'])
+        self.assertEqual(used['history'],updated['history'])
+        self.assertNotIn('preferred_price',updated)
+        self.assertEqual(result['state'],'complete')
+        self.assertNotEqual(result['result']['snapshot_id'],self.sid)
+        self.assertEqual(result['result']['source_snapshot_id'],self.sid)
+        self.assertEqual(result['result']['collected_at'],self.prior['collected_at'])
+        for name,raw in before.items():self.assertEqual((self.base/name).read_bytes(),raw)
+
+    def test_price_recalculation_rejects_other_identity_and_basis(self):
+        self.signed_price(self.current_price(listing_exchange_family='NASDAQ'))
+        for fields in ({'market':'KR'},{'symbol':'OTHER'},{'currency':'KRW'},
+                       {'isin_code':'OTHER-ISSUE'},{'price_basis':'unadjusted'},
+                       {'listing_exchange_family':'NYSE'}):
+            with self.subTest(fields=fields), patch.object(self.store,'_work') as work:
+                with self.assertRaisesRegex(ValueError,'saved_price_identity'):
+                    self.store.recalculate_saved(self.key,stock=self.current_price(**fields))
+                work.assert_not_called()
+
+    def test_price_recalculation_rejects_failed_or_incompatible_history(self):
+        for fields in ({'bars':[]},*({'history':{'state':s}} for s in ('failed','excluded','unavailable','pending')),
+                       {'history':{'state':'partial','daily_update_reason':'listing_identity_changed'}},
+                       {'history':{'state':'partial','daily_update_reason':'price_basis_changed'}},
+                       {'history':{'state':'complete','screening_price_difference':True}}):
+            with self.subTest(fields=fields), patch.object(self.store,'_work') as work:
+                with self.assertRaisesRegex(ValueError,'saved_price_unavailable'):
+                    self.store.recalculate_saved(self.key,stock=self.current_price(**fields))
+                work.assert_not_called()
+
+    def test_analysis_price_refresh_uses_store_contract_without_snapshot_paths(self):
+        from types import SimpleNamespace
+        from analysis.service import AnalysisService
+        service=AnalysisService.__new__(AnalysisService)
+        stock=self.current_price()
+        service.case=lambda key:dict(id=key,stock_key=self.key)
+        service.view=lambda:({}, {self.key:stock})
+        service.histories=SimpleNamespace(saved=SimpleNamespace(stocks={}),view=lambda s,f:dict(s,timeframe=f))
+        service.financials=Mock(spec=['recalculate_saved'])
+        service.financials.recalculate_saved.return_value=dict(state='complete',attempt={},result={'snapshot_id':'new'})
+        result=service.dispatch('refresh',{'analysis_key':'synthetic','mode':'financial_price_recalculate'},'')
+        service.financials.recalculate_saved.assert_called_once_with(self.key,stock=dict(stock,timeframe='1d'))
+        self.assertEqual(result['snapshot_id'],'new')
+        self.assertEqual(result['scope'],'saved_disclosures_and_saved_prices_no_network')
 
     def test_failed_calculation_keeps_old_success(self):
         with patch('financials.store.sec_normalize', side_effect=ValueError('bad period')):

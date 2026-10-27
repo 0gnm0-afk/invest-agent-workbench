@@ -6,7 +6,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from market.history.saved import packed
@@ -21,6 +21,8 @@ def bar(day, price=10):
 
 class SavedHistoryTests(unittest.TestCase):
     def setUp(self):
+        policy=patch('market.scope.load',return_value={'records':[],'lifecycle_records':[]})
+        policy.start(); self.addCleanup(policy.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.folder = self.root/'us-history/sample'
@@ -31,7 +33,7 @@ class SavedHistoryTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def fixture(self, rows=None, invalid=None, non_sessions=None, gaps=None, stale=False, market='US', empty=False):
+    def fixture(self, rows=None, invalid=None, non_sessions=None, gaps=None, stale=False, market='US', empty=False, listing_values=None):
         self.folder = self.root / (market.lower() + '-history/sample')
         self.folder.mkdir(parents=True, exist_ok=True)
         currency = 'KRW' if market == 'KR' else 'USD'
@@ -40,6 +42,7 @@ class SavedHistoryTests(unittest.TestCase):
         rows = rows or [bar('1990-01-02'), bar('2016-01-04'), bar('2026-09-30')]
         if empty: rows = []
         listing = dict(symbol='AAA', market=market, name='Example')
+        listing.update(listing_values or {})
         data = dict(symbol='AAA', market=market, currency=currency, listing=listing, state='empty' if empty else 'received',
                     requested_end='2026-09-30', provider_end_reached=True, bars=rows, provider='Toss',
                     collected_at='2026-10-01', price_basis='adjusted')
@@ -185,6 +188,51 @@ class SavedHistoryTests(unittest.TestCase):
         result=with_daily(packet,dict(stock,isin_code='NEW'),{'isinCode':'OLD'})
         self.assertEqual(result['history']['daily_update_reason'],'listing_identity_changed')
 
+    def test_identity_and_basis_conflicts_checked_for_same_earlier_and_empty_daily(self):
+        self.fixture(listing_values={'isinCode':'OLD-ISSUE','listing_exchange':'NASDAQ'})
+        original=(self.folder/self.series).read_bytes()
+        store=HistoryStore(self.path,self.no_network)
+        for bars in ([bar('2026-09-30')],[bar('2026-09-24')],[]):
+            for fields,reason in (({'isin_code':'NEW-ISSUE'},'listing_identity_changed'),
+                                  ({'listing_exchange_family':'NYSE'},'listing_identity_changed'),
+                                  ({'price_basis':'unadjusted'},'price_basis_changed'),
+                                  ({'currency':'KRW'},'price_basis_changed')):
+                with self.subTest(bars=bars,fields=fields):
+                    stock=dict(self.stock,bars=bars,isin_code='OLD-ISSUE',listing_exchange_family='NASDAQ',
+                               provider='Toss',price_basis='adjusted')
+                    stock.update(fields)
+                    value=store.ensure(stock,retry=True)
+                    self.assertEqual(value['bars'],bars)
+                    self.assertEqual(value['history']['state'],'partial' if bars else 'failed')
+                    self.assertEqual(value['history']['reason'],reason)
+                    self.assertEqual(value['history']['daily_update_reason'],reason)
+                    self.assertEqual(value['history']['daily_update_mode'],'daily_only' if bars else 'unavailable')
+        self.assertEqual((self.folder/self.series).read_bytes(),original)
+        self.assertFalse(self.path.exists())
+
+    def test_matching_identity_keeps_archive_for_same_earlier_and_empty_daily(self):
+        self.fixture(listing_values={'isinCode':'OLD-ISSUE','listing_exchange':'NASDAQ'})
+        store=HistoryStore(self.path,self.no_network)
+        for bars in ([bar('2026-09-30')],[bar('2026-09-24')],[]):
+            stock=dict(self.stock,bars=bars,isin_code='OLD-ISSUE',listing_exchange_family='NASDAQ',
+                       provider='Toss',price_basis='adjusted')
+            with self.subTest(bars=bars):
+                value=store.ensure(stock)
+                self.assertEqual(value['history']['state'],'complete')
+                self.assertEqual(len(value['bars']),3)
+                self.assertEqual(value['bars'][0]['date'],'1990-01-02')
+        self.assertFalse(self.path.exists())
+
+    def test_identity_conflict_with_invalid_daily_never_returns_old_archive(self):
+        self.fixture(listing_values={'isinCode':'OLD-ISSUE'})
+        stock=dict(self.stock,isin_code='NEW-ISSUE',bars=[dict(bar('2026-09-30'),high=1)])
+        value=HistoryStore(self.path,self.no_network).ensure(stock,retry=True)
+        self.assertEqual(value['history']['state'],'failed')
+        self.assertEqual(value['history']['reason'],'listing_identity_changed')
+        self.assertEqual(value['history']['daily_update_reason'],'invalid_daily_bars')
+        self.assertEqual(value['bars'],[])
+        self.assertFalse(self.path.exists())
+
     def test_new_listing_after_empty_archive_uses_current_daily(self):
         self.fixture(market='KR',empty=True)
         stock=dict(self.stock,bars=[bar('2026-10-01')])
@@ -224,7 +272,7 @@ class SavedHistoryTests(unittest.TestCase):
         self.fixture();self.fixture(market='KR')
         store=HistoryStore(self.path,self.no_network)
         self.assertEqual(set(store.saved.stocks),{'US:AAA','KR:AAA'})
-        self.assertEqual(store.view(dict(self.stock,market='US'))['currency'],'USD')
+        self.assertEqual(store.view(dict(self.stock,market='US',currency='USD'))['currency'],'USD')
         self.assertEqual(store.view(self.stock)['currency'],'KRW')
         # A valid US manifest cannot be activated as a Korean collection.
         (self.folder.parent/'active.json').write_bytes((self.root/'us-history/active.json').read_bytes())

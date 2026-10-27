@@ -352,13 +352,8 @@ class AnalysisService:
                 value = self.histories.ensure(stock, retry=True)
                 return {'history':value['history'], 'scope':'selected_stock_saved_cutoff_only_not_daily_market_refresh'}
             if mode == 'financial_price_recalculate':
-                saved = self.financials.read(case['stock_key'])
-                sid = (saved.get('result') or {}).get('snapshot_id')
-                if not sid or not re.fullmatch('[a-f0-9]{32}', sid): raise ValueError('saved_financial_required')
-                seed = self.financials.folder(case['stock_key']) / 'snapshots' / sid
-                source = json.loads((seed / 'saved-price.json').read_bytes())
-                source.update(self.histories.view(stock, '1d'))
-                value = self.financials.import_collected(case['stock_key'], source, seed)
+                source = {**stock, **self.histories.view(stock, '1d')}
+                value = self.financials.recalculate_saved(case['stock_key'],stock=source)
                 return {'state':value['state'],'attempt':value['attempt'],'snapshot_id':(value.get('result') or {}).get('snapshot_id'),'scope':'saved_disclosures_and_saved_prices_no_network'}
             raise ValueError('invalid_refresh_mode')
         if op=='propose': return self.proposal(case,a['snapshot_id'],a['drawings'],a['rationale'])
