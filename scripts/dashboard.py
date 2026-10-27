@@ -162,7 +162,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                         value = {**value,'state':'excluded','reason':excluded['reason'],'bars':[]}
                 return self.send(json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8'))
             names = {'/report-reader.js':'analysis/report-reader.js','/report-reader.css':'analysis/report-reader.css','/chart-events.js':'chart-events.js', '/trailing.js':'trailing.js', '/market-exclusions.js':'market-exclusions.js', '/market-exclusions.css':'market-exclusions.css', '/risk-workbench.js': 'risk-workbench.js', '/risk-workbench.css': 'risk-workbench.css', '/collaboration.js': 'analysis/collaboration.js', '/analysis.js': 'analysis/analysis.js', '/': 'index.html', '/app.js': 'app.js', '/tooltips.js': 'tooltips.js', '/financial-focus.js': 'financial-focus.js', '/financial-focus.css': 'financial-focus.css', '/financials.css': 'financials.css', '/style.css': 'style.css',
-                     '/trade-cycle.js':'trade-cycle.js', '/trade-cycle.css':'trade-cycle.css', '/scenario-preview.js':'scenario-preview.js', '/scenario-monitor.js':'scenario-monitor.js', '/scenario-monitor.css':'scenario-monitor.css',
+                     '/trade-cycle.js':'trade-cycle.js', '/trade-cycle.css':'trade-cycle.css', '/scenario-preview.js':'scenarios/scenario-preview.js', '/scenario-monitor.js':'scenarios/scenario-monitor.js', '/scenario-monitor.css':'scenarios/scenario-monitor.css',
                      '/stock-chart.js': 'stock-chart.js', '/drawing-tools.js': 'drawings/drawing-tools.js', '/chart-workspace.js': 'drawings/chart-workspace.js', '/chart-tools.css': 'drawings/chart-tools.css', '/format.js': 'format.js', '/charts.js': 'charts.js', '/workbench.png': 'workbench.png',
                      '/vendor/lightweight-charts.js': 'vendor/lightweight-charts.js',
                      '/vendor/NOTICE': 'vendor/NOTICE', '/vendor/LICENSE': 'vendor/LICENSE'}
@@ -301,7 +301,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                 if not isinstance(body, dict) or set(body) != {'revision', 'state'}:
                     raise ValueError('invalid_body')
                 result = store.shared(key, frame, revision=body['revision'], state=body['state'])
-                from scenario_monitor import ScenarioStore
+                from scenarios.monitor import ScenarioStore
                 ScenarioStore(store.path).sync_workspace(key)
                 self.send(json.dumps(result).encode())
             except Conflict:

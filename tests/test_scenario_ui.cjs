@@ -3,7 +3,7 @@ const fs=require('fs'),vm=require('vm'),assert=require('node:assert/strict');
 global.window={};
 vm.runInThisContext(fs.readFileSync('dashboard/format.js','utf8'));
 global.WorkbenchFormat=window.WorkbenchFormat;
-vm.runInThisContext(fs.readFileSync('dashboard/scenario-monitor.js','utf8'));
+vm.runInThisContext(fs.readFileSync('dashboard/scenarios/scenario-monitor.js','utf8'));
 assert.deepEqual(window.WorkbenchScenarios.monitoringPlans([
  {id:'legacy',plan_id:'pl_legacy',plan:{account_alias:'preserve',allocation:{quantity:20}}},
  {id:'monitor',plan_id:'pl_monitor',monitoring_only:true},

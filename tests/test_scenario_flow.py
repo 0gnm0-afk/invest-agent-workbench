@@ -2,6 +2,7 @@
 from contextlib import closing
 from copy import deepcopy
 import unittest
+from unittest.mock import patch
 
 import test_collaboration as fixtures
 from analysis import Forbidden
@@ -34,6 +35,29 @@ class ScenarioFlowTests(unittest.TestCase):
             workspace_revision=self.store.shared('US:SYNTH')['revision'],purpose=purpose,boundary='both',tolerance_atr=.5,**extra),
             role='browser',session='fixture')
 
+    def test_plan_input_and_monitor_share_adoption_and_integrity_checks(self):
+        self.drawing(); plan = self.draft()
+        readers = (
+            lambda: self.call('plan_input', dict(plan_record_id=plan['id'], mode='adopted')),
+            lambda: self.register(plan),
+        )
+        for read in readers:
+            with self.assertRaisesRegex(ValueError, 'plan_version_not_adopted'): read()
+        self.adopt(plan)
+        frozen = self.s.snapshot(self.cid, plan['snapshot_id'])
+        tampered = deepcopy(frozen); tampered['context']['tampered'] = True
+        with patch.object(self.s.collaboration, 'snapshot', return_value=tampered):
+            for read in readers:
+                with self.assertRaisesRegex(ValueError, 'plan_snapshot_integrity_failed'): read()
+        self.assertEqual(self.s.snapshot(self.cid, plan['snapshot_id']), frozen)
+        self.adopt(plan, 'revoke')
+        for read in readers:
+            with self.assertRaisesRegex(ValueError, 'plan_version_not_adopted'): read()
+        from scenarios.monitor import ScenarioStore
+        self.assertEqual(ScenarioStore(self.store.path).read()['monitors'], [])
+        preview = self.call('plan_input', dict(plan_record_id=plan['id'], mode='hypothetical'))
+        self.assertIsNone(preview['adoption'])
+
     def test_box_channel_riskreward_frozen_plan_and_two_purposes(self):
         for kind in ('box','channel','riskreward'):
             with self.subTest(kind=kind):
@@ -51,7 +75,7 @@ class ScenarioFlowTests(unittest.TestCase):
                 before=deepcopy(self.s.snapshot(self.cid,plan['snapshot_id']))
                 state=self.store.shared('US:SYNTH');state['state']['drawings'][0]['points'][0]['price']+=1
                 self.store.shared('US:SYNTH',revision=state['revision'],state=state['state'])
-                from scenario_monitor import ScenarioStore
+                from scenarios.monitor import ScenarioStore
                 monitor=ScenarioStore(self.store.path);monitor.sync_workspace('US:SYNTH')
                 changed=next(m for m in monitor.read()['monitors'] if m['id']==buy['id'])
                 self.assertGreater(changed['revision'],buy['revision'])
@@ -73,7 +97,7 @@ class ScenarioFlowTests(unittest.TestCase):
     def test_conversion_accept_rechecks_current_saved_account(self):
         from datetime import datetime, timezone
         from unittest.mock import patch
-        from scenario_monitor import ScenarioStore
+        from scenarios.monitor import ScenarioStore
         self.drawing();plan=self.draft();self.adopt(plan);watch=self.register(plan)
         args=dict(id=watch['id'],revision=watch['revision'],accept=True)
         # The downstream atomic one-time decision is tested in test_scenario_monitor.

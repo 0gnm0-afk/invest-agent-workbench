@@ -1,6 +1,4 @@
 """Browser-confirmed scenario watches over immutable adopted analysis plans."""
-from contextlib import closing
-
 from analysis import Forbidden
 
 from analysis.collaboration import fields, integer
@@ -10,7 +8,7 @@ OPS = {'monitor_list', 'monitor_register', 'monitor_update', 'monitor_conversion
 
 
 def dispatch(service, op, args, origin, principal, session):
-    from scenario_monitor import ScenarioStore
+    from scenarios.monitor import ScenarioStore
     store = ScenarioStore(service.store.path)
     if op == 'monitor_list':
         fields(args, ('stock_key',))
@@ -31,16 +29,8 @@ def dispatch(service, op, args, origin, principal, session):
         fields(args, names, names)
         integer(args['workspace_revision'])
         case = service.case(args['analysis_key'])
-        plan = service.collaboration.plan_record(case['id'], args['plan_record_id'])
-        with closing(service.store.connect()) as db:
-            active = service.collaboration.active(service.collaboration.read_rows(case['id'], db))
-        adoption = active.get(plan['plan_id'])
-        if not adoption or adoption['plan_record_id'] != plan['id']:
-            raise ValueError('plan_version_not_adopted')
-        service.collaboration.verify(adoption)
-        snap = service.snapshot(case['id'], plan['snapshot_id'])
-        if plan['snapshot_sha256'] != service_digest(snap):
-            raise ValueError('plan_snapshot_integrity_failed')
+        plan, snap, _ = service.collaboration.plan_basis(
+            case['id'], args['plan_record_id'], require_adopted=True)
         references = [c for c in plan['plan']['conditions']
                       if (c.get('drawing_ref') or {}).get('drawing_id') == args['drawing_id']]
         if not references or any(c['evaluation'] != 'daily_close' for c in references):
@@ -86,7 +76,7 @@ def dispatch(service, op, args, origin, principal, session):
             raise ValueError('invalid_conversion_decision')
         if args['accept']:
             from datetime import datetime, timezone
-            from scenario_monitor import account_status
+            from scenarios.monitor import account_status
             monitor = next((m for m in store.read()['monitors'] if m['id']==args['id']), None)
             if monitor is None: raise ValueError('monitor_not_found')
             data, _ = service.view()
@@ -94,8 +84,3 @@ def dispatch(service, op, args, origin, principal, session):
             if not fresh or not held: raise ValueError('holding_confirmation_stale_or_missing')
         return store.resolve_conversion(args['id'], args['revision'], args['accept'])
     raise ValueError('unknown_monitor_operation')
-
-
-def service_digest(value):
-    from analysis import digest
-    return digest(value)

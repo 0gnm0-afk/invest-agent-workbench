@@ -3,7 +3,7 @@ const fs=require('fs'),vm=require('vm'),assert=require('node:assert/strict');
 global.window={};
 vm.runInThisContext(fs.readFileSync('dashboard/drawings/drawing-tools.js','utf8'));
 global.DrawingTools=window.DrawingTools;
-vm.runInThisContext(fs.readFileSync('dashboard/scenario-preview.js','utf8'));
+vm.runInThisContext(fs.readFileSync('dashboard/scenarios/scenario-preview.js','utf8'));
 const bars=[];
 for(let d=new Date('2026-08-03T00:00:00Z');d<=new Date('2026-10-09T00:00:00Z');d.setUTCDate(d.getUTCDate()+1))if(![0,6].includes(d.getUTCDay()))bars.push({date:d.toISOString().slice(0,10),close:100});
 const m={active:true,latest:null,timeframe:'1d',identity:{currency:'USD'},boundary:'lower',drawing:{kind:'channel',extend:true,extension:{left:'2026-09-01',right:'2026-11-20'},points:[{time:'2026-09-01',price:100},{time:'2026-10-01',price:120},{time:'2026-09-01',price:110}]}};

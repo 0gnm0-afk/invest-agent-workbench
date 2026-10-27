@@ -271,7 +271,7 @@ class DailyLaunch:
                 result['trailing_state'] = 'unavailable'
         if result.get('state') in ('succeeded', 'partial'):
             try:
-                from scenario_monitor import refresh_saved as refresh_scenarios
+                from scenarios.monitor import refresh_saved as refresh_scenarios
                 scenario = refresh_scenarios(self.root, result['output'], plan['targets'],
                                              account_failed=result.get('account_state') == 'failed')
                 result['scenario_state'] = 'evaluated' if any(m['active'] for m in scenario['monitors']) else 'not_configured'

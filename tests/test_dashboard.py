@@ -184,7 +184,8 @@ class HttpBoundary(unittest.TestCase):
     def test_feature_assets_keep_existing_urls_after_folder_move(self):
         assets=Path(__file__).resolve().parents[1]/'dashboard'
         groups={'drawings': ('drawing-tools.js','chart-workspace.js','chart-tools.css'),
-                'analysis': ('analysis.js','collaboration.js','report-reader.js','report-reader.css')}
+                'analysis': ('analysis.js','collaboration.js','report-reader.js','report-reader.css'),
+                'scenarios': ('scenario-preview.js','scenario-monitor.js','scenario-monitor.css')}
         for folder,names in groups.items():
             for name in names:
                 status,body=self.get('/'+name)

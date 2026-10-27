@@ -447,17 +447,23 @@ class Collaboration:
                        plan_sha256=plan['plan_sha256'], action=a['action'], reason=a['reason'], references=[])
         return self.append(case, snap, a['expected_revision'], 'plan_decision', payload, principal, origin, decision=pending)
 
+    def plan_basis(self, cid, rid, *, require_adopted):
+        """Verify the exact plan, optional adoption and immutable input for consumers."""
+        plan = self.plan_record(cid, rid)
+        with closing(self.connect()) as db: rows = self.read_rows(cid, db)
+        adoption = self.active(rows).get(plan['plan_id'])
+        if adoption and adoption['plan_record_id'] != plan['id']: adoption = None
+        if require_adopted and adoption is None: raise ValueError('plan_version_not_adopted')
+        if adoption: self.verify(adoption)
+        snap = self.snapshot(cid, plan['snapshot_id'])
+        if digest(snap) != plan['snapshot_sha256']: raise ValueError('plan_snapshot_integrity_failed')
+        return plan, snap, adoption
+
     def input(self, a, case):
         fields(a, ('analysis_key', 'plan_record_id', 'mode', 'evaluation_at'), ('analysis_key', 'plan_record_id', 'mode'))
         choice(a['mode'], ('adopted', 'hypothetical'), False); day(a.get('evaluation_at'))
-        plan = self.plan_record(case['id'], a['plan_record_id'])
-        with closing(self.connect()) as db: rows = self.read_rows(case['id'], db)
-        adoption = self.active(rows).get(plan['plan_id'])
-        if adoption and adoption['plan_record_id'] != plan['id']: adoption = None
-        if a['mode'] == 'adopted' and adoption is None: raise ValueError('plan_version_not_adopted')
-        if adoption: self.verify(adoption)
-        snap = self.snapshot(case['id'], plan['snapshot_id'])
-        if digest(snap) != plan['snapshot_sha256']: raise ValueError('plan_snapshot_integrity_failed')
+        plan, snap, adoption = self.plan_basis(
+            case['id'], a['plan_record_id'], require_adopted=a['mode'] == 'adopted')
         evaluations = []
         for c in plan['plan']['conditions']:
             ref = c['drawing_ref']

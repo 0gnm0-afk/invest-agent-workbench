@@ -262,7 +262,7 @@ class AnalysisService:
         from trade_cycle_api import OPS as CYCLE_OPS, dispatch as cycle_dispatch
         if op in CYCLE_OPS:
             return cycle_dispatch(self, op, a, origin, principal, session)
-        from scenario_api import OPS as MONITOR_OPS, dispatch as monitor_dispatch
+        from scenarios import OPS as MONITOR_OPS, dispatch as monitor_dispatch
         if op in MONITOR_OPS:
             return monitor_dispatch(self, op, a, origin, principal, session)
         if op == 'scenario_draft':

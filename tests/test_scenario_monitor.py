@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from drawings.store import WorkspaceStore, defaults, Conflict
-from scenario_monitor import ScenarioStore, levels, line_state
+from scenarios.monitor import ScenarioStore, levels, line_state
 from telegram_warnings import dispatch, scenario_message
 
 class Scenarios(unittest.TestCase):

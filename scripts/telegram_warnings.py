@@ -216,7 +216,7 @@ def dispatch(root=ROOT, targets=None, *, config=None, sender=None, include_trail
             # Keep legacy events in storage, but do not send obsolete warning rules.
             events = [e for e in TrailingStore(root/'runtime/trailing-warnings.sqlite3').read()['events']
                       if e.get('policy') == 'high95-approach-v2'] if include_trailing else []
-            from scenario_monitor import ScenarioStore
+            from scenarios.monitor import ScenarioStore
             scenario = ScenarioStore(root/'runtime/chart-workspaces.sqlite3').read() if include_scenarios else {'monitors':[], 'events':[]}
             monitors = {m['id']:m for m in scenario['monitors']}
             for event in scenario['events']:
