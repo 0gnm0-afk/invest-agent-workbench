@@ -207,7 +207,7 @@ class ResearchSnapshotTests(base_tests.AnalysisSkillLinkTests):
         self.assertEqual(before['component_hashes']['price_events'],after['component_hashes']['price_events'])
         self.assertEqual(before['component_hashes']['financials'],after['component_hashes']['financials'])
     def test_legacy_snapshot_not_backfilled(self):
-        from analysis_service import digest,packed
+        from analysis import digest, packed
         snap=self.service.snapshot(self.cid,self.sid);snap.pop('price_events')
         with closing(self.store.connect()) as db,db:db.execute('UPDATE analysis_snapshots SET payload=?,sha256=? WHERE id=?',(packed(snap),digest(snap),self.sid))
         p=self.read(section='events');self.assertEqual(p['price_events']['state'],'not_in_legacy_snapshot');self.assertEqual(p['events'],[])

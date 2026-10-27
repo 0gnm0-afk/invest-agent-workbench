@@ -11,6 +11,7 @@ import time
 
 from drawings.geometry import geometry, VERSION as GEOMETRY_VERSION
 from drawings.store import Conflict
+from . import Forbidden, key, digest, ident, now, packed
 
 VERSION = 'collaboration.v1'
 SECTIONS = ('identity_basis', 'business_evidence', 'judgment_invalidation',
@@ -18,10 +19,6 @@ SECTIONS = ('identity_basis', 'business_evidence', 'judgment_invalidation',
 KINDS = ('discussion', 'discussion_note', 'plan_version', 'plan_decision', 'risk_review')
 OPS = {'collaboration_read', 'discussion_save', 'plan_save', 'risk_review_save',
        'plan_review', 'plan_decide', 'plan_input', 'discussion_note_save'}
-
-
-class Forbidden(ValueError):
-    pass
 
 
 def fields(value, allowed, required=()):
@@ -188,13 +185,27 @@ def blockers(record):
 
 
 class Collaboration:
-    def __init__(self, service):
-        self.s = service
+    def __init__(self, *, connect, root, case, snapshot, item, rows, snapshots, capture, links):
+        """Receive explicit record/input access; no service dispatch or providers.
+
+        connect joins the existing ledger, capture freezes saved inputs only,
+        and snapshots lists metadata without assembling the full analysis view.
+        HTTP authorization remains at the entry point and these workflow methods.
+        """
+        self.connect = connect
+        self.root = root
+        self.case = case
+        self.snapshot = snapshot
+        self.item = item
+        self.rows = rows
+        self.snapshots = snapshots
+        self.capture = capture
+        self.links = links
         self.confirmations = {}
         self.lock = threading.Lock()
 
     def migrate(self):
-        with closing(self.s.store.connect()) as db, db:
+        with closing(self.connect()) as db, db:
             db.execute('CREATE TABLE IF NOT EXISTS analysis_collaboration_heads (case_id TEXT PRIMARY KEY, revision INTEGER NOT NULL)')
 
     def scenario_draft(self, a, case, principal, session, origin):
@@ -207,12 +218,12 @@ class Collaboration:
         text(a['drawing_id'], 64); text(a['title'], 200)
         text(a['purpose'], 4000, True); text(a['response'], 4000, True)
         if a.get('plan_id') is not None:
-            with closing(self.s.store.connect()) as db:
+            with closing(self.connect()) as db:
                 prior = [r for r in self.read_rows(case['id'], db)
                          if r.get('kind') == 'plan_version' and r.get('plan_id') == a['plan_id']]
             if not prior or not prior[-1].get('monitoring_only'):
                 raise ValueError('full_plan_requires_full_editor')
-        snap = self.s.capture(case)
+        snap = self.capture(case)
         if snap['workspace']['revision'] != a['workspace_revision']:
             raise Conflict('workspace_changed_elsewhere')
         drawing = next((d for d in snap['workspace']['state']['drawings'] if d['id'] == a['drawing_id']), None)
@@ -234,7 +245,6 @@ class Collaboration:
         args = dict(plan_id=a.get('plan_id'), expected_plan_version=a.get('expected_plan_version', 0))
         integer(args['expected_plan_version'])
         if args['plan_id'] is not None:
-            from analysis_service import key
             key(args['plan_id'], 'pl_')
         return self.append(case, snap, a['expected_revision'], 'plan_version',
             dict(plan=validate_plan(plan, snap), monitoring_only=True, references=[dict(kind='utterance', reference=None,
@@ -250,7 +260,7 @@ class Collaboration:
 
     def verify(self, record):
         if record['kind'] not in KINDS: return
-        path = self.s.root / record['markdown_path']
+        path = self.root / record['markdown_path']
         try: actual = hashlib.sha256(path.read_bytes()).hexdigest()
         except OSError: raise ValueError('record_markdown_missing') from None
         if actual != record['markdown_sha256']: raise ValueError('record_markdown_integrity_failed')
@@ -268,7 +278,7 @@ class Collaboration:
         return active
 
     def read(self, case, origin):
-        with closing(self.s.store.connect()) as db:
+        with closing(self.connect()) as db:
             db.execute('BEGIN')
             rows = self.read_rows(case['id'], db); revision = self.revision(case['id'], db)
         common = [r for r in rows if r['kind'] in KINDS]
@@ -283,9 +293,9 @@ class Collaboration:
                     unincorporated_notes=[r for r in common if r['kind'] == 'discussion_note' and r['revision'] > (current['revision'] if current else 0)],
                     active_plans=[dict(record=lookup[d['plan_record_id']], adoption=d) for d in active.values()],
                     records=common, legacy_records=[r for r in rows if r['kind'] not in KINDS],
-                    snapshots=self.s.detail(case['id'], origin)['snapshots'],
-                    related_cases=[c for c in self.s.rows('analysis_cases') if c['stock_key'] == case['stock_key'] and c['id'] != case['id']],
-                    links=self.s.links(case, origin))
+                    snapshots=self.snapshots(case['id']),
+                    related_cases=[c for c in self.rows('analysis_cases') if c['stock_key'] == case['stock_key'] and c['id'] != case['id']],
+                    links=self.links(case, origin))
 
     def references(self, cid, refs):
         for r in array(refs):
@@ -295,11 +305,10 @@ class Collaboration:
             text(r['reference'], 2000, True); text(r['text'], 20000, True)
             if not r['reference'] and not r['text']: raise ValueError('empty_reference')
             if r['kind'] == 'utterance' and not r['text']: raise ValueError('utterance_text_required')
-            if r['kind'] == 'record' and not self.s.item(cid, r['reference']): raise ValueError('record_reference_not_found')
+            if r['kind'] == 'record' and not self.item(cid, r['reference']): raise ValueError('record_reference_not_found')
         return deepcopy(refs)
 
     def save(self, op, a, case, principal, origin):
-        from analysis_service import digest
         required_role = 'risk' if op == 'risk_review_save' else 'collaboration'
         if principal != required_role: raise Forbidden('collaboration_role_forbidden')
         base = ('contract_version', 'analysis_key', 'snapshot_id', 'expected_revision', 'references')
@@ -309,7 +318,7 @@ class Collaboration:
         fields(a, base + extra, base + extra)
         if a['contract_version'] != VERSION: raise ValueError('unsupported_collaboration_contract')
         integer(a['expected_revision'])
-        snap = self.s.snapshot(case['id'], a['snapshot_id'])
+        snap = self.snapshot(case['id'], a['snapshot_id'])
         refs = self.references(case['id'], a['references'])
         payload = dict(references=refs)
         if op == 'discussion_save':
@@ -320,7 +329,6 @@ class Collaboration:
             payload['plan'] = validate_plan(a['plan'], snap)
             integer(a['expected_plan_version'])
             if a['plan_id'] is not None:
-                from analysis_service import key
                 key(a['plan_id'], 'pl_')
         else:
             text(a['title'], 200); text(a['body'], 50000)
@@ -330,7 +338,7 @@ class Collaboration:
                 fields(calculation, ('code_version', 'input_snapshot_ids', 'assumptions', 'result'), ('code_version', 'input_snapshot_ids', 'assumptions', 'result'))
                 if not text(calculation['code_version'], 200): raise ValueError('calculation_code_version_required')
                 if not array(calculation['input_snapshot_ids']): raise ValueError('calculation_snapshot_required')
-                for sid in calculation['input_snapshot_ids']: self.s.snapshot(case['id'], sid)
+                for sid in calculation['input_snapshot_ids']: self.snapshot(case['id'], sid)
                 if not isinstance(calculation['assumptions'], dict) or not isinstance(calculation['result'], dict): raise ValueError('invalid_calculation_record')
                 digest(calculation)
             payload.update(title=a['title'], body=a['body'], plan_record_ids=a['plan_record_ids'], calculation=calculation)
@@ -348,11 +356,10 @@ class Collaboration:
                 + '\n\n```json\n' + json.dumps(r, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + '\n```\n')
 
     def append(self, case, snap, expected, kind, payload, principal, origin, plan_args=None, decision=None):
-        from analysis_service import ident, now, packed, digest
         path = None
         committed = False
         try:
-            with closing(self.s.store.connect()) as db, db:
+            with closing(self.connect()) as db, db:
                 db.execute('BEGIN IMMEDIATE')
                 revision = self.revision(case['id'], db)
                 if revision != expected: raise Conflict('collaboration_revision_changed')
@@ -387,8 +394,8 @@ class Collaboration:
                     r['blockers'] = ([f'identity.{k}' for k in ('stable_id', 'currency', 'price_basis') if not r['identity'].get(k)]
                                      if r.get('monitoring_only') else blockers(r))
                 content = self.markdown(r)
-                path = self.s.root / 'judgments' / 'analyses' / case['id'] / (r['id'] + '.md')
-                r['markdown_path'] = path.relative_to(self.s.root).as_posix()
+                path = self.root / 'judgments' / 'analyses' / case['id'] / (r['id'] + '.md')
+                r['markdown_path'] = path.relative_to(self.root).as_posix()
                 r['markdown_sha256'] = hashlib.sha256(content.encode('utf-8')).hexdigest()
                 path.parent.mkdir(parents=True, exist_ok=True)
                 with path.open('x', encoding='utf-8', newline='\n') as f: f.write(content)
@@ -399,13 +406,13 @@ class Collaboration:
         finally:
             if path is not None and not committed:
                 path.unlink(missing_ok=True)
-        stored = self.s.item(case['id'], r['id'])
+        stored = self.item(case['id'], r['id'])
         if stored != r: raise ValueError('record_readback_failed')
         self.verify(stored)
-        return dict(contract_version=VERSION, revision=r['revision'], record=stored, verified=True, links=self.s.links(case, origin))
+        return dict(contract_version=VERSION, revision=r['revision'], record=stored, verified=True, links=self.links(case, origin))
 
     def plan_record(self, cid, rid):
-        record = self.s.item(cid, rid)
+        record = self.item(cid, rid)
         if record is None or record['kind'] != 'plan_version': raise ValueError('plan_record_not_found')
         self.verify(record)
         return record
@@ -414,7 +421,7 @@ class Collaboration:
         if principal != 'browser' or not session: raise Forbidden('local_browser_confirmation_required')
         fields(a, ('analysis_key', 'plan_record_id', 'expected_revision'), ('analysis_key', 'plan_record_id', 'expected_revision'))
         integer(a['expected_revision']); plan = self.plan_record(case['id'], a['plan_record_id'])
-        with closing(self.s.store.connect()) as db:
+        with closing(self.connect()) as db:
             if self.revision(case['id'], db) != a['expected_revision']: raise Conflict('collaboration_revision_changed')
         nonce = secrets.token_urlsafe(32)
         with self.lock:
@@ -435,22 +442,21 @@ class Collaboration:
         plan = pending['plan']
         if plan['case_id'] != case['id'] or pending['revision'] != a['expected_revision']: raise Conflict('confirmation_basis_changed')
         if self.plan_record(case['id'], plan['id']) != plan: raise Conflict('reviewed_plan_changed')
-        snap = self.s.snapshot(case['id'], plan['snapshot_id'])
+        snap = self.snapshot(case['id'], plan['snapshot_id'])
         payload = dict(plan_id=plan['plan_id'], plan_record_id=plan['id'], plan_version=plan['plan_version'],
                        plan_sha256=plan['plan_sha256'], action=a['action'], reason=a['reason'], references=[])
         return self.append(case, snap, a['expected_revision'], 'plan_decision', payload, principal, origin, decision=pending)
 
     def input(self, a, case):
-        from analysis_service import digest
         fields(a, ('analysis_key', 'plan_record_id', 'mode', 'evaluation_at'), ('analysis_key', 'plan_record_id', 'mode'))
         choice(a['mode'], ('adopted', 'hypothetical'), False); day(a.get('evaluation_at'))
         plan = self.plan_record(case['id'], a['plan_record_id'])
-        with closing(self.s.store.connect()) as db: rows = self.read_rows(case['id'], db)
+        with closing(self.connect()) as db: rows = self.read_rows(case['id'], db)
         adoption = self.active(rows).get(plan['plan_id'])
         if adoption and adoption['plan_record_id'] != plan['id']: adoption = None
         if a['mode'] == 'adopted' and adoption is None: raise ValueError('plan_version_not_adopted')
         if adoption: self.verify(adoption)
-        snap = self.s.snapshot(case['id'], plan['snapshot_id'])
+        snap = self.snapshot(case['id'], plan['snapshot_id'])
         if digest(snap) != plan['snapshot_sha256']: raise ValueError('plan_snapshot_integrity_failed')
         evaluations = []
         for c in plan['plan']['conditions']:
@@ -475,7 +481,7 @@ class Collaboration:
                                  'cross_plan_account_allocation_overlap_must_be_checked', 'missing_values_not_zero'])
 
     def dispatch(self, op, a, origin, principal, session=None):
-        case = self.s.case(a['analysis_key'])
+        case = self.case(a['analysis_key'])
         if op == 'collaboration_read':
             fields(a, ('analysis_key',), ('analysis_key',)); return self.read(case, origin)
         if op == 'plan_input': return self.input(a, case)
@@ -488,7 +494,7 @@ class Collaboration:
             if a['contract_version'] != VERSION: raise ValueError('unsupported_collaboration_contract')
             integer(a['expected_revision']); text(a['body'], 20000)
             if not a['body'].strip(): raise ValueError('empty_discussion_note')
-            snap = self.s.snapshot(case['id'], a['snapshot_id'])
+            snap = self.snapshot(case['id'], a['snapshot_id'])
             return self.append(case, snap, a['expected_revision'], 'discussion_note',
                 dict(title='사용자 후속 발언', body=a['body'], references=[dict(kind='utterance', reference=None, text=a['body'], speaker='user')]),
                 principal, origin)

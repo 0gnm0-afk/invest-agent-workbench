@@ -181,12 +181,15 @@ class HttpBoundary(unittest.TestCase):
     def test_failed_data_is_served(self):
         status, body=self.get('/api/home');self.assertEqual(status,200);self.assertEqual(json.loads(body)['market']['state'],'failed')
 
-    def test_drawing_assets_keep_existing_urls_after_folder_move(self):
-        folder=Path(__file__).resolve().parents[1]/'dashboard/drawings'
-        for name in ('drawing-tools.js','chart-workspace.js','chart-tools.css'):
-            status,body=self.get('/'+name)
-            self.assertEqual(status,200,name)
-            self.assertEqual(body,(folder/name).read_bytes())
+    def test_feature_assets_keep_existing_urls_after_folder_move(self):
+        assets=Path(__file__).resolve().parents[1]/'dashboard'
+        groups={'drawings': ('drawing-tools.js','chart-workspace.js','chart-tools.css'),
+                'analysis': ('analysis.js','collaboration.js','report-reader.js','report-reader.css')}
+        for folder,names in groups.items():
+            for name in names:
+                status,body=self.get('/'+name)
+                self.assertEqual(status,200,name)
+                self.assertEqual(body,(assets/folder/name).read_bytes())
 
     def test_no_raw_account_or_filesystem_access(self):
         for path in ['/account-observation.private.json','/../config.json','/scripts/nh_api.py','/runtime/latest.json']:

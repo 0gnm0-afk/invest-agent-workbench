@@ -16,7 +16,7 @@ import sqlite3
 from uuid import uuid4
 
 from drawings.store import Conflict
-from analysis_collaboration import Forbidden
+from analysis import Forbidden
 
 VERSION = 'trade-cycle.v1'
 SCENARIOS = ('bullish', 'neutral', 'bearish')

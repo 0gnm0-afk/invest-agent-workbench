@@ -43,7 +43,7 @@ assert.equal((seriesPaths[0].match(/L/g)||[]).length,1); // Only Oct 5 -> 6, nev
 assert.equal((seriesPaths[0].match(/M/g)||[]).length,2);
 assert.equal((seriesPaths[1].match(/L/g)||[]).length,0); // Null boundary is not zero or an interpolated point.
 assert.equal(window.WorkbenchScenarios.trendHTML({...monitor,evaluations:[evaluations[0],evaluations[1]]},'USD'),'');
-vm.runInThisContext(fs.readFileSync('dashboard/analysis.js','utf8'));
+vm.runInThisContext(fs.readFileSync('dashboard/analysis/analysis.js','utf8'));
 global.location={hash:'#stock/US/SYNTH'};
 let requested;
 global.fetch=async(url,options)=>({ok:true,json:async()=>{

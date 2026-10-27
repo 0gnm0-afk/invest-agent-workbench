@@ -2,7 +2,7 @@ const fs=require('fs'),vm=require('vm'),assert=require('assert'),path=require('p
 const root=path.resolve(__dirname,'..');global.window={};
 vm.runInThisContext(fs.readFileSync(path.join(root,'dashboard/format.js'),'utf8'));
 global.WorkbenchFormat=window.WorkbenchFormat;
-vm.runInThisContext(fs.readFileSync(path.join(root,'dashboard/collaboration.js'),'utf8'));
+vm.runInThisContext(fs.readFileSync(path.join(root,'dashboard/analysis/collaboration.js'),'utf8'));
 const fixture=JSON.parse(fs.readFileSync(path.join(__dirname,'fixtures/collaboration-v1.json'),'utf8'));
 const record={plan:fixture.plan,identity:{currency:'USD'},plan_version:1,plan_id:'pl_fixture',id:'it_fixture',snapshot_id:'sn_fixture',data_as_of:{chart_last:'2026-10-01'},blockers:['scenario.s1.fx_to_base'],plan_sha256:'plan-hash',snapshot_sha256:'snapshot-hash'};
 let html=window.WorkbenchCollaboration.planHTML(record);
@@ -21,7 +21,7 @@ assert(html.includes('monitor-fixture')&&html.includes('v8')&&html.includes('완
 assert(html.includes('계획 ID · 고정 입력')&&html.includes('plan-hash'));
 const visible=html.split('<details>')[0];
 assert(!visible.includes('가정 체결')&&!visible.includes('미정·보류:')&&!visible.includes(' · 배정 '));
-const entry=fs.readFileSync(path.join(root,'dashboard/analysis.js'),'utf8');
+const entry=fs.readFileSync(path.join(root,'dashboard/analysis/analysis.js'),'utf8');
 assert(entry.includes('health.collaboration_protocol!==1'));
 assert(entry.includes('if(window.WorkbenchCollaboration)WorkbenchCollaboration.show'));
 console.log('collaboration UI: currency, exact path/line/hash, XSS escape, legacy gating PASS');

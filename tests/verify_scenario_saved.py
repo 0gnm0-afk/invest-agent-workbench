@@ -5,7 +5,7 @@ import json
 import sqlite3
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from analysis_service import digest
+from analysis import digest
 
 root=Path(__file__).resolve().parents[1]
 path=root/'runtime/chart-workspaces.sqlite3'

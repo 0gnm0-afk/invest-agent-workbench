@@ -1,37 +1,23 @@
 """Analysis cases over existing dashboard stores. No broker/market/order writes."""
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 import hashlib
 import json
 from pathlib import Path
 import re
-import uuid
 from urllib.parse import urlencode, quote
 
 from drawings.store import Conflict, validate
 from drawings.geometry import geometry
-from analysis_collaboration import Collaboration, OPS as COLLABORATION_OPS, Forbidden
+from .collaboration import Collaboration, OPS as COLLABORATION_OPS
+from . import Forbidden, packed, digest, now, ident, key
 
 from price_events import build as price_events, validate_research
 
-from analysis_report import readable, FOLLOWUP
+from .report import readable, FOLLOWUP
 
 QUALITATIVE_SKILL = 'stock-qualitative-analysis'
-
-
-def packed(value):
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False)
-
-
-def digest(value): return hashlib.sha256(packed(value).encode()).hexdigest()
-def now(): return datetime.now(timezone.utc).isoformat()
-def ident(prefix): return prefix + uuid.uuid4().hex
-
-
-def key(value, prefix):
-    if not isinstance(value, str) or not re.fullmatch(prefix + '[a-f0-9]{32}', value): raise ValueError('invalid_identifier')
-    return value
 
 
 def short(value, limit=4000):
@@ -61,7 +47,10 @@ class AnalysisService:
             CREATE TABLE IF NOT EXISTS analysis_snapshots (id TEXT PRIMARY KEY, case_id TEXT NOT NULL, payload TEXT NOT NULL, sha256 TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS analysis_items (id TEXT PRIMARY KEY, case_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL);
             ''')
-        self.collaboration = Collaboration(self)
+        self.collaboration = Collaboration(
+            connect=store.connect, root=self.root, case=self.case, snapshot=self.snapshot,
+            item=self.item, rows=self.rows, snapshots=self.snapshot_summaries,
+            capture=self.capture, links=self.links)
         self.collaboration.migrate()
 
     def rows(self, table, case_id=None):
@@ -145,10 +134,14 @@ class AnalysisService:
             db.execute('INSERT INTO analysis_snapshots VALUES (?,?,?,?)',(value['id'],case['id'],packed(value),digest(value)))
         return value
 
-    def detail(self, case_id, origin):
-        case=self.case(case_id); items=self.rows('analysis_items',case_id)
+    def snapshot_summaries(self, case_id):
         with closing(self.store.connect()) as db:
             snapshots=[dict(id=r[0],captured_at=r[1],component_hashes=json.loads(r[2])) for r in db.execute("SELECT id,json_extract(payload,'$.captured_at'),json_extract(payload,'$.component_hashes') FROM analysis_snapshots WHERE case_id=? ORDER BY rowid",(case_id,))]
+        return snapshots
+
+    def detail(self, case_id, origin):
+        case=self.case(case_id); items=self.rows('analysis_items',case_id)
+        snapshots=self.snapshot_summaries(case_id)
         return {'case':case,'links':self.links(case,origin),'items':items,
                 'snapshots':[{k:s[k] for k in ('id','captured_at','component_hashes')} for s in snapshots],
                 'qualitative_skill':QUALITATIVE_SKILL,

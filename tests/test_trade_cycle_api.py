@@ -11,7 +11,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'scripts'))
 import test_collaboration as fixtures
 from test_trade_cycle import plan, COMBO, fill
-from analysis_collaboration import Forbidden
+from analysis import Forbidden
 from drawings.store import Conflict
 from trade_cycle import TradeCycleStore
 from trade_cycle_agent import DraftJobs, cli_command, generate, SCHEMA

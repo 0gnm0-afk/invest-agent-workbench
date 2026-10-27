@@ -13,7 +13,8 @@ from unittest.mock import patch
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'scripts'))
-from analysis_service import AnalysisService, digest
+from analysis.service import AnalysisService
+from analysis import digest
 from drawings.geometry import geometry, timeline, logical
 from drawings.store import WorkspaceStore, defaults, Conflict
 from chart_history import aggregate

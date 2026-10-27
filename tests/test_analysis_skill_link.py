@@ -13,7 +13,8 @@ from urllib.parse import parse_qs, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
-from analysis_service import AnalysisService, packed
+from analysis.service import AnalysisService
+from analysis import packed
 from drawings.store import WorkspaceStore
 
 
@@ -219,8 +220,10 @@ class AnalysisSkillLinkTests(unittest.TestCase):
         self.assertIn(self.sid, raw_markdown.decode('utf-8'))
         stored = self.service.item(self.cid, saved['id'])
         self.assertNotIn('links', stored)
+        self.assertNotIn('document', stored)
+        self.assertEqual(Path(saved['document']['path']), self.root / saved['markdown_path'])
         self.assertEqual(stored, {key: value for key, value in saved.items()
-                                  if key != 'links'})
+                                  if key not in ('links', 'document')})
         history = self.service.dispatch('detail', {'analysis_key': self.cid},
                                         'http://127.0.0.1:9876')
         self.assertEqual(history['items'], [stored])

@@ -25,9 +25,9 @@ from chart_history import HistoryStore, timeframe
 from financial_store import FinancialStore
 from financial_summary import selected_stock
 from drawings.store import WorkspaceStore, Conflict, moving_averages
-from analysis_service import AnalysisService
+from analysis.service import AnalysisService
 from price_events import build as price_events
-from analysis_collaboration import Forbidden
+from analysis import Forbidden
 from trailing_warnings import TrailingStore
 
 
@@ -161,7 +161,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                     if excluded:
                         value = {**value,'state':'excluded','reason':excluded['reason'],'bars':[]}
                 return self.send(json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8'))
-            names = {'/report-reader.js':'report-reader.js','/report-reader.css':'report-reader.css','/chart-events.js':'chart-events.js', '/trailing.js':'trailing.js', '/market-exclusions.js':'market-exclusions.js', '/market-exclusions.css':'market-exclusions.css', '/risk-workbench.js': 'risk-workbench.js', '/risk-workbench.css': 'risk-workbench.css', '/collaboration.js': 'collaboration.js', '/analysis.js': 'analysis.js', '/': 'index.html', '/app.js': 'app.js', '/tooltips.js': 'tooltips.js', '/financial-focus.js': 'financial-focus.js', '/financial-focus.css': 'financial-focus.css', '/financials.css': 'financials.css', '/style.css': 'style.css',
+            names = {'/report-reader.js':'analysis/report-reader.js','/report-reader.css':'analysis/report-reader.css','/chart-events.js':'chart-events.js', '/trailing.js':'trailing.js', '/market-exclusions.js':'market-exclusions.js', '/market-exclusions.css':'market-exclusions.css', '/risk-workbench.js': 'risk-workbench.js', '/risk-workbench.css': 'risk-workbench.css', '/collaboration.js': 'analysis/collaboration.js', '/analysis.js': 'analysis/analysis.js', '/': 'index.html', '/app.js': 'app.js', '/tooltips.js': 'tooltips.js', '/financial-focus.js': 'financial-focus.js', '/financial-focus.css': 'financial-focus.css', '/financials.css': 'financials.css', '/style.css': 'style.css',
                      '/trade-cycle.js':'trade-cycle.js', '/trade-cycle.css':'trade-cycle.css', '/scenario-preview.js':'scenario-preview.js', '/scenario-monitor.js':'scenario-monitor.js', '/scenario-monitor.css':'scenario-monitor.css',
                      '/stock-chart.js': 'stock-chart.js', '/drawing-tools.js': 'drawings/drawing-tools.js', '/chart-workspace.js': 'drawings/chart-workspace.js', '/chart-tools.css': 'drawings/chart-tools.css', '/format.js': 'format.js', '/charts.js': 'charts.js', '/workbench.png': 'workbench.png',
                      '/vendor/lightweight-charts.js': 'vendor/lightweight-charts.js',

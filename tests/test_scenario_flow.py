@@ -4,7 +4,7 @@ from copy import deepcopy
 import unittest
 
 import test_collaboration as fixtures
-from analysis_collaboration import Forbidden
+from analysis import Forbidden
 from drawings.store import defaults, Conflict
 
 
@@ -98,7 +98,7 @@ class ScenarioFlowTests(unittest.TestCase):
         with closing(self.store.connect()) as db:
             rows=db.execute('SELECT revision,payload FROM chart_workspace_versions ORDER BY revision').fetchall()
         self.assertEqual([r[0] for r in rows],[0,1,2])
-        from analysis_service import AnalysisService
+        from analysis.service import AnalysisService
         reopened=AnalysisService(self.store,self.hist,self.fin,self.view,self.root)
         listing=reopened.dispatch('list',{'stock_key':'US:SYNTH'},self.origin)
         self.assertEqual(listing['cases'][0]['latest_record_id'],self.read()['active_plans'][0]['adoption']['id'])

@@ -1,7 +1,9 @@
 """Browser-confirmed scenario watches over immutable adopted analysis plans."""
 from contextlib import closing
 
-from analysis_collaboration import Forbidden, fields, integer
+from analysis import Forbidden
+
+from analysis.collaboration import fields, integer
 from drawings.store import Conflict
 
 OPS = {'monitor_list', 'monitor_register', 'monitor_update', 'monitor_conversion'}
@@ -95,5 +97,5 @@ def dispatch(service, op, args, origin, principal, session):
 
 
 def service_digest(value):
-    from analysis_service import digest
+    from analysis import digest
     return digest(value)

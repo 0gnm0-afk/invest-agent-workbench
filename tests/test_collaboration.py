@@ -16,8 +16,10 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
-from analysis_service import AnalysisService, digest
-from analysis_collaboration import VERSION, Forbidden
+from analysis.service import AnalysisService
+from analysis import digest
+from analysis.collaboration import VERSION
+from analysis import Forbidden
 from drawings.store import WorkspaceStore, Conflict, defaults
 
 FIXTURE = json.loads((ROOT / 'tests/fixtures/collaboration-v1.json').read_text(encoding='utf-8'))
@@ -72,6 +74,14 @@ class CollaborationTests(unittest.TestCase):
         self.assertIn('analysis_collaboration_read',result['links']['resume_prompt'])
         self.assertNotIn('risk_calculate',result['links']['resume_prompt'])
         self.assertIn('트레일링·MA5',result['links']['resume_prompt'])
+
+    def test_resume_reads_snapshot_metadata_without_building_full_analysis_detail(self):
+        self.discussion()
+        expected=self.s.snapshot_summaries(self.cid)
+        with patch.object(self.s,'detail',side_effect=AssertionError('full analysis view is unnecessary')):
+            result=self.read()
+        self.assertEqual(result['snapshots'],expected)
+        self.assertEqual(len(self.s.rows('analysis_snapshots',self.cid)),len(expected))
 
     def test_additive_migration_keeps_legacy_records_snapshots_and_drawings(self):
         self.call('record',dict(snapshot_id=self.sid,kind='report',title='legacy',body='original',author='llm'))

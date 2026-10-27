@@ -3,8 +3,10 @@ from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 from urllib.parse import quote, urlencode
 
-from analysis_collaboration import Forbidden, fields, identity
-from analysis_service import digest
+from analysis import Forbidden
+
+from analysis.collaboration import fields, identity
+from analysis import digest
 from drawings.store import Conflict
 from trailing_warnings import equity
 
