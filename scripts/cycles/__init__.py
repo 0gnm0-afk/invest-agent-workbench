@@ -8,7 +8,7 @@ from analysis import Forbidden
 from analysis.collaboration import fields, identity
 from analysis import digest
 from drawings.store import Conflict
-from trailing_warnings import equity
+from alerts import equity
 
 OPS = {'cycle_list', 'cycle_read', 'cycle_context', 'cycle_request_draft',
        'cycle_agent_input', 'cycle_calculate', 'cycle_save_draft', 'cycle_approve', 'cycle_fill'}

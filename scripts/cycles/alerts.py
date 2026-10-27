@@ -176,21 +176,12 @@ class TradeCycleAlertStore:
 
 def refresh_saved(root, market_run, targets, now=None, *, account_failed=False):
     """Use verified saved market/account inputs in the existing morning path."""
-    from dashboard_data import account_view, load, checked
-    from trailing_warnings import holding_series
-    import tempfile
+    from alerts import saved_inputs
     root = Path(root); path = root/'runtime/chart-workspaces.sqlite3'
     cycles = [c for c in saved_cycles(path) if active(c)]
     if not cycles: return dict(states=[], events=[])
     store = TradeCycleAlertStore(path)
-    run_dir = Path(market_run).resolve()
-    if not run_dir.is_relative_to((root/'runtime').resolve()): raise ValueError('market_run_outside_runtime')
-    manifest = load(run_dir/'manifest.json'); run = checked(run_dir/'run.json', manifest['output_hashes'].get('run.json'))
-    source = Path(run['market_source'])/'snapshot.json'
-    with tempfile.TemporaryDirectory(prefix='cycle-alert-account-', dir=root/'runtime') as folder:
-        bundle = account_view(load(root/'config.json'), Path(folder), refresh=False, saved_dashboard_root=root/'runtime/dashboard')
-    if account_failed: bundle = {**bundle, 'query_state': 'failed'}
-    stocks = holding_series(source, manifest['input_hashes'].get(str(source)), {c['stock_key'] for c in cycles})
+    bundle, stocks = saved_inputs(root, market_run, {c['stock_key'] for c in cycles}, account_failed=account_failed)
     return store.update(cycles, bundle, stocks, targets, now)
 
 
@@ -241,48 +232,3 @@ def delivery_events(root, events, targets, *, include_cycles=True, now=None):
             if state and event['cycle_basis'] == state['basis'] and event['date'] == state['date'] and not event.get('test_record'):
                 result.append(event)
     return result
-
-
-def action_text(action, currency):
-    from invest_agent.trading.report_format import money
-    kind = action.get('kind'); step = action.get('step')
-    label = '최종 손절 예외' if kind == 'stop' else ('매수' if kind == 'buy' else '매도') + (f' {step}차' if step else '')
-    ratio = action.get('ratio'); quantity = action.get('planned_quantity')
-    size = []
-    if ratio is not None:
-        ratio_text = format(Decimal(str(ratio)), 'f')
-        size.append((ratio_text.rstrip('0').rstrip('.') if '.' in ratio_text else ratio_text) + '%')
-    if quantity is not None: size.append(f'예정 {quantity}주')
-    text = label + (' · ' + ' / '.join(size) if size else '')
-    if action.get('confirmation_price') is not None:
-        text += ' · 확인가격 ' + money(action['confirmation_price'], currency) + ' ' + currency
-    trigger = action.get('trigger') or {}
-    labels = {'gt':'초과', 'gte':'이상', 'lt':'미만', 'lte':'이하', 'cross_above':'상향 돌파', 'cross_below':'하향 이탈'}
-    if trigger.get('kind') == 'price': text += ' ' + labels.get(trigger.get('comparator', trigger.get('operator')), '판정 미정')
-    elif trigger.get('kind') in ('trailing', 'ma5', 'ma10'):
-        text += ' · ' + {'trailing':'트레일링선', 'ma5':'5일선', 'ma10':'10일선'}[trigger['kind']]
-        text += ' ' + labels.get(trigger.get('comparator', trigger.get('operator')), '판정 미정')
-    else: text += ' · 조건은 사용자 판단 필요'
-    return text
-
-
-def context_text(event):
-    lines = []
-    for context in event.get('cycle_context', []):
-        lines.append('승인한 매매 사이클 · 다음 계획 (' + {'buying':'매수 진행', 'holding':'보유', 'selling':'매도 진행'}.get(context['phase'], context['phase']) + ')')
-        for action in context['actions']:
-            lines.append(action_text(action, event['currency']))
-        lines.append('접근 경고와 계획 조건 충족은 다를 수 있습니다. 계획 비율·예정 수량이며 실제 체결은 별도 기록합니다.')
-    return '\n'.join(lines)
-
-
-def message(event):
-    from invest_agent.trading.report_format import money
-    return '\n'.join(['🔔 투자에이전트 | 승인 매매 사이클 조건 확인',
-        f"종목: {event.get('name') or event['symbol']} ({event['symbol']} · {event['market']})",
-        f"기준: {event['date']} 최신 완료 거래일 종가",
-        '종가: ' + money(event['close'], event['currency']) + ' ' + event['currency'],
-        '다음 계획: ' + action_text(event['action'], event['currency']),
-        f"승인 계획 v{event['plan_version']} · 조건 충족은 실제 체결이 아닙니다.",
-        '매매 사이클: ' + (event.get('detail_url') or 'PC 투자 대시보드 → 종목별 매매 사이클'),
-        '완료 종가 기준 · 실제 거래 기록 후 단계 변경 · 자동 주문 없음'])

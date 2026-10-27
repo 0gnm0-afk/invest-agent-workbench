@@ -8,8 +8,8 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
-import telegram_warnings as telegram
-from trailing_warnings import TrailingStore
+from alerts import delivery as telegram
+from alerts.trailing import TrailingStore
 
 
 class TelegramWarnings(unittest.TestCase):

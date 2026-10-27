@@ -316,7 +316,7 @@ def build(root=ROOT, refresh=True, *, market_run=None, daily_update=None, persis
     if (daily_update or {}).get('account_state') == 'failed':
         accounts.update(query_state='failed', reason='daily_account_refresh_failed')
     stocks = market.pop('stocks')
-    from trailing_warnings import TrailingStore
+    from alerts.trailing import TrailingStore
     from daily_launch import plan_for
     warning_store = TrailingStore(root/'runtime/trailing-warnings.sqlite3')
     warning_time = datetime.now(timezone.utc)

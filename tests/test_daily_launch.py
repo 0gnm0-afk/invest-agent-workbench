@@ -133,22 +133,22 @@ class Launch(unittest.TestCase):
         self.gate.folder.mkdir(parents=True,exist_ok=True)
         progress=[];got=self.gate.execute({**self.plan(NOW),'prior_run':old['output']},progress.append)
         args=json.loads((self.root/'args.json').read_text());self.assertIn('--session-cutoff',args);self.assertIn('--evaluated-at',args);self.assertIn(old['output'],args);self.assertEqual(got,{**new,"trailing_state":"unavailable","scenario_state":"not_configured"});self.assertEqual(progress[0]['stage'],'collection')
-        with patch('trailing_warnings.refresh_saved',return_value={'events':[]}) as refresh:
+        with patch('alerts.trailing.refresh_saved',return_value={'events':[]}) as refresh:
             got=self.gate.execute({**self.plan(NOW),'prior_run':old['output']},lambda _:None)
         self.assertEqual(got['trailing_state'],'evaluated')
         refresh.assert_called_once_with(self.root,new['output'],self.targets)
         self.gate.accounts=True
         order=[]
-        with patch('dashboard_data.refresh_account_snapshot',side_effect=lambda root: (order.append('account') or {'query_state':'received'})) as account, patch('trailing_warnings.refresh_saved',side_effect=lambda *a:order.append('risk')), patch('telegram_warnings.dispatch',side_effect=lambda *a,**kw: (order.append('telegram') or {'state':'ready'})) as delivery:
+        with patch('dashboard_data.refresh_account_snapshot',side_effect=lambda root: (order.append('account') or {'query_state':'received'})) as account, patch('alerts.trailing.refresh_saved',side_effect=lambda *a:order.append('risk')), patch('alerts.delivery.dispatch',side_effect=lambda *a,**kw: (order.append('telegram') or {'state':'ready'})) as delivery:
             got=self.gate.execute({**self.plan(NOW),'prior_run':old['output']},lambda _:None)
         self.assertEqual(order,['account','risk','telegram']);account.assert_called_once_with(self.root)
         delivery.assert_called_once_with(self.root,self.targets,include_trailing=True,include_scenarios=False)
         self.assertEqual(got['telegram_state'],'ready')
         self.assertEqual(got['account_state'],'received')
-        with patch('dashboard_data.refresh_account_snapshot',side_effect=OSError('test')), patch('trailing_warnings.refresh_saved') as warning, patch('telegram_warnings.dispatch') as delivery:
+        with patch('dashboard_data.refresh_account_snapshot',side_effect=OSError('test')), patch('alerts.trailing.refresh_saved') as warning, patch('alerts.delivery.dispatch') as delivery:
             got=self.gate.execute({**self.plan(NOW),'prior_run':old['output']},lambda _:None)
         self.assertEqual(got['account_state'],'failed');self.assertEqual(got['trailing_state'],'unavailable');warning.assert_not_called();delivery.assert_not_called()
-        with patch('dashboard_data.refresh_account_snapshot',return_value={'query_state':'received'}), patch('trailing_warnings.refresh_saved'), patch('telegram_warnings.dispatch',side_effect=OSError('private_failure')):
+        with patch('dashboard_data.refresh_account_snapshot',return_value={'query_state':'received'}), patch('alerts.trailing.refresh_saved'), patch('alerts.delivery.dispatch',side_effect=OSError('private_failure')):
             got=self.gate.execute({**self.plan(NOW),'prior_run':old['output']},lambda _:None)
         self.assertEqual(got['telegram_state'],'unavailable');self.assertEqual(got['state'],'succeeded')
 

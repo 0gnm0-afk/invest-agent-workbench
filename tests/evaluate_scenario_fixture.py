@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from scenarios.monitor import ScenarioStore
-from telegram_warnings import scenario_message
+from alerts.delivery import scenario_message
 
 root=Path(__file__).resolve().parents[1]
 folder=root/'runtime/scenario-monitor-verification'

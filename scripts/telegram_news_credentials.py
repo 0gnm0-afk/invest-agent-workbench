@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import re
 from atomic_io import atomic_write
-from telegram_warnings import protect
+from alerts.delivery import protect
 
 
 def validate(api_id, api_hash):

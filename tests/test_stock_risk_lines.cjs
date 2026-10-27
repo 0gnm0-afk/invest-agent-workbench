@@ -1,6 +1,6 @@
 const fs=require('fs'),vm=require('vm'),assert=require('node:assert/strict');
 global.window={};vm.runInThisContext(fs.readFileSync('dashboard/format.js','utf8'));global.WorkbenchFormat=window.WorkbenchFormat;
-vm.runInThisContext(fs.readFileSync('dashboard/trailing.js','utf8'));
+vm.runInThisContext(fs.readFileSync('dashboard/alerts/trailing.js','utf8'));
 const api=window.WorkbenchTrailing,match={market:'US',symbol:'S',currency:'USD'};
 const p={...match,account:'a',quantity:2,average_cost:90.125,active:true,line:97,status:'monitoring'};
 assert.equal(api.stockLines({positions:[p]},match).length,2);

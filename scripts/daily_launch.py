@@ -264,7 +264,7 @@ class DailyLaunch:
             result['trailing_state'] = 'unavailable'
         elif result.get('state') in ('succeeded', 'partial'):
             try:
-                from trailing_warnings import refresh_saved
+                from alerts.trailing import refresh_saved
                 refresh_saved(self.root, result['output'], plan['targets'])
                 result['trailing_state'] = 'evaluated'
             except Exception:
@@ -288,7 +288,7 @@ class DailyLaunch:
                 result['trade_cycle_state'] = 'unavailable'
         if self.accounts and any(result.get(key) == 'evaluated' for key in ('trailing_state', 'scenario_state', 'trade_cycle_state')):
             try:
-                from telegram_warnings import dispatch
+                from alerts.delivery import dispatch
                 result['telegram_state'] = dispatch(self.root, plan['targets'],
                                                     include_trailing=result.get('trailing_state') == 'evaluated',
                                                     include_scenarios=result.get('scenario_state') == 'evaluated',

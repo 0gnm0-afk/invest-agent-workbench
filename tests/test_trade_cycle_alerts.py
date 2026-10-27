@@ -10,8 +10,9 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
-from cycles.alerts import TradeCycleAlertStore, delivery_events, basis, context_text
-import telegram_warnings as telegram
+from cycles.alerts import TradeCycleAlertStore, delivery_events, basis
+from alerts.delivery import context_text
+from alerts import delivery as telegram
 
 
 class CycleAlerts(unittest.TestCase):
@@ -137,7 +138,7 @@ class CycleAlerts(unittest.TestCase):
         self.assertIn('/#cycle?id=tc_synthetic', sent[0]); self.assertNotIn('PRIVATE_ACCOUNT', sent[0])
 
     def test_existing_ma_warning_enriched_without_second_cycle_notification(self):
-        from trailing_warnings import TrailingStore
+        from alerts.trailing import TrailingStore
         self.action['kind'] = 'sell'; self.action['trigger'] = dict(kind='ma5', comparator='lte', evaluation='daily_close')
         self.assertFalse(self.update()['events'])
         warning = dict(id='existing-ma5', kind='ma5', policy='high95-approach-v2', account='PRIVATE_ACCOUNT',

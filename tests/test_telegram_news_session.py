@@ -15,7 +15,7 @@ from telegram_news import NewsService
 from telegram_news_credentials import ApiCredentials
 from telegram_news_session import EncryptedSession,string_session
 from telegram_news_server import Server
-from telegram_warnings import protect
+from alerts.delivery import protect
 from test_telegram_news import FakeClient
 import telegram_news_bridge as bridge
 from telethon.sessions import MemorySession

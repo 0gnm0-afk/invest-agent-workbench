@@ -6,7 +6,8 @@ import sys
 import tempfile
 import unittest
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from trailing_warnings import TrailingStore, indicators, holding_series
+from alerts.trailing import TrailingStore
+from alerts import indicators, holding_series
 
 class Warnings(unittest.TestCase):
  def setUp(self):
@@ -179,3 +180,33 @@ class SelectedSeries(unittest.TestCase):
    with self.assertRaises(ValueError):holding_series(path,hashlib.sha256(path.read_bytes()).hexdigest(),set())
 
 if __name__=='__main__':unittest.main()
+
+
+class SavedAlertInputs(unittest.TestCase):
+    def test_shared_saved_reader_selection_failure_and_no_refresh(self):
+        import hashlib, json
+        from unittest.mock import patch
+        from alerts import saved_inputs
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); run = root/'runtime/run'; source = root/'runtime/source'
+            run.mkdir(parents=True); source.mkdir()
+            (root/'config.json').write_text('{}')
+            market = source/'snapshot.json'
+            market.write_text(json.dumps({'series': [dict(market='US',symbol=k,bars=[]) for k in ('A','B')]},indent=2))
+            runfile = run/'run.json'; runfile.write_text(json.dumps({'market_source':str(source)}))
+            (run/'manifest.json').write_text(json.dumps({
+                'output_hashes': {'run.json': hashlib.sha256(runfile.read_bytes()).hexdigest()},
+                'input_hashes': {str(market): hashlib.sha256(market.read_bytes()).hexdigest()}}))
+            accounts = {'query_state':'received','accounts':[{'positions':[{'market':'US','symbol':'A'}]}]}
+            with patch('dashboard_data.account_view',return_value=accounts) as read:
+                bundle, stocks = saved_inputs(root,run)
+                self.assertIs(bundle,accounts); self.assertEqual(set(stocks),{'US:A'})
+                self.assertFalse(read.call_args.kwargs['refresh'])
+                bundle, stocks = saved_inputs(root,run,{'US:B'},account_failed=True)
+                self.assertEqual(set(stocks),{'US:B'}); self.assertEqual(bundle['query_state'],'failed')
+                self.assertEqual(accounts['query_state'],'received')
+                with self.assertRaisesRegex(ValueError,'market_run_outside_runtime'):
+                    saved_inputs(root,root/'outside')
+                market.write_text(market.read_text()+' ')
+                with self.assertRaisesRegex(ValueError,'saved_artifact_hash_mismatch'):
+                    saved_inputs(root,run)

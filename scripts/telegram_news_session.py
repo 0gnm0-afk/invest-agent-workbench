@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import sys
 from atomic_io import atomic_write
-from telegram_warnings import protect
+from alerts.delivery import protect
 
 
 def string_session():

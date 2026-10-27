@@ -11,7 +11,7 @@ from uuid import uuid4
 from drawings.store import WorkspaceStore, Conflict
 from drawings.geometry import geometry
 from chart_history import aggregate
-from trailing_warnings import indicators, packed, stamp, equity
+from alerts import indicators, packed, stamp, equity
 
 
 def utc():
@@ -339,18 +339,9 @@ class ScenarioStore:
 
 def refresh_saved(root, market_run, targets, now=None, *, account_failed=False):
     """Reuse the same immutable market/account results as trailing warnings, without network calls."""
-    from dashboard_data import account_view, load, checked
-    from trailing_warnings import holding_series
-    import tempfile
+    from alerts import saved_inputs
     root=Path(root);store=ScenarioStore(root/'runtime/chart-workspaces.sqlite3')
     active=[m for m in store.read()['monitors'] if m['active']]
     if not active: return store.read()
-    run_dir=Path(market_run).resolve()
-    if not run_dir.is_relative_to((root/'runtime').resolve()): raise ValueError('market_run_outside_runtime')
-    manifest=load(run_dir/'manifest.json');run=checked(run_dir/'run.json',manifest['output_hashes'].get('run.json'))
-    source=Path(run['market_source'])/'snapshot.json'
-    with tempfile.TemporaryDirectory(prefix='scenario-account-',dir=root/'runtime') as folder:
-        bundle=account_view(load(root/'config.json'),Path(folder),refresh=False,saved_dashboard_root=root/'runtime/dashboard')
-    if account_failed: bundle={**bundle,'query_state':'failed'}
-    stocks=holding_series(source,manifest['input_hashes'].get(str(source)),{m['stock_key'] for m in active})
+    bundle, stocks = saved_inputs(root, market_run, {m['stock_key'] for m in active}, account_failed=account_failed)
     return store.update(bundle,stocks,targets,now)
