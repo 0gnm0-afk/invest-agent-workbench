@@ -8,7 +8,7 @@ from urllib.error import URLError
 from urllib.request import Request, build_opener, ProxyHandler
 
 URL = 'http://127.0.0.1:8769'
-ROOT = Path(__file__).resolve().parents[1]
+from workbench_paths import ROOT
 
 
 def health(opener):

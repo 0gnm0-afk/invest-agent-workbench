@@ -11,13 +11,13 @@ from urllib.error import URLError
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'scripts'),str(ROOT/'tests'),str(ROOT/'runtime/telegram-news-deps')]
-from telegram_news import NewsService
-from telegram_news_credentials import ApiCredentials
-from telegram_news_session import EncryptedSession,string_session
-from telegram_news_server import Server
+from news.search import NewsService
+from news.auth import ApiCredentials
+from news.auth import EncryptedSession,string_session
+from news.server import Server
 from alerts.delivery import protect
 from test_telegram_news import FakeClient
-import telegram_news_bridge as bridge
+import news.bridge as bridge
 from telethon.sessions import MemorySession
 from telethon.crypto import AuthKey
 

@@ -12,9 +12,9 @@ from unittest.mock import patch, AsyncMock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT/'scripts'),str(ROOT/'runtime/telegram-news-deps')]
-from telegram_news import NewsService, KST, client_factory
-from telegram_news_server import Server
-from telegram_news_credentials import ApiCredentials
+from news.search import NewsService, KST, client_factory
+from news.server import Server
+from news.auth import ApiCredentials
 
 SessionPasswordNeededError=type('SessionPasswordNeededError',(Exception,),{})
 FloodWaitError=type('FloodWaitError',(Exception,),{})
@@ -111,7 +111,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('SENSITIVE',json.dumps(r))
     async def test_real_library_memory_session_writes_no_session_file(self):
         from telethon.sessions import MemorySession
-        with tempfile.TemporaryDirectory() as folder, patch('telegram_news.ROOT',ROOT):
+        with tempfile.TemporaryDirectory() as folder, patch('news.search.ROOT',ROOT):
             with patch('os.getcwd',return_value=folder):
                 client=client_factory(12345,'a'*32)
                 self.assertIs(type(client.session),MemorySession)
@@ -145,7 +145,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_environment_import_keeps_values_out_of_result(self):
         from telegram_news_import import import_credentials
-        with tempfile.TemporaryDirectory() as folder,patch('telegram_news_import.winreg.OpenKey'),patch('telegram_news_import.winreg.QueryValueEx',side_effect=[('12345',1),('ab'*16,1)]):
+        with tempfile.TemporaryDirectory() as folder,patch('news.auth.winreg.OpenKey'),patch('news.auth.winreg.QueryValueEx',side_effect=[('12345',1),('ab'*16,1)]):
             result=import_credentials(folder)
             self.assertEqual(result['state'],'api_credentials_saved')
             self.assertNotIn('12345',json.dumps(result));self.assertNotIn('ab'*16,json.dumps(result))
@@ -206,6 +206,8 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.req('/mcp',{'op':'clear_credentials','args':{}},headers)[0],403)
         self.assertEqual(self.req('/ui',{'op':'logout','args':{}},headers)[0],403)
         _,hs,_=self.req('/')
+        for path in ('/app.js','/style.css'):
+            self.assertEqual(self.req(path)[0],200)
         cookie=hs['Set-Cookie'].split(';')[0]
         self.assertEqual(self.req('/ui-state')[0],403)
         token=self.req('/ui-state',headers={'Cookie':cookie})[2]['token']

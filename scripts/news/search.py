@@ -8,7 +8,7 @@ import sys
 import time
 from urllib.parse import urlsplit
 
-ROOT = Path(__file__).resolve().parents[1]
+from workbench_paths import ROOT
 KST = timezone(timedelta(hours=9))
 READ_OPS = {'status', 'dialogs', 'search'}
 AUTH_OPS = {'login', 'verify', 'logout', 'save_credentials', 'clear_credentials', 'restore', 'persist_session'}

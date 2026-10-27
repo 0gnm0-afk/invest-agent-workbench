@@ -21,7 +21,7 @@ async def call(op,args):
     # Start the persistent connector before creating the temporary MCP job.
     # The Windows MCP SDK kills its entire child job when this one-shot call ends.
     # A connector created inside that job would lose its in-memory room lookup.
-    from telegram_news_bridge import ensure_health
+    from news.bridge import ensure_health
     from urllib.request import build_opener, ProxyHandler
     try:
         await asyncio.to_thread(ensure_health, build_opener(ProxyHandler({})))
