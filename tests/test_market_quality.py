@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
-from market_quality import complete_cap, error_disposition, history_usability, quote_time_state, LIFECYCLE
+from market.quality import complete_cap, error_disposition, history_usability, quote_time_state, LIFECYCLE
 
 
 class MarketQualityTests(unittest.TestCase):
@@ -14,7 +14,7 @@ class MarketQualityTests(unittest.TestCase):
         self.bar = dict(date='2026-09-23', open=19, low=18, high=21, close=20, volume=10)
 
     def test_raw_completed_close_is_required_and_undated_quote_not_relabelled(self):
-        with patch('market_quality.daily_series', return_value={
+        with patch('market.quality.daily_series', return_value={
                 'bars': [self.bar], 'currency': 'USD', 'source_url': 'source',
                 'price_basis': 'toss_raw_ohlc_no_order_authority'}) as call:
             result = complete_cap(None, self.row, ['2026-09-22', '2026-09-23'])
@@ -27,12 +27,12 @@ class MarketQualityTests(unittest.TestCase):
 
     def test_stale_raw_close_is_not_used(self):
         self.bar['date'] = '2026-09-22'
-        with patch('market_quality.daily_series', return_value={'bars': [self.bar]}):
+        with patch('market.quality.daily_series', return_value={'bars': [self.bar]}):
             with self.assertRaises(ValueError):
                 complete_cap(None, self.row, ['2026-09-23'])
 
     def test_suspension_and_unknown_shares_do_not_trigger_fallback_calls(self):
-        with patch('market_quality.daily_series') as call:
+        with patch('market.quality.daily_series') as call:
             self.row['tradable'] = False
             self.assertIsNone(complete_cap(None, self.row, ['2026-09-23'])['market_cap'])
             self.row.update(tradable=True, shares_outstanding=None)

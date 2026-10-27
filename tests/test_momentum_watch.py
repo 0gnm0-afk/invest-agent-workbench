@@ -3,7 +3,7 @@ from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from test_momentum_entry import vcp,cup,spr,fixture
 from invest_agent.trading import momentum_entry as entry,momentum_watch as watch
-import momentum_review,watch_review,daily_market,priority_review
+import screening.momentum as momentum_review, screening.watch as watch_review, market.daily as daily_market, screening.priority as priority_review
 
 def observe(b,rs=95,market=False,structure=None):
     strict=entry.analyze(b,rs,{'supportive':market},structure)

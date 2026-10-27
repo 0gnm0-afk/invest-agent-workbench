@@ -5,8 +5,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from market_quality import adr_cap_unavailable, complete_cap
-from nh_fallback import completed_cap, fallback_targets
+from market.quality import adr_cap_unavailable, complete_cap
+from market.nh_fallback import completed_cap, fallback_targets
 
 
 class ADRCapTests(unittest.TestCase):
@@ -40,7 +40,7 @@ class ADRCapTests(unittest.TestCase):
                     self.assertEqual(result[key], before[key])
 
     def test_completed_toss_quote_does_not_resolve_adr_share_units(self):
-        with patch('market_quality.daily_series') as request:
+        with patch('market.quality.daily_series') as request:
             for state in ('not_provided', 'provided'):
                 with self.subTest(state=state):
                     row = {**self.row, 'quote_time_state': state}

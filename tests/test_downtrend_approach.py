@@ -6,10 +6,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-import downtrend_approach as d
-import priority_review
-import momentum_review
-import watch_review
+import screening.downtrend as d
+import screening.priority as priority_review
+import screening.momentum as momentum_review
+import screening.watch as watch_review
 from test_momentum_entry import fixture, series
 
 

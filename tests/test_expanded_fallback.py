@@ -2,10 +2,10 @@ import copy,json,sys,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-import nh_fallback as n
-import market_scope as m
-from nh_market_auth import NHMarketError
-from nh_market_client import MarketClient,PERIOD,us_period_inputs,digest
+import market.nh_fallback as n
+import market.scope as m
+from market.providers.nh_auth import NHMarketError
+from market.providers.nh_client import MarketClient, PERIOD, us_period_inputs, digest
 
 class ExpandedFallbackTests(unittest.TestCase):
     def policy(self):
@@ -21,7 +21,7 @@ class ExpandedFallbackTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);src=root/'source';src.mkdir();(src/'snapshot.json').write_text(json.dumps(snap))
             cfg={'nh_us_master':'us','nh_us_master_sha256':'u','nh_kr_master':'kr','nh_kr_master_sha256':'k'}
-            with patch('market_scope.load',return_value=self.policy()),patch.object(n,'load_checked',return_value=[{'sNationCode':'USA','sStockCode':'NQQ','sSymbol':'TEST','sStandardCode':'US_TEST' if identity else 'WRONG'}]),patch.object(n,'_reference_rows',return_value={}),patch.object(n,'MarketClient'),patch.object(n,'audit',return_value={}),patch.object(n,'_nh_bars',side_effect=reason) as call:
+            with patch('market.scope.load',return_value=self.policy()),patch.object(n,'load_checked',return_value=[{'sNationCode':'USA','sStockCode':'NQQ','sSymbol':'TEST','sStandardCode':'US_TEST' if identity else 'WRONG'}]),patch.object(n,'_reference_rows',return_value={}),patch.object(n,'MarketClient'),patch.object(n,'audit',return_value={}),patch.object(n,'_nh_bars',side_effect=reason) as call:
                 out,summary,_=n.recover(src,root/'out',cfg)
                 self.assertEqual(call.call_count,1)
                 return summary,json.loads((out/'snapshot.json').read_text(encoding='utf8'))
@@ -105,7 +105,7 @@ class ExpandedFallbackTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);args=us_period_inputs('TEST','20261001');p=root/'responses'/(digest(PERIOD,args)+'.json');p.parent.mkdir()
             p.write_text(json.dumps({'path':PERIOD,'inputs':args,'http_status':400}))
-            with patch('nh_market_client.token') as token:
+            with patch('market.providers.nh_client.token') as token:
                 with self.assertRaisesRegex(NHMarketError,'market_http_400'):MarketClient(root).read(PERIOD,args)
                 token.assert_not_called()
 

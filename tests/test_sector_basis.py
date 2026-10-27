@@ -7,8 +7,9 @@ from datetime import date, timedelta
 from pathlib import Path
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-import sector_observation as so
-import sector_basis as sb
+import atomic_io as artifact_io
+import sectors.observation as so
+import sectors.basis as sb
 
 
 def stock(market='KR'):
@@ -68,18 +69,18 @@ class BasisTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);(root/'sources').mkdir();doc=root/'sources/faq.md'
             doc.write_text('frozen official fixture',encoding='utf-8')
-            meta={'url':sb.FAQ_URL,'final_url':sb.FAQ_URL,'status':200,'sha256':so.sha(doc),
+            meta={'url':sb.FAQ_URL,'final_url':sb.FAQ_URL,'status':200,'sha256':artifact_io.sha(doc),
                   'observed_at':'2026-09-25T07:00:00+09:00'}
-            so.write(doc.with_suffix('.md.meta.json'),meta)
+            artifact_io.write(doc.with_suffix('.md.meta.json'),meta)
             config={'contract':sb.CONTRACT,'kr_reference':'saved_universe_equal_weight',
                     'documents':[{'file':'faq.md','url':sb.FAQ_URL,'sha256':meta['sha256']}]}
-            so.write(root/'calculation-basis.json',config)
-            self.assertIsNotNone(sb.load_basis(root,so.checked,so.load,{},'2026-09-25T08:00:00+09:00',so.age_issue))
+            artifact_io.write(root/'calculation-basis.json',config)
+            self.assertIsNotNone(sb.load_basis(root,artifact_io.checked,artifact_io.load,{},'2026-09-25T08:00:00+09:00',so.age_issue))
             with self.assertRaisesRegex(ValueError,'not_current'):
-                sb.load_basis(root,so.checked,so.load,{},'2026-09-25T06:00:00+09:00',so.age_issue)
+                sb.load_basis(root,artifact_io.checked,artifact_io.load,{},'2026-09-25T06:00:00+09:00',so.age_issue)
             doc.write_text('tampered',encoding='utf-8')
             with self.assertRaisesRegex(ValueError,'hash_mismatch'):
-                sb.load_basis(root,so.checked,so.load,{},'2026-09-25T08:00:00+09:00',so.age_issue)
+                sb.load_basis(root,artifact_io.checked,artifact_io.load,{},'2026-09-25T08:00:00+09:00',so.age_issue)
 
 
 class ReferenceTest(unittest.TestCase):

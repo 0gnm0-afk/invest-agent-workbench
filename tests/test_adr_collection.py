@@ -10,11 +10,11 @@ from unittest.mock import patch
 from datetime import datetime, timezone
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from toss_universe import discover
-from toss_listing import listing_requests
+from market.providers.toss_universe import discover
+from market.providers.toss_universe import listing_requests
 from test_toss_universe import FakeToss
-import hybrid_market as hybrid
-from market_collect import audit
+import market.toss_collection as hybrid
+from market.collect import audit
 from dashboard_data import saved_market, write, sha
 from dashboard import handler_for, ThreadingHTTPServer
 

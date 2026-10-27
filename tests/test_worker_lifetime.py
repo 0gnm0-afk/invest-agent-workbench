@@ -34,8 +34,8 @@ class WorkerLifetime(unittest.TestCase):
     def test_parent_killed_worker_finishes_and_blocks_duplicate(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root/'scripts').mkdir()
-            (root/'scripts/daily_market.py').write_text("""import json,time
+            (root/'scripts/market').mkdir(parents=True)
+            (root/'scripts/market/daily.py').write_text("""import json,time
 from pathlib import Path
 root=Path.cwd()
 print(json.dumps({'stage':'collection','output':str(root/'runtime/fixture')}),flush=True)
@@ -92,10 +92,10 @@ print(json.dumps({'state':'failed','output':str(root/'runtime/fixture'),'stages'
 
     def test_partial_lines_are_read_after_flush_and_exit(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);(root/'scripts').mkdir()
+            root=Path(tmp);(root/'scripts/market').mkdir(parents=True)
             output = dict(state='failed', output=str(root/'runtime/fixture'), stages={})
             payload=json.dumps(output)
-            (root/'scripts/daily_market.py').write_text(
+            (root/'scripts/market/daily.py').write_text(
                 'import sys,time\nsys.stdout.write('+repr(payload[:15])+');sys.stdout.flush();time.sleep(.2)\n'
                 'sys.stdout.write('+repr(payload[15:]+'\n')+');sys.stdout.flush()\n')
             gate=DailyLaunch(root,accounts=False);gate.folder.mkdir(parents=True)
@@ -123,7 +123,7 @@ class ScheduledLauncher(unittest.TestCase):
         source=SCRIPTS.parent
         shutil.copyfile(source/'scheduled-market.ps1',root/'scheduled-market.ps1')
         (root/'config.json').write_text((source/'config.json').read_text(encoding='utf-8'),encoding='utf-8')
-        (root/'scripts').mkdir()
+        (root/'scripts/market').mkdir(parents=True)
         (root/'scripts/scheduled_market.py').write_text(
             'import time,sys\nfrom pathlib import Path\nroot=Path.cwd()\n'
             'print("started",flush=True)\n(root/"started").touch()\n'

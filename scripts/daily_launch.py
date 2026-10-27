@@ -210,7 +210,7 @@ class DailyLaunch:
         python = Path(sys.executable)
         if python.name.lower() == 'pythonw.exe':
             python = python.with_name('python.exe')
-        command = [str(python), '-u', str(Path(__file__).with_name('market_worker.py')),
+        command = [str(python), '-u', str(Path(__file__).parent/'market/worker.py'),
                    '--root', str(self.root), '--',
                    '--session-cutoff',plan['cutoff'],'--evaluated-at',plan['evaluated_at']]
         if plan.get('prior_run'):

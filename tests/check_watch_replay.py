@@ -13,7 +13,7 @@ if __name__=='__main__':
         for k in ('main_candidate','sperandeo_candidate','active_events'):assert o.get(k)==b.get(k),(o['symbol'],k)
     assert load(out/'screen-base.json')==load(before/'screen-base.json')
     sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-    import sector_signals
+    import sectors.signals as sector_signals
     snapshot=load(Path(load(out/'run.json')['market_source'])/'snapshot.json')
     baseline=sector_signals.build(snapshot,load(before/'sectors/groups.json'),load(before/'sectors/observation.json'),load(out/'config.json').get('sector_states'))
     sector_signals.attach_candidates(baseline,r,load(before/'sectors/groups.json'),load(out/'priority-charts.json'))

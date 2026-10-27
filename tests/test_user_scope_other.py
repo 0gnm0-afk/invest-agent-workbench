@@ -6,15 +6,15 @@ import tempfile
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-import market_scope
-import user_classification
-from chart_history import HistoryStore
-from sector_focus import baskets
+import market.scope as market_scope
+import sectors.user_classification as user_classification
+from market.history.chart import HistoryStore
+from sectors.focus import baskets
 
 
 class UserScopeOther(unittest.TestCase):
     def setUp(self):
-        self.registry_patch=patch('market_exclusion_review.read_records',return_value=([],b''))
+        self.registry_patch=patch('market.exclusions.read_records',return_value=([],b''))
         self.registry_patch.start();self.addCleanup(self.registry_patch.stop)
         self.row=dict(market='US',symbol='NEW',isin_code='USNEW',exchange='NASDAQ',
                       group_state='unmatched',reason='security_type_conflict',
@@ -92,7 +92,8 @@ class UserScopeOther(unittest.TestCase):
         policy=json.loads((root/'config.json').read_text(encoding='utf-8'))['user_classification']
         rows=[dict(r,group_state='unmatched',reason=r['previous_reason']) for r in policy['records']]
         self.assertEqual(len(rows),52)
-        active,excluded=market_scope.partition(rows,market_scope.load())
+        with patch('market.scope.read_registry',return_value=([],b'')), patch('market.exclusions.read_records',return_value=([],b'')):
+            active,excluded=market_scope.partition(rows,market_scope.load())
         self.assertEqual({r['symbol'] for r in excluded},{'ADAMG','ADAMH','ADAMI','RWTS'})
         mapped=user_classification.apply(active,{'user_classification':policy})
         self.assertEqual(len(mapped),48)

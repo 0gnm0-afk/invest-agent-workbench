@@ -132,8 +132,8 @@ def nvidia_supplement(collector,source):
 
 def samsung_preferred_price(collector,stock):
     if stock.get('market')!='KR' or stock.get('symbol','').split('.')[0]!='005930':return
-    from toss_market_client import TossMarketClient
-    from toss_candles import daily_series
+    from market.providers.toss_client import TossMarketClient
+    from market.providers.toss_candles import daily_series
     import hashlib,json
     from datetime import datetime,timezone
     end=stock.get('bars', [{}])[-1].get('date') if stock.get('bars') else None

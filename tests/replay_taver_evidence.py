@@ -8,10 +8,10 @@ import socket
 import sys
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-import daily_market
+import market.daily as daily_market
 from invest_agent.trading.taver_structure import analyze
 from invest_agent.trading.market import usable_tail
-from taver_review import draw_structure
+from screening.taver import draw_structure
 
 
 def main():

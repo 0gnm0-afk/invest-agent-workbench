@@ -6,8 +6,9 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-import sector_observation as so
-import finviz_public_classification as fp
+import atomic_io as artifact_io
+import sectors.observation as so
+import sectors.finviz as fp
 
 MAP=b'prefix;123(e){e.exports={name:"Root",children:[{name:"Technology",children:[{name:"Software",children:[{name:"ABC",description:"ABC: name, children",value:12}]}]}]}};notExecuted()'
 
@@ -97,28 +98,28 @@ class FinvizPublicTest(unittest.TestCase):
               'page.html':(b'<link data-chunk-id="map_base_sec_all" href="/assets/data.js">','https://finviz.com/map.ashx?t=sec_all')}
         for name,(data,url) in docs.items():
             path=sources/name;path.write_bytes(data)
-            so.write(path.with_suffix(path.suffix+'.meta.json'),{'url':url,'final_url':url,'status':200,
-                     'sha256':so.sha(path),'observed_at':'2026-09-24T00:00:00+00:00'})
-        so.write(root/'finviz-public.json',{'documents':[{'kind':'full_market_map','file':'data.js','page':'page.html'}]})
+            artifact_io.write(path.with_suffix(path.suffix+'.meta.json'),{'url':url,'final_url':url,'status':200,
+                     'sha256':artifact_io.sha(path),'observed_at':'2026-09-24T00:00:00+00:00'})
+        artifact_io.write(root/'finviz-public.json',{'documents':[{'kind':'full_market_map','file':'data.js','page':'page.html'}]})
         return root
 
     def test_public_map_chain_and_hash_validation(self):
         root=self.public_fixture();inputs={}
-        self.assertEqual(fp.load_public(root,so.checked,so.load,inputs,so.SECTORS)['ABC'][0]['sector'],'Technology')
+        self.assertEqual(fp.load_public(root,artifact_io.checked,artifact_io.load,inputs,so.SECTORS)['ABC'][0]['sector'],'Technology')
         self.assertEqual(len(inputs),5)
         (root/'sources/data.js').write_bytes(MAP+b'tamper')
         with self.assertRaisesRegex(ValueError,'hash_mismatch'):
-            fp.load_public(root,so.checked,so.load,{},so.SECTORS)
+            fp.load_public(root,artifact_io.checked,artifact_io.load,{},so.SECTORS)
 
     def test_other_map_cannot_claim_full_market(self):
         root=self.public_fixture();path=root/'sources/page.html.meta.json'
-        value=so.load(path);value['url']='https://finviz.com/map.ashx?t=sec';so.write(path,value)
+        value=artifact_io.load(path);value['url']='https://finviz.com/map.ashx?t=sec';artifact_io.write(path,value)
         with self.assertRaisesRegex(ValueError,'full_market_page_required'):
-            fp.load_public(root,so.checked,so.load,{},so.SECTORS)
+            fp.load_public(root,artifact_io.checked,artifact_io.load,{},so.SECTORS)
 
     def test_no_manifest_is_legacy_mode(self):
         with tempfile.TemporaryDirectory() as folder:
-            self.assertEqual(fp.load_public(Path(folder),so.checked,so.load,{},so.SECTORS),{})
+            self.assertEqual(fp.load_public(Path(folder),artifact_io.checked,artifact_io.load,{},so.SECTORS),{})
 
 
 if __name__=='__main__':unittest.main()

@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from drawings.store import WorkspaceStore, Conflict
 from drawings.geometry import geometry
-from chart_history import aggregate
+from market.history.chart import aggregate
 from alerts import indicators, packed, stamp, equity
 
 

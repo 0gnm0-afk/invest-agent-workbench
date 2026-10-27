@@ -39,7 +39,7 @@ def main():
     try:
         if args.check:
             # Imported worker dependencies and calendar are checked without market access.
-            import daily_market
+            import market.daily as daily_market
             config = json.loads((ROOT/'config.json').read_text(encoding='utf-8'))
             if not Path(config['engine']).is_dir() or not Path(config['mother']).is_dir():
                 raise ValueError('configured_root_missing')

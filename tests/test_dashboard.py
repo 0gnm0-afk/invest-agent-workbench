@@ -183,7 +183,8 @@ class HttpBoundary(unittest.TestCase):
 
     def test_feature_assets_keep_existing_urls_after_folder_move(self):
         assets=Path(__file__).resolve().parents[1]/'dashboard'
-        groups={'alerts': ('trailing.js',),
+        groups={'market': ('market-exclusions.js','market-exclusions.css'),
+                'alerts': ('trailing.js',),
                 'cycles': ('trade-cycle.js','trade-cycle.css'),
                 'drawings': ('drawing-tools.js','chart-workspace.js','chart-tools.css'),
                 'analysis': ('analysis.js','collaboration.js','report-reader.js','report-reader.css'),

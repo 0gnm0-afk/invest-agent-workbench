@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-import toss_api as api
+import market.providers.toss_api as api
 
 
 class TokenTest(unittest.TestCase):
@@ -94,7 +94,7 @@ with patch.object(api,'load_env',return_value={'TOSS_CLIENT_ID':'fixture','TOSS_
         self.assertEqual(issued.read_text().count('issued'),1)
 
     def test_market_client_refreshes_during_same_collection_before_expiry(self):
-        from toss_market_client import TossMarketClient
+        from market.providers.toss_client import TossMarketClient
         clock=[1000.0];used=[]
         self.path.parent.mkdir()
         self.path.write_text(json.dumps({'access_token':'old','expires_at':1200.0}))

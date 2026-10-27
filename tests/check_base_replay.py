@@ -4,7 +4,7 @@ from pathlib import Path
 from collections import Counter
 from PIL import Image
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-import daily_market as daily,dashboard_data,priority_review
+import market.daily as daily, dashboard_data, screening.priority as priority_review
 from unittest.mock import patch
 import socket
 from check_momentum_replay import core,Links

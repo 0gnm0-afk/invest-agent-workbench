@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import Mock, patch
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from chart_history import HistoryStore, aggregate, validate_bars
+from market.history.chart import HistoryStore, aggregate, validate_bars
 from drawings.store import defaults, moving_averages
 from dashboard import handler_for, ThreadingHTTPServer
 
@@ -30,7 +30,7 @@ class History(unittest.TestCase):
         return {'result':{'nextBefore':None,'candles':[dict(timestamp=b['date']+'T00:00:00-04:00',currency='USD',openPrice=b['open'],highPrice=b['high'],lowPrice=b['low'],closePrice=b['close'],volume=b['volume']) for b in rows]}}
     def test_long_history_more_than_ten_pages(self):
         from datetime import date, timedelta
-        from toss_candles import daily_series
+        from market.providers.toss_candles import daily_series
         days=[];day=date(2016,1,1)
         while day<=date(2026,9,24):
             if day.weekday()<5:days.append(day.isoformat())
@@ -132,7 +132,7 @@ class History(unittest.TestCase):
         store.saved.packet = Mock(return_value={'history': {
             'state': 'unavailable', 'reason': 'saved_us_symbol_unavailable'}})
         store.cached = Mock(side_effect=AssertionError('unexpected selected cache access'))
-        with patch('market_scope.match', return_value={'reason': 'user_approved', 'approved_on': '2026-10-04'}):
+        with patch('market.scope.match', return_value={'reason': 'user_approved', 'approved_on': '2026-10-04'}):
             self.assertEqual(store.ensure(self.stock, retry=True)['history']['state'], 'excluded')
             self.assertEqual(store.view(self.stock)['bars'], [])
         store.saved.packet.assert_not_called()

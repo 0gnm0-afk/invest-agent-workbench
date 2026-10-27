@@ -7,9 +7,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from candidate_context import enrich
-from sector_observation import align_groups
-import daily_market as daily
+from screening.context import enrich
+from sectors.observation import align_groups
+import market.daily as daily
 
 
 class ContextTest(unittest.TestCase):
@@ -73,6 +73,21 @@ class FailureTest(unittest.TestCase):
             self.assertTrue((output/'report.html').exists())
             manifest = json.loads((output/'manifest.json').read_text())
             self.assertIn('run.json',manifest['output_hashes'])
+
+    def test_review_rejects_changed_screen_code_at_both_old_and_new_paths(self):
+        for relative in ('scripts/stock_screen.py', 'scripts/screening/engine.py'):
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); source = root/relative; source.parent.mkdir(parents=True)
+                source.write_text('changed code')
+                saved = root/'runtime/saved'; saved.mkdir(parents=True)
+                daily.write_json(saved/'manifest.json', {'input_hashes':{}, 'output_hashes':{},
+                    'code_hashes':{str(source):'original-code-hash'}})
+                with patch.object(daily,'ROOT',root), patch.object(daily,'code_hashes',return_value={}), \
+                        patch.object(daily,'seed_check',return_value=({},{})), patch.object(daily,'collect') as collector:
+                    result = daily.run({'engine':str(root/'engine')}, saved_run=saved)
+                self.assertEqual(result['state'],'failed')
+                self.assertIn('input_hash_mismatch:'+str(source.resolve()), result['error'])
+                collector.assert_not_called()
 
     def test_input_tamper_detected(self):
         with tempfile.TemporaryDirectory() as tmp:

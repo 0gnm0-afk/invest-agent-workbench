@@ -117,7 +117,7 @@ class Launch(unittest.TestCase):
         self.gate.runner=lambda p,c:(_ for _ in ()).throw(ValueError('SECRET'))
         a=self.gate.once(NOW);self.assertEqual(a['state'],'failed');self.assertNotIn('SECRET',json.dumps(a));self.assertTrue(self.gate.once(NOW)['reused'])
     def test_daily_pipeline_prior_seed_not_shadowed_by_latest_file(self):
-        import daily_market
+        import market.daily as daily_market
         prior=self.result('prior')
         with patch.object(daily_market,'ROOT',self.root), patch.object(daily_market,'code_hashes',return_value={}), patch.object(daily_market,'seed_check',return_value=({},{})), patch.object(daily_market,'collect',side_effect=ValueError('stop_before_network')) as collector:
             daily_market.run({'engine':str(self.root)},session_cutoff='2026-09-29',evaluated_at=NOW.isoformat(),prior_result=prior['output'])
@@ -127,9 +127,9 @@ class Launch(unittest.TestCase):
     def test_worker_process_passes_cutoff_and_prior_run(self):
         self.gate.accounts=False
         old=self.result('old');new=self.result('new')
-        folder=self.root/'scripts';folder.mkdir()
+        folder=self.root/'scripts/market';folder.mkdir(parents=True)
         program='import json,sys\nfrom pathlib import Path\nPath("args.json").write_text(json.dumps(sys.argv))\nprint('+repr(json.dumps({'stage':'collection','output':new['output']}))+',flush=True)\nprint('+repr(json.dumps(new))+',flush=True)\n'
-        (folder/'daily_market.py').write_text(program)
+        (folder/'daily.py').write_text(program)
         self.gate.folder.mkdir(parents=True,exist_ok=True)
         progress=[];got=self.gate.execute({**self.plan(NOW),'prior_run':old['output']},progress.append)
         args=json.loads((self.root/'args.json').read_text());self.assertIn('--session-cutoff',args);self.assertIn('--evaluated-at',args);self.assertIn(old['output'],args);self.assertEqual(got,{**new,"trailing_state":"unavailable","scenario_state":"not_configured"});self.assertEqual(progress[0]['stage'],'collection')

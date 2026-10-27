@@ -132,7 +132,7 @@ class ScenarioFlowTests(unittest.TestCase):
         self.assertIn('analysis='+self.cid,value['monitors'][0]['detail_url'])
 
     def test_provisional_weekly_research_does_not_change_pivot_status(self):
-        from price_events import validate_research
+        from market.history.price_events import validate_research
         packet={'groups':[{'id':'g','event_ids':['p'],'confirmed_event_ids':[]}],
                 'events':[{'id':'p','kind':'high','timeframe':'1w','status':'provisional'}]}
         before=deepcopy(packet)

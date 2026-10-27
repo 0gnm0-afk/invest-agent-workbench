@@ -14,19 +14,19 @@ import sqlite3
 from http.cookies import SimpleCookie
 from daily_launch import DailyLaunch, plan_for
 from dashboard_daily import DashboardDaily, RetryConflict
-from market_exclusion_review import ExclusionReview, ReviewConflict
+from market.exclusions import ExclusionReview, ReviewConflict
 from invest_agent.trading.store import instance_lock
 import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from dashboard_data import ROOT, build, StockSearch
-from chart_history import HistoryStore, timeframe
+from market.history.chart import HistoryStore, timeframe
 from financial_store import FinancialStore
 from financial_summary import selected_stock
 from drawings.store import WorkspaceStore, Conflict, moving_averages
 from analysis.service import AnalysisService
-from price_events import build as price_events
+from market.history.price_events import build as price_events
 from analysis import Forbidden
 from alerts.trailing import TrailingStore
 
@@ -144,7 +144,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                 value = histories.view(stocks[key], frame)
                 daily = value if frame == '1d' else histories.view(stocks[key], '1d')
                 value['price_events'] = price_events(daily, financials.read(key))
-                from recent_trendlines import overlay
+                from screening.trendlines import overlay
                 entry = next((e for e in data.get('market',{}).get('entries',[]) if e['market']+':'+e['symbol']==key),{})
                 signals = entry.get('route_signals',{})
                 line = signals.get('downtrend_approach',{}).get('trendline') or signals.get('sperandeo',{}).get('resistance_trendline')
@@ -156,12 +156,12 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                 if value is None:
                     value = {'state': 'unavailable', 'reason': 'saved_price_series_missing', 'bars': []}
                 elif exclusion_review:
-                    from market_scope import match
+                    from market.scope import match
                     excluded = match(value)
                     if excluded:
                         value = {**value,'state':'excluded','reason':excluded['reason'],'bars':[]}
                 return self.send(json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8'))
-            names = {'/report-reader.js':'analysis/report-reader.js','/report-reader.css':'analysis/report-reader.css','/chart-events.js':'chart-events.js', '/trailing.js':'alerts/trailing.js', '/market-exclusions.js':'market-exclusions.js', '/market-exclusions.css':'market-exclusions.css', '/risk-workbench.js': 'risk-workbench.js', '/risk-workbench.css': 'risk-workbench.css', '/collaboration.js': 'analysis/collaboration.js', '/analysis.js': 'analysis/analysis.js', '/': 'index.html', '/app.js': 'app.js', '/tooltips.js': 'tooltips.js', '/financial-focus.js': 'financial-focus.js', '/financial-focus.css': 'financial-focus.css', '/financials.css': 'financials.css', '/style.css': 'style.css',
+            names = {'/report-reader.js':'analysis/report-reader.js','/report-reader.css':'analysis/report-reader.css','/chart-events.js':'chart-events.js', '/trailing.js':'alerts/trailing.js', '/market-exclusions.js':'market/market-exclusions.js', '/market-exclusions.css':'market/market-exclusions.css', '/risk-workbench.js': 'risk-workbench.js', '/risk-workbench.css': 'risk-workbench.css', '/collaboration.js': 'analysis/collaboration.js', '/analysis.js': 'analysis/analysis.js', '/': 'index.html', '/app.js': 'app.js', '/tooltips.js': 'tooltips.js', '/financial-focus.js': 'financial-focus.js', '/financial-focus.css': 'financial-focus.css', '/financials.css': 'financials.css', '/style.css': 'style.css',
                      '/trade-cycle.js':'cycles/trade-cycle.js', '/trade-cycle.css':'cycles/trade-cycle.css', '/scenario-preview.js':'scenarios/scenario-preview.js', '/scenario-monitor.js':'scenarios/scenario-monitor.js', '/scenario-monitor.css':'scenarios/scenario-monitor.css',
                      '/stock-chart.js': 'stock-chart.js', '/drawing-tools.js': 'drawings/drawing-tools.js', '/chart-workspace.js': 'drawings/chart-workspace.js', '/chart-tools.css': 'drawings/chart-tools.css', '/format.js': 'format.js', '/charts.js': 'charts.js', '/workbench.png': 'workbench.png',
                      '/vendor/lightweight-charts.js': 'vendor/lightweight-charts.js',

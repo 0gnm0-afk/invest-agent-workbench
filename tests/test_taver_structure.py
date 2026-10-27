@@ -6,8 +6,8 @@ import sys
 import unittest
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from invest_agent.trading.taver_structure import analyze,settings,line_metrics
-import priority_review
-import taver_review
+import screening.priority as priority_review
+import screening.taver as taver_review
 from unittest.mock import patch
 
 

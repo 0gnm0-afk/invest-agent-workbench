@@ -5,9 +5,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-import hybrid_market as h
+import market.toss_collection as h
 import test_hybrid_market as base
-from toss_market_client import MarketReadError
+from market.providers.toss_client import MarketReadError
 
 
 class ListingFailureTests(unittest.TestCase):

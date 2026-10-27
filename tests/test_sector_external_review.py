@@ -6,9 +6,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
-import sector_observation as so
-import sector_external_review as review
-import finviz_public_classification as fp
+import atomic_io as artifact_io
+import sectors.observation as so
+import sectors.external_review as review
+import sectors.finviz as fp
 import test_sector_observation as fixtures
 
 
@@ -62,16 +63,16 @@ class ReviewTest(unittest.TestCase):
             root=Path(folder); sources=root/'sources'; sources.mkdir()
             path=sources/'quote.html'; path.write_bytes(b'Not found')
             meta={'url':'https://finviz.com/quote.ashx?t=ABC','final_url':'https://finviz.com/stock?t=ABC',
-                  'status':404,'observed_at':'2026-09-25T00:00:00+00:00','sha256':so.sha(path)}
-            so.write(path.with_suffix('.html.meta.json'),meta)
-            so.write(root/'external-review.json',{'documents':[{'symbol':'ABC','exchange':'NASDAQ','finviz_quote':'quote.html'}]})
-            def read():return review.load_reviews(root,so.checked,so.load,{},'2026-09-25T01:00:00+00:00',so.age_issue)['ABC']
+                  'status':404,'observed_at':'2026-09-25T00:00:00+00:00','sha256':artifact_io.sha(path)}
+            artifact_io.write(path.with_suffix('.html.meta.json'),meta)
+            artifact_io.write(root/'external-review.json',{'documents':[{'symbol':'ABC','exchange':'NASDAQ','finviz_quote':'quote.html'}]})
+            def read():return review.load_reviews(root,artifact_io.checked,artifact_io.load,{},'2026-09-25T01:00:00+00:00',so.age_issue)['ABC']
             value=read()
             self.assertEqual(value['checks'][0]['issue'],'public_page_http_404')
             self.assertIsNone(value['alternate_classification'])
-            meta['final_url']='https://finviz.com/stock?t=XYZ'; so.write(path.with_suffix('.html.meta.json'),meta)
+            meta['final_url']='https://finviz.com/stock?t=XYZ'; artifact_io.write(path.with_suffix('.html.meta.json'),meta)
             with self.assertRaisesRegex(ValueError,'source_identity'):read()
-            meta['final_url']='https://finviz.com/stock?t=ABC'; so.write(path.with_suffix('.html.meta.json'),meta)
+            meta['final_url']='https://finviz.com/stock?t=ABC'; artifact_io.write(path.with_suffix('.html.meta.json'),meta)
             path.write_bytes(b'tampered')
             with self.assertRaisesRegex(ValueError,'hash_mismatch'):read()
 

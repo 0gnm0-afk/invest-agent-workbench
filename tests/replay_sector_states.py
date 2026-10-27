@@ -1,4 +1,5 @@
 """Saved-data checks independent of daily Verify; no browser or network access."""
+import atomic_io as artifact_io
 import collections
 import json
 import sys
@@ -8,12 +9,11 @@ from bs4 import BeautifulSoup
 
 root=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(root/'scripts'))
-import sector_signals as signals
-import sector_observation as sector
+import sectors.signals as signals
 
 run=Path(sys.argv[1])
 prior=root/'runtime/2026-09-29/075820-review-fb717041'
-load=sector.load
+load=artifact_io.load
 states=load(run/'sectors/signals.json')
 snapshot=load(Path(load(run/'run.json')['market_source'])/'snapshot.json')
 groups=load(run/'sectors/groups.json');obs=load(run/'sectors/observation.json')
@@ -31,7 +31,7 @@ old_observation=load(prior/'sectors/observation.json')
 assert {k:v for k,v in obs.items() if k!='applied_at'}=={k:v for k,v in old_observation.items() if k!='applied_at'},'base_sector_metrics_changed'
 for name in ('screen-base.json','candidates.csv','priority-review.json'):
     assert (prior/name).read_bytes()==(run/name).read_bytes(),name
-    preserved[name]=sector.sha(run/name)
+    preserved[name]=artifact_io.sha(run/name)
 assert [dict(r,sector_context=None) for r in load(prior/'screen.json')['rows']]==[dict(r,sector_context=None) for r in load(run/'screen.json')['rows']]
 links=0; pages=0; cards=0; charts=0
 for path in [run/'report.html',*sorted((run/'sectors').glob('*.html'))]:

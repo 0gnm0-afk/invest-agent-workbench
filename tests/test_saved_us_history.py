@@ -9,8 +9,8 @@ import unittest
 from unittest.mock import Mock
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from saved_us_history import packed
-from chart_history import HistoryStore
+from market.history.saved import packed
+from market.history.chart import HistoryStore
 from drawings.store import moving_averages
 from dashboard import handler_for, ThreadingHTTPServer
 
@@ -180,7 +180,7 @@ class SavedHistoryTests(unittest.TestCase):
             value=HistoryStore(self.path,self.no_network).view(changed)
             self.assertEqual(value['history']['daily_update_reason'],'history_overlap_changed')
             self.assertEqual(value['bars'],changed['bars'])
-        from saved_us_history import with_daily
+        from market.history.saved import with_daily
         packet=HistoryStore(self.path,self.no_network).saved.packet(self.stock)
         result=with_daily(packet,dict(stock,isin_code='NEW'),{'isinCode':'OLD'})
         self.assertEqual(result['history']['daily_update_reason'],'listing_identity_changed')

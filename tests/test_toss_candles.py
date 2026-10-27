@@ -3,7 +3,7 @@ import sys
 import unittest
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
-from toss_candles import daily_series
+from market.providers.toss_candles import daily_series
 from invest_agent.trading.market import usable_tail
 
 

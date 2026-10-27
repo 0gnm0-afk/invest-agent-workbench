@@ -1,4 +1,5 @@
 """Validity, freshness and cache integrity are separate contracts."""
+import atomic_io as artifact_io
 import copy
 import json
 import sys
@@ -8,10 +9,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-import sector_observation as so
-import sector_projection as projection
-from wics_classification import select_wics
-from finviz_public_classification import select_classification
+import sectors.observation as so
+import sectors.projection as projection
+from sectors.wics import select_wics
+from sectors.finviz import select_classification
 
 
 class ClassificationPolicy(unittest.TestCase):
@@ -66,27 +67,27 @@ class ProjectionCache(unittest.TestCase):
     def test_reuse_and_pinned_source_and_output_tampering(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); source=root/'market';source.mkdir()
-            so.write(source/'snapshot.json',{'series':[]})
-            so.write(source/'manifest.json',{'snapshot.json':so.sha(source/'snapshot.json')})
-            evidence=root/'evidence.json';so.write(evidence,{'proof':True})
+            artifact_io.write(source/'snapshot.json',{'series':[]})
+            artifact_io.write(source/'manifest.json',{'snapshot.json':artifact_io.sha(source/'snapshot.json')})
+            evidence=root/'evidence.json';artifact_io.write(evidence,{'proof':True})
             seed=root/'seed.json'
-            so.write(seed,{'roots':[str(root/'old'),str(root/'classification'),str(root/'evidence'),str(root/'nh')],
-                           'input_hashes':{str(evidence):so.sha(evidence)}})
-            config={'sector_manifest':str(seed),'sector_manifest_sha256':so.sha(seed)}
+            artifact_io.write(seed,{'roots':[str(root/'old'),str(root/'classification'),str(root/'evidence'),str(root/'nh')],
+                           'input_hashes':{str(evidence):artifact_io.sha(evidence)}})
+            config={'sector_manifest':str(seed),'sector_manifest_sha256':artifact_io.sha(seed)}
             (root/'run').mkdir()
-            so.write(root/'run/run.json',{})
-            so.write(root/'run/manifest.json',{'input_hashes':{},'output_hashes':{'run.json':so.sha(root/'run/run.json')}})
+            artifact_io.write(root/'run/run.json',{})
+            artifact_io.write(root/'run/manifest.json',{'input_hashes':{},'output_hashes':{'run.json':artifact_io.sha(root/'run/run.json')}})
             args=(root,root/'run',config,source,{'applied_at':'2026-09-30T00:00:00+00:00'},{'markets':{}})
-            with patch.object(so,'build',return_value=({'observations':[]},[],{str(evidence):so.sha(evidence)})) as build, \
+            with patch.object(so,'build',return_value=({'observations':[]},[],{str(evidence):artifact_io.sha(evidence)})) as build, \
                  patch.object(projection.sector_signals,'build',return_value={'sectors':[]}), \
                  patch.object(projection.sector_signals,'attach_candidates'):
-                snapshot=so.load(source/'snapshot.json')
-                original_load=so.load
+                snapshot=artifact_io.load(source/'snapshot.json')
+                original_load=artifact_io.load
                 def no_snapshot_reload(path):
                     if Path(path) == source/'snapshot.json':
                         raise MemoryError('duplicate_market_snapshot_parse')
                     return original_load(path)
-                with patch.object(so,'load',side_effect=no_snapshot_reload):
+                with patch.object(artifact_io,'load',side_effect=no_snapshot_reload):
                     first=projection.cached(*args,snapshot=snapshot)
                 self.assertIs(build.call_args.kwargs['snapshot'],snapshot)
                 self.assertEqual(projection.cached(*args),first)

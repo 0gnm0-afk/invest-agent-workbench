@@ -17,7 +17,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(sys.argv[1])/'scripts'))
 sys.path.insert(0, str(Path(sys.argv[2])/'src'))
 import dashboard_data as d
-from chart_history import HistoryStore
+from market.history.chart import HistoryStore
 with tempfile.TemporaryDirectory() as tmp:
     mother=Path(tmp)/'mother'; adapters=mother/'scripts'; adapters.mkdir(parents=True)
     for name, source in {
@@ -34,8 +34,8 @@ with tempfile.TemporaryDirectory() as tmp:
     store.saved=SimpleNamespace(packet=lambda _: {'series':stock,'history':{'state':'complete'}})
     result=store.ensure(stock)
     assert result['bars']==stock['bars']
-    import market_quality
-    assert Path(market_quality.__file__).parent==Path(sys.argv[1])/'scripts'
+    import market.quality as market_quality
+    assert Path(market_quality.__file__).parent==Path(sys.argv[1])/'scripts/market'
 '''
         result = subprocess.run([sys.executable, '-c', script, str(root), config['engine']],
                                 capture_output=True, text=True, encoding='utf-8')

@@ -7,8 +7,8 @@ from pathlib import Path
 from unittest.mock import patch, Mock
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-import priority_review as p
-import daily_market as daily
+import screening.priority as p
+import market.daily as daily
 
 
 def fixture(count=20):

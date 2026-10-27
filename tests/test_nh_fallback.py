@@ -6,9 +6,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from nh_fallback import _compare, _nh_bars
-from nh_market_auth import NHMarketError, token
-from nh_market_client import MarketClient
+from market.nh_fallback import _compare, _nh_bars
+from market.providers.nh_auth import NHMarketError, token
+from market.providers.nh_client import MarketClient
 
 
 class NHFallbackTest(unittest.TestCase):
@@ -76,7 +76,7 @@ class NHFallbackTest(unittest.TestCase):
         self.assertEqual(bars[-1]['volume'],1234)
 
     def test_account_path_rejected_before_auth(self):
-        with tempfile.TemporaryDirectory() as tmp, patch('nh_market_client.token') as auth:
+        with tempfile.TemporaryDirectory() as tmp, patch('market.providers.nh_client.token') as auth:
             client = MarketClient(Path(tmp))
             with self.assertRaisesRegex(NHMarketError,'market_only_period_required'):
                 client.read('/gbstock/inquiry/v1/balance',{})

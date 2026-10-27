@@ -6,7 +6,7 @@ import sys
 from types import SimpleNamespace
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from dashboard import handler_for,ThreadingHTTPServer
-from chart_history import aggregate
+from market.history.chart import aggregate
 root=Path(__file__).resolve().parents[1];folder=root/'runtime/scenario-monitor-verification'
 ready=json.loads((folder/'fixture-ready.json').read_text());packet=json.loads((folder/'fixture-input.json').read_text())
 db=Path(ready['database']).resolve();assert db.is_relative_to(folder.resolve())

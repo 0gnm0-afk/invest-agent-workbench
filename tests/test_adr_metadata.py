@@ -6,9 +6,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-import adr_metadata as adr
-import user_classification
-import market_scope
+import sectors.adr as adr
+import sectors.user_classification as user_classification
+import market.scope as market_scope
 
 ROW={'market':'US','symbol':'ABC','isin_code':'USABC123','listing_exchange_family':'NYSE','security_type':'DEPOSITARY_RECEIPT'}
 STATS=b'''<html>NYSE: ABC &middot; Real-Time Price &middot; USD
@@ -100,7 +100,8 @@ class RequestedOtherAndExclusions(unittest.TestCase):
                     self.assertEqual(value['evidence'][0]['approved_on'],'2026-10-06')
 
     def test_six_failures_are_excluded_only_for_current_isin(self):
-        policy=market_scope.load()
+        with patch('market.scope.read_registry',return_value=([],b'')), patch('market.exclusions.read_records',return_value=([],b'')):
+            policy=market_scope.load()
         rows=[r for r in policy['records'] if r.get('reason')=='user_excluded_nh_unrecovered']
         self.assertEqual({r['symbol'] for r in rows},{'IPHX','TBCV','VIVK','CHWM','LAWR','RML'})
         for row in rows:
@@ -110,12 +111,12 @@ class RequestedOtherAndExclusions(unittest.TestCase):
 
 class OfflineAdrBoundary(unittest.TestCase):
     def test_captured_nh_recovery_never_requests_adr(self):
-        import daily_market as daily
+        import market.daily as daily
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);source=root/'source'
             with patch.object(daily,'ROOT',root), patch.object(daily,'code_hashes',return_value={}), \
                     patch.object(daily,'seed_check',return_value=({},{})), patch.object(daily,'source_check'), \
-                    patch.object(daily.sector,'load',return_value={}), patch.object(daily.sector,'sha',return_value='fixture'), \
+                    patch.object(daily.artifact_io,'load',return_value={}), patch.object(daily.artifact_io,'sha',return_value='fixture'), \
                     patch.object(daily.nh_fallback,'recover',return_value=(source,dict(attempted=0,adopted=0,unrecovered=0),{})), \
                     patch.object(daily,'audit',side_effect=ValueError('stop_after_adr_stage')), \
                     patch.object(adr,'collect') as collector:

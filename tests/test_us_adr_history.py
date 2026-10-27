@@ -9,8 +9,8 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from us_toss_history import Collector, packed, read_checked, run, save_checked
-from verify_us_toss_history import verify
+from market.history.collect import Collector, packed, read_checked, run, save_checked
+from market.history.verify import verify
 
 
 class ADRHistoryTests(unittest.TestCase):
@@ -46,8 +46,8 @@ class ADRHistoryTests(unittest.TestCase):
         calls = []
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            with patch('us_toss_history.TossMarketClient', return_value=self.client(calls)), \
-                    patch('us_toss_history.completed_sessions', return_value=['2026-09-30']), \
+            with patch('market.history.collect.TossMarketClient', return_value=self.client(calls)), \
+                    patch('market.history.collect.completed_sessions', return_value=['2026-09-30']), \
                     patch('builtins.print'):
                 run(root, workers=1)
                 summary = verify(root, require_finished=True)
@@ -117,7 +117,7 @@ class ADRHistoryTests(unittest.TestCase):
             for item in universe['rows']:
                 collector.collect_one(item, '2026-09-30')
             before = {p.relative_to(root): p.read_bytes() for p in root.rglob('*') if p.is_file()}
-            with patch('us_toss_history.TossMarketClient', side_effect=AssertionError('unexpected network')), patch('builtins.print'):
+            with patch('market.history.collect.TossMarketClient', side_effect=AssertionError('unexpected network')), patch('builtins.print'):
                 run(root, workers=1)
                 summary = verify(root, require_finished=True)
             for name, data in before.items():

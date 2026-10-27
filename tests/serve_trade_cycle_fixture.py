@@ -8,7 +8,7 @@ import sys
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from test_collaboration import CollaborationTests, ROOT
 from dashboard import handler_for, ThreadingHTTPServer
-from chart_history import aggregate
+from market.history.chart import aggregate
 
 
 def main():

@@ -3,7 +3,7 @@ import argparse
 import json
 import time
 from pathlib import Path
-from chart_history import HistoryStore
+from market.history.chart import HistoryStore
 from financial_store import FinancialStore, ROOT
 
 

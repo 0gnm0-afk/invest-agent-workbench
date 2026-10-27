@@ -5,8 +5,8 @@ from pathlib import Path
 import sys
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from us_toss_history import Collector, read_checked, parse_page, save_checked
-from toss_market_client import TossMarketClient
+from market.history.collect import Collector, read_checked, parse_page, save_checked
+from market.providers.toss_client import TossMarketClient
 
 
 def candle(day):
@@ -35,7 +35,7 @@ class HistoryTests(unittest.TestCase):
         def factory(**kwargs):
             time.sleep(.01)
             return lambda path,params: {'result':params}
-        with tempfile.TemporaryDirectory() as td,patch('us_toss_history.TossMarketClient',side_effect=factory) as create:
+        with tempfile.TemporaryDirectory() as td,patch('market.history.collect.TossMarketClient',side_effect=factory) as create:
             c=Collector(td)
             with ThreadPoolExecutor(max_workers=8) as pool:
                 list(pool.map(lambda i:c.get('/api/v1/candles',{'symbol':str(i)}),range(8)))
@@ -43,7 +43,7 @@ class HistoryTests(unittest.TestCase):
 
     def test_runner_does_not_retain_completed_full_histories(self):
         import tracemalloc
-        from us_toss_history import run
+        from market.history.collect import run
         class FakeCollector(Collector):
             def universe(self):return {'rows':[{'symbol':str(i)} for i in range(40)]}
             def collect_one(self,item,end,retry=False):
@@ -52,7 +52,7 @@ class HistoryTests(unittest.TestCase):
             save_checked(Path(td)/'collection.json',{'end':'2026-09-30'})
             tracemalloc.start()
             try:
-                with patch('us_toss_history.Collector',FakeCollector),patch('builtins.print'):
+                with patch('market.history.collect.Collector',FakeCollector),patch('builtins.print'):
                     run(td,workers=4)
                 _,peak=tracemalloc.get_traced_memory()
             finally:tracemalloc.stop()
@@ -73,19 +73,19 @@ class HistoryTests(unittest.TestCase):
             self.assertIn('cursor_not_descending',r['error'])
             save_checked(Path(td)/'collection.json',{'end':'2026-09-30','scope':'synthetic'})
             save_checked(Path(td)/'universe.json',{'rows':[{'symbol':'AAPL'}]})
-            from verify_us_toss_history import verify
+            from market.history.verify import verify
             result=verify(td,require_finished=True)
             self.assertEqual(result['counts'],{'failed':1})
             self.assertTrue(result['all_attempted'])
 
     def test_opt_in_rate_preserves_default_and_provider_limit(self):
         import io
-        with patch('toss_market_client.get_token',return_value='fake'):
+        with patch('market.providers.toss_client.get_token',return_value='fake'):
             self.assertEqual(TossMarketClient()._min_interval,.25)
             c=TossMarketClient(min_interval=.1)
             for limit,expected in [('20',.1),('2',.5)]:
                 response=io.BytesIO(b'{"result":{}}');response.headers={'X-RateLimit-Limit':limit}
-                with patch('toss_market_client.urllib.request.urlopen',return_value=response),patch.object(c,'_wait'):
+                with patch('market.providers.toss_client.urllib.request.urlopen',return_value=response),patch.object(c,'_wait'):
                     c('/api/v1/candles',{})
                 self.assertEqual(c._interval,expected)
             for value in [0,True,float('nan'),2]:

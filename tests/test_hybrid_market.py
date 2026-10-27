@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
-import hybrid_market as h
+import market.toss_collection as h
 
 
 class TossMarketPipelineTests(unittest.TestCase):
@@ -133,14 +133,14 @@ class TossMarketPipelineTests(unittest.TestCase):
     def test_callback_rejects_session_change_and_old_yahoo_seed_before_auth(self):
         from invest_agent.trading.morning import CollectorUnavailableError
         self.calendar.side_effect = [self.days + ['2026-09-14'], self.days]
-        with patch('toss_market_client.TossMarketClient') as client:
+        with patch('market.providers.toss_client.TossMarketClient') as client:
             callback = h.make_collector(self.root)
             with self.assertRaises(CollectorUnavailableError):
                 callback({'markets': ['KR']}, self.now)
             client.assert_not_called()
         self.calendar.side_effect = None
         self.calendar.return_value = self.days
-        with patch('toss_market_client.TossMarketClient') as client:
+        with patch('market.providers.toss_client.TossMarketClient') as client:
             callback = h.make_collector(self.root)
             with self.assertRaises(CollectorUnavailableError):
                 callback({'markets': ['US'], 'reuse_us_from_run': 'old-run'}, self.now)
@@ -148,7 +148,7 @@ class TossMarketPipelineTests(unittest.TestCase):
 
     def test_callback_preserves_frozen_window_and_collector_identity(self):
         self.calendar.side_effect = [self.days[1:], self.days]
-        with patch('toss_market_client.TossMarketClient'), patch.object(h, 'collect', return_value={'ok': True}) as collect:
+        with patch('market.providers.toss_client.TossMarketClient'), patch.object(h, 'collect', return_value={'ok': True}) as collect:
             callback = h.make_collector(self.root)
             self.assertEqual(callback({'markets': ['KR']}, self.now), {'ok': True})
             self.assertEqual(callback.collector_id, h.COLLECTOR_ID)

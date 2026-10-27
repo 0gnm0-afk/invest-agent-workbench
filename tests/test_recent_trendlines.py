@@ -2,13 +2,13 @@ import copy,json,sys,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-import recent_trendlines as r
-import recent_sperandeo as s
-import recent_screen_projection as projection
-from chart_history import aggregate
+import screening.trendlines as r
+import screening.sperandeo as s
+import screening.projection as projection
+from market.history.chart import aggregate
 from test_downtrend_approach import example
 from test_momentum_entry import fixture,series
-import momentum_review
+import screening.momentum as momentum_review
 
 
 class RecentTrendlineTests(unittest.TestCase):
@@ -31,7 +31,7 @@ class RecentTrendlineTests(unittest.TestCase):
         self.assertAlmostEqual(line['value_latest'],expected)
         self.assertNotEqual(line['anchor_a_price'],line['anchor_a_source_price'])
         self.assertGreater(line['fit_ssr'],0)
-        import downtrend_approach
+        import screening.downtrend as downtrend_approach
         boundary=copy.deepcopy(bars);level=line['value_latest']
         boundary[-1].update(open=level,close=level,high=level,low=level-1)
         self.assertEqual(downtrend_approach.analyze(boundary)['signals'][0]['trendline']['gap_atr'],0)
@@ -99,7 +99,7 @@ class RecentTrendlineTests(unittest.TestCase):
     def test_main_chart_api_keeps_drawings_and_matches_screening(self):
         import http.client,threading
         from dashboard import handler_for,ThreadingHTTPServer
-        from chart_history import HistoryStore
+        from market.history.chart import HistoryStore
         from drawings.store import defaults
         bars=example();line=r.select(bars)
         stock=dict(market='US',symbol='TEST',bars=bars,currency='USD')

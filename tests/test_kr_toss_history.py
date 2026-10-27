@@ -3,8 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from us_toss_history import Collector, parse_page, save_checked, run
-from verify_us_toss_history import verify
+from market.history.collect import Collector, parse_page, save_checked, run
+from market.history.verify import verify
 
 class KoreanHistoryTests(unittest.TestCase):
     def test_both_exchanges_identity_currency_pagination_and_raw_audit(self):

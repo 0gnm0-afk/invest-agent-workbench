@@ -3,15 +3,15 @@ from pathlib import Path
 from datetime import datetime,timezone
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-import market_scope as m
-from toss_universe import discover
+import market.scope as m
+from market.providers.toss_universe import discover
 from test_toss_universe import FakeToss
-import classification_refresh as refresh
-from sector_observation import checked,classification_age_issue,SECTORS
+import sectors.classification_refresh as refresh
+from atomic_io import checked; from sectors.observation import classification_age_issue, SECTORS
 
 class ScopeTests(unittest.TestCase):
     def setUp(self):
-        self.registry_patch=patch('market_exclusion_review.read_records',return_value=([],b''))
+        self.registry_patch=patch('market.exclusions.read_records',return_value=([],b''))
         self.registry_patch.start();self.addCleanup(self.registry_patch.stop)
 
     def policy(self,symbol='LOW'):
@@ -27,13 +27,13 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(meta['NASDAQ']['state'],'available')
 
     def test_daily_and_raw_risk_never_fetch_excluded_candles(self):
-        import hybrid_market as h
+        import market.toss_collection as h
         from test_hybrid_market import TossMarketPipelineTests
         fixture=TossMarketPipelineTests();fixture.setUp()
         try:
             fixture.config['universe'][1]['symbol']='LOW'
             fixture.config['risk_universe']=[{'market':'US','symbol':'LOW'}]
-            with patch('market_scope.load',return_value=self.policy()):
+            with patch('market.scope.load',return_value=self.policy()):
                 result=fixture.run_collect()
             self.assertNotIn('LOW',[c.args[1] for c in fixture.candles.call_args_list])
             self.assertEqual([r['symbol'] for r in result['universe']],['005930.KS'])
@@ -83,7 +83,7 @@ class ScopeTests(unittest.TestCase):
         self.assertFalse(got['coverage']['active_scope_complete'])
 
     def test_saved_nh_recovery_removes_excluded_before_target_requests(self):
-        import nh_fallback as nh
+        import market.nh_fallback as nh
         snap={'universe':[{'market':'US','symbol':s,'listing_exchange_family':'NASDAQ'} for s in ('LOW','HIGH')],
               'series':[{'market':'US','symbol':'HIGH'}],
               'errors':[{'market':'US','symbol':'LOW','error_code':'market_transport_or_payload_unavailable'}],
@@ -91,7 +91,7 @@ class ScopeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);source=root/'source';source.mkdir();(source/'snapshot.json').write_text(json.dumps(snap))
             config={'nh_us_master':'us','nh_us_master_sha256':'u','nh_kr_master':'kr','nh_kr_master_sha256':'k'}
-            with patch('market_scope.load',return_value=self.policy()),patch.object(nh,'load_checked',return_value=[]),patch.object(nh,'_reference_rows',return_value={}),patch.object(nh,'MarketClient') as client,patch.object(nh,'audit',return_value={}):
+            with patch('market.scope.load',return_value=self.policy()),patch.object(nh,'load_checked',return_value=[]),patch.object(nh,'_reference_rows',return_value={}),patch.object(nh,'MarketClient') as client,patch.object(nh,'audit',return_value={}):
                 _,summary,_=nh.recover(source,root/'output',config)
                 self.assertEqual(summary['attempted'],0)
                 client.return_value.read.assert_not_called()
@@ -120,15 +120,15 @@ class ScopeTests(unittest.TestCase):
         self.assertFalse(m.analysis_pending(screen,snapshot))
 
     def test_selected_chart_cannot_refetch_approved_exclusion(self):
-        from chart_history import HistoryStore
-        with tempfile.TemporaryDirectory() as tmp,patch('market_scope.load',return_value=self.policy()),patch.object(HistoryStore,'view',return_value={'bars':[]}):
+        from market.history.chart import HistoryStore
+        with tempfile.TemporaryDirectory() as tmp,patch('market.scope.load',return_value=self.policy()),patch.object(HistoryStore,'view',return_value={'bars':[]}):
             factory=lambda: self.fail('must not create network client')
             result=HistoryStore(Path(tmp)/'cache.db',factory).ensure({'market':'US','symbol':'LOW'},retry=True)
             self.assertEqual(result['history']['state'],'excluded')
 
     def test_bulk_history_cannot_refetch_approved_exclusion(self):
-        from us_toss_history import Collector
-        with tempfile.TemporaryDirectory() as tmp,patch('market_scope.load',return_value=self.policy()):
+        from market.history.collect import Collector
+        with tempfile.TemporaryDirectory() as tmp,patch('market.scope.load',return_value=self.policy()):
             collector=Collector(Path(tmp),client=lambda *args:self.fail('must not query excluded symbol'))
             self.assertEqual(collector.collect_one({'symbol':'LOW'},'2026-10-01',True)['state'],'excluded')
 

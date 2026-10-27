@@ -12,9 +12,9 @@ from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import atomic_io
-import adr_metadata as adr
-import nh_market_auth
-import nh_market_client as market
+import sectors.adr as adr
+import market.providers.nh_auth as nh_market_auth
+import market.providers.nh_client as market
 import nh_auth
 import nh_api
 

@@ -13,7 +13,7 @@ from drawings.geometry import geometry
 from .collaboration import Collaboration, OPS as COLLABORATION_OPS
 from . import Forbidden, packed, digest, now, ident, key
 
-from price_events import build as price_events, validate_research
+from market.history.price_events import build as price_events, validate_research
 
 from .report import readable, FOLLOWUP
 

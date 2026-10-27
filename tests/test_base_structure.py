@@ -4,7 +4,7 @@ from datetime import date,timedelta
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from invest_agent.trading import base_structure as base
 from test_momentum_entry import fixture
-import priority_review,momentum_review,watch_review
+import screening.priority as priority_review, screening.momentum as momentum_review, screening.watch as watch_review
 
 def bars(kind='bottom'):
     if kind=='bottom':prices=[180.]*220+[180.-80*i/59 for i in range(60)]

@@ -80,13 +80,13 @@ def saved_market(root=ROOT, run_dir=None):
         result['stocks'][s['market'] + ':' + s['symbol']] = {
             k: s.get(k) for k in ('market', 'symbol', 'name', 'currency', 'provider', 'price_basis',
                                   'collected_at', 'bars', *SEARCH_METADATA_FIELDS)}
-    from sector_focus import cached, screen_groups
+    from sectors.focus import cached, screen_groups
     from invest_agent.trading.store import BusyError
     try:
         groups = artifact('sectors/groups.json')
         config = load(root/'config.json') if (root/'config.json').exists() else {}
         if config.get('sector_manifest'):
-            from sector_projection import cached as project
+            from sectors.projection import cached as project
             projected = project(root, run_dir, config, source.parent, observation, review, snapshot=snapshot)
             groups = projected['groups']
             horizons = {(s['market'],s['group_code']):s['horizons'] for s in projected['observation']['observations']}
@@ -106,7 +106,7 @@ def saved_market(root=ROOT, run_dir=None):
     }
     downtrend_options = load(root/'config.json').get('priority_review',{}).get('watchlist',{}).get('downtrend_approach') if (root/'config.json').exists() else None
     if downtrend_options is not None and review.get('schema') == 4:
-        from recent_screen_projection import cached as trendline_projection
+        from screening.projection import cached as trendline_projection
         try:
             projected_review = trendline_projection(root,artifact('screen.json'),snapshot,review,sha(source),downtrend_options)
             result['entries'] = [e for g in projected_review['markets'].values() for e in g['entries']]
@@ -137,7 +137,7 @@ class StockSearch:
     limit = 12
 
     def __init__(self, stocks, listings=None, policy=None):
-        from market_scope import load as scope_policy, match
+        from market.scope import load as scope_policy, match
         policy = scope_policy() if policy is None else policy
         self.rows = []
         for key, stock in stocks.items():

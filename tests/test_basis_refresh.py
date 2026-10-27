@@ -9,10 +9,11 @@ from datetime import datetime,timezone,timedelta
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-import basis_refresh as br
-import sector_basis as sb
-import sector_observation as so
-import daily_market as daily
+import atomic_io as artifact_io
+import sectors.basis_refresh as br
+import sectors.basis as sb
+import sectors.observation as so
+import market.daily as daily
 
 
 class RefreshTest(unittest.TestCase):
@@ -23,14 +24,14 @@ class RefreshTest(unittest.TestCase):
         self.raw=b'frozen official fixture'
         self.doc=self.evidence/'sources/faq.md';self.doc.write_bytes(self.raw)
         self.now=datetime.now(timezone.utc)
-        self.meta=dict(url=sb.FAQ_URL,final_url=sb.FAQ_URL,status=200,sha256=so.sha(self.doc),observed_at=(self.now-timedelta(days=8)).isoformat())
-        so.write(self.doc.with_suffix('.md.meta.json'),self.meta)
-        so.write(self.evidence/'calculation-basis.json',dict(contract=sb.CONTRACT,kr_reference='saved_universe_equal_weight',documents=[dict(file='faq.md',url=sb.FAQ_URL,sha256=so.sha(self.doc))]))
+        self.meta=dict(url=sb.FAQ_URL,final_url=sb.FAQ_URL,status=200,sha256=artifact_io.sha(self.doc),observed_at=(self.now-timedelta(days=8)).isoformat())
+        artifact_io.write(self.doc.with_suffix('.md.meta.json'),self.meta)
+        artifact_io.write(self.evidence/'calculation-basis.json',dict(contract=sb.CONTRACT,kr_reference='saved_universe_equal_weight',documents=[dict(file='faq.md',url=sb.FAQ_URL,sha256=artifact_io.sha(self.doc))]))
     def prepare(self,raw=None):
         return br.prepare(self.evidence,self.output,self.now.isoformat(),fetcher=lambda url:self.raw if raw is None else raw)
     def load(self,path):
         inputs={}
-        result=sb.load_basis(self.evidence,so.checked,so.load,inputs,datetime.now(timezone.utc).isoformat(),so.age_issue,rechecks=path)
+        result=sb.load_basis(self.evidence,artifact_io.checked,artifact_io.load,inputs,datetime.now(timezone.utc).isoformat(),so.age_issue,rechecks=path)
         return result,inputs
     def test_stale_document_rechecked_same_bytes_and_offline_replayed(self):
         before={p:p.read_bytes() for p in self.evidence.rglob('*') if p.is_file()}
@@ -41,7 +42,7 @@ class RefreshTest(unittest.TestCase):
         self.assertIn('recheck',result['evidence'][0]);self.assertIn(str(path.resolve()),inputs)
         self.assertEqual(before,{p:p.read_bytes() for p in before})
     def test_fresh_document_needs_no_network(self):
-        self.meta['observed_at']=self.now.isoformat();so.write(self.doc.with_suffix('.md.meta.json'),self.meta)
+        self.meta['observed_at']=self.now.isoformat();artifact_io.write(self.doc.with_suffix('.md.meta.json'),self.meta)
         with patch.object(br,'fetch',side_effect=AssertionError('network')):
             result=br.prepare(self.evidence,self.output,self.now.isoformat(),fetcher=lambda url:(_ for _ in ()).throw(AssertionError('network')))
         self.assertIsNone(result);self.assertFalse(self.output.exists())
@@ -61,9 +62,9 @@ class RefreshTest(unittest.TestCase):
         path=self.prepare();(path.parent/'document-0.md').write_bytes(b'tampered')
         with self.assertRaisesRegex(ValueError,'hash_mismatch'):self.load(path)
     def test_recheck_future_expired_identity_and_path_blocked(self):
-        path=self.prepare();original=so.load(path)
+        path=self.prepare();original=artifact_io.load(path)
         for field,value,expected in [('observed_at',(self.now+timedelta(days=1)).isoformat(),'not_current'),('observed_at',(self.now-timedelta(days=8)).isoformat(),'not_current'),('final_url','https://elsewhere.invalid','changed_review'),('file','../../outside.md','outside_root')]:
-            receipt=json.loads(json.dumps(original));receipt['documents'][0][field]=value;so.write(path,receipt)
+            receipt=json.loads(json.dumps(original));receipt['documents'][0][field]=value;artifact_io.write(path,receipt)
             with self.subTest(field=field,value=value),self.assertRaisesRegex(ValueError,expected):self.load(path)
     def test_original_hash_tamper_blocks_before_fetch(self):
         self.doc.write_bytes(b'tampered')

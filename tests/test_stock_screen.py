@@ -5,7 +5,7 @@ from pathlib import Path
 from datetime import date, timedelta
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from invest_agent.trading.market import screen
-from stock_screen import screen_market
+from screening.engine import screen_market
 
 
 class ParallelTest(unittest.TestCase):

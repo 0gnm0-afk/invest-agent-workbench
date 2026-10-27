@@ -17,7 +17,7 @@ from analysis.service import AnalysisService
 from analysis import digest
 from drawings.geometry import geometry, timeline, logical
 from drawings.store import WorkspaceStore, defaults, Conflict
-from chart_history import aggregate
+from market.history.chart import aggregate
 
 def drawing(kind='trend'):
     ps=[{'time':'2026-09-18','price':100.0},{'time':'2026-09-22','price':110.0},{'time':'2026-09-23','price':105.0}]

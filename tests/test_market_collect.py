@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
-import market_collect as m
+import market.collect as m
 import test_hybrid_market as base_tests
 
 
@@ -29,7 +29,7 @@ class MarketOnlyTests(base_tests.TossMarketPipelineTests):
                 raise ValueError('stale_or_invalid_last_session')
             return original(*args, **kwargs)
         self.candles.side_effect = candles
-        with patch('hybrid_market.discover', return_value=(rows, meta)):
+        with patch('market.toss_collection.discover', return_value=(rows, meta)):
             result = self.run_collect()
         self.assertFalse(result['coverage']['market_wide'])
         self.assertEqual(m.audit(result)['state'], 'partial')
@@ -37,7 +37,7 @@ class MarketOnlyTests(base_tests.TossMarketPipelineTests):
 
     def test_quality_holes_are_visible_even_with_valid_latest_bar(self):
         rows, meta = self.full_config()
-        with patch('hybrid_market.discover', return_value=(rows, meta)):
+        with patch('market.toss_collection.discover', return_value=(rows, meta)):
             result = self.run_collect()
         result['series'][0]['bars'].pop(1)
         audited = m.audit(result)
@@ -58,7 +58,7 @@ class MarketOnlyTests(base_tests.TossMarketPipelineTests):
                         value['bars'] = [] if empty else value['bars'][:-1]
                     return value
                 self.candles.side_effect = candles
-                with patch('hybrid_market.discover', return_value=(rows, meta)):
+                with patch('market.toss_collection.discover', return_value=(rows, meta)):
                     result = self.run_collect()
                 self.assertEqual(result['errors'][0]['error_code'], expected)
                 self.assertEqual(result['collection_stats']['received'], 1)
@@ -67,9 +67,9 @@ class MarketOnlyTests(base_tests.TossMarketPipelineTests):
 
     def test_market_only_resume_and_manifest_without_account_calls(self):
         rows, meta = self.full_config()
-        with patch('hybrid_market.discover', return_value=(rows, meta)):
+        with patch('market.toss_collection.discover', return_value=(rows, meta)):
             snapshot = self.run_collect()
-        project = Path(m.__file__).resolve().parents[1]
+        project = m.ROOT
         (project / 'runtime').mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(dir=project / 'runtime') as directory:
             root = Path(directory)
@@ -100,8 +100,8 @@ class MarketOnlyTests(base_tests.TossMarketPipelineTests):
                        market_cap=None, market_cap_as_of=None, shares_outstanding=100)
         fields = dict(market_cap=10000, market_cap_as_of=self.days[-1],
                       market_cap_quality='completed_close_estimate')
-        with patch('hybrid_market.discover', side_effect=lambda *a, **k: ([dict(r) for r in rows], meta)), \
-                patch('hybrid_market.complete_cap', return_value=fields) as cap:
+        with patch('market.toss_collection.discover', side_effect=lambda *a, **k: ([dict(r) for r in rows], meta)), \
+                patch('market.toss_collection.complete_cap', return_value=fields) as cap:
             first = self.run_collect()
             second = self.run_collect()
         self.assertEqual(cap.call_count, 1)
@@ -113,8 +113,8 @@ class MarketOnlyTests(base_tests.TossMarketPipelineTests):
     def test_fallback_transport_failure_remains_partial_not_handled_success(self):
         rows, meta = self.full_config()
         rows[1].update(quote_time_state='not_provided', shares_outstanding=100)
-        with patch('hybrid_market.discover', return_value=(rows, meta)), \
-                patch('hybrid_market.complete_cap', side_effect=ValueError('market_http_500')):
+        with patch('market.toss_collection.discover', return_value=(rows, meta)), \
+                patch('market.toss_collection.complete_cap', side_effect=ValueError('market_http_500')):
             result = self.run_collect()
         self.assertEqual(len(result['series']), 2)
         self.assertFalse(result['coverage']['market_wide'])

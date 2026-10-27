@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from display_format import money, price_text, display_analysis
-from watch_review import table
+from screening.watch import table
 
 class CurrencyDisplay(unittest.TestCase):
     def test_currency_precision_and_missing(self):

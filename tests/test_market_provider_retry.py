@@ -3,9 +3,9 @@ import copy,json,sys,tempfile,threading,unittest
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-import market_exclusion_review as m
-import market_provider_retry as retry
-import nh_fallback
+import market.exclusions as m
+import market.retry as retry
+import market.nh_fallback as nh_fallback
 from test_market_exclusion_review import fixture,saved
 from invest_agent.trading.store import instance_lock
 
@@ -131,7 +131,7 @@ class NHSelection(unittest.TestCase):
             def missing(client,symbol,sessions,market):calls.append(symbol);raise ValueError('nh_period_empty')
             masters=[{'sNationCode':'USA','sStockCode':'NQQ','sSymbol':'FAIL','sStandardCode':'USFAIL'}]
             config=dict(nh_us_master='us',nh_us_master_sha256='x',nh_kr_master='kr',nh_kr_master_sha256='x')
-            with patch('market_scope.load',return_value=policy),patch('market_scope.apply_snapshot',side_effect=lambda s,p:s),patch.object(nh_fallback,'load_checked',return_value=masters),patch.object(nh_fallback,'_reference_rows',return_value={}),patch.object(nh_fallback,'MarketClient'),patch.object(nh_fallback,'_nh_bars',side_effect=missing),patch.object(nh_fallback,'audit',return_value={}):
+            with patch('market.scope.load',return_value=policy),patch('market.scope.apply_snapshot',side_effect=lambda s,p:s),patch.object(nh_fallback,'load_checked',return_value=masters),patch.object(nh_fallback,'_reference_rows',return_value={}),patch.object(nh_fallback,'MarketClient'),patch.object(nh_fallback,'_nh_bars',side_effect=missing),patch.object(nh_fallback,'audit',return_value={}):
                 output,summary,_=nh_fallback.recover(source,folder/'new',config,only_keys={('US','FAIL')},allow_auto_exclusions=False)
             result=m.load(output/'snapshot.json');self.assertEqual(calls,['FAIL']);self.assertEqual(summary['automatic_exclusions'],[])
             self.assertEqual(len(result['universe']),2);self.assertEqual(len(result['nh_fallback']['results']),2)
@@ -173,7 +173,7 @@ class RetryHTTP(unittest.TestCase):
 
 class RetryWorker(RetryFlow):
     def test_replay_failure_restores_pointer_and_reuses_collected_source(self):
-        import daily_market,repair_market_scope
+        import market.daily as daily_market, market.repair as repair_market_scope
         s=self.service();v=s.status()
         with patch.object(s,'_start'):s.recollect(v['review_id'],[v['issues'][0]['id']],'toss')
         job=m.registry(self.path)[0]['jobs'][-1];m.save(self.root/'config.json',{})

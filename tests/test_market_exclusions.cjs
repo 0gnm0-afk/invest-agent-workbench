@@ -1,5 +1,5 @@
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),assert=require('node:assert/strict');
-const source=fs.readFileSync(path.join(__dirname,'../dashboard/market-exclusions.js'),'utf8');
+const source=fs.readFileSync(path.join(__dirname,'../dashboard/market/market-exclusions.js'),'utf8');
 function element(tag='div'){
  const n={tag,children:[],dataset:{},hidden:false,append(...children){this.children.push(...children);},replaceChildren(...children){this.children=children;},setAttribute(k,v){this[k]=v;}};
  Object.defineProperty(n,'innerHTML',{set(){throw Error('unsafe HTML insertion');}});return n;

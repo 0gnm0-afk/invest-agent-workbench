@@ -8,8 +8,8 @@ import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from invest_agent.trading import momentum_entry as m
-import momentum_review as review
-import priority_review
+import screening.momentum as review
+import screening.priority as priority_review
 
 
 def series(values,volumes=None):
@@ -173,7 +173,7 @@ class IntegrationTests(unittest.TestCase):
             self.assertIn('차트 생성 실패','\n'.join(review.report_lines(r,charts)))
 
     def test_daily_report_uses_only_active_entries(self):
-        import daily_market as daily
+        import market.daily as daily
         screen,snap=fixture();screen.update(unavailable_count=0,research_order={'KR':[{'symbol':'LEGACY_ONLY'}]})
         run={'state':'partial','processing_state':'completed_with_exceptions','mode':'replay','started_at':'now',
              'stages':{},'quality':{'received':4,'requested':4,'failed':0,'quality_issue_series':0,

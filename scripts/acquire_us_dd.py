@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor,as_completed
 from datetime import datetime,timezone
 WB=Path(__file__).resolve().parents[1] if Path(__file__).parent.name=='scripts' else Path('<user-home>/Desktop/workspace/invest-agent-workbench')
 sys.path.insert(0,str(WB/'scripts'))
-from saved_us_history import SavedHistory
+from market.history.saved import SavedHistory
 from financial_sources import settings
 
 gates={'sec':threading.Lock(),'yahoo':threading.Lock()}; next_times={'sec':0.,'yahoo':0.}

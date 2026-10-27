@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-import sector_focus as f
+import sectors.focus as f
 from test_sector_signals import fixture
 
 

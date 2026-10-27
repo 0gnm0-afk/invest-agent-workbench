@@ -9,7 +9,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-import sector_observation as so
+import atomic_io as artifact_io
+import sectors.observation as so
 
 
 class MetricsTest(unittest.TestCase):
@@ -135,12 +136,12 @@ class MappingTest(unittest.TestCase):
         records=[]
         for name in ('m_new_stock.h','m_new_stock.mst'):
             path=root/name;path.write_text('fixture',encoding='utf-8')
-            records.append({'path':name,'sha256':so.sha(path),'fetched_at':'2026-09-24T00:00:00+00:00'})
-        so.write(root/'sources-manifest.json',records)
+            records.append({'path':name,'sha256':artifact_io.sha(path),'fetched_at':'2026-09-24T00:00:00+00:00'})
+        artifact_io.write(root/'sources-manifest.json',records)
         self.original=[{'market':'KR','exchange':'KOSPI','symbol':'005930.KS','provider_symbol':'005930',
                         'isin_code':'KR_TEST','name':'삼성전자','state':'matched','source_industry_name':'원 업종'}]
         self.master=[{'sCode':'005930','sMarket':'1','sUpCodeM':'KGS09P','sUpCodeL':'KGS18P','sUpCodeS':'','sKorName':'삼성전자'}]
-        so.write(root/'kr-probes/KGS09P.json',{'expected_code':'KGS09P','url':'https://example.invalid',
+        artifact_io.write(root/'kr-probes/KGS09P.json',{'expected_code':'KGS09P','url':'https://example.invalid',
                  'observed_at':'2026-09-24T01:00:00+00:00','inputs':{'iem_cd':'005930','market_cd':'KRX'},
                  'payload':{'Output_0':{'iem_cd':'005930','bstp_cls_code':code,'bstp_kor_isnm':label}}})
         return root
@@ -180,13 +181,13 @@ class MappingTest(unittest.TestCase):
     def parent_fixture(self):
         root=self.fixture('KGS14P','코스피 금융')
         self.master[0].update(sUpCodeM='KGS15P',sUpCodeL='KGS14P')
-        middle=so.load(root/'kr-probes/KGS09P.json');middle['expected_code']='KGS15P'
+        middle=artifact_io.load(root/'kr-probes/KGS09P.json');middle['expected_code']='KGS15P'
         (root/'kr-probes/KGS09P.json').unlink()
-        so.write(root/'kr-probes/KGS15P.json',middle)
+        artifact_io.write(root/'kr-probes/KGS15P.json',middle)
         parent=copy.deepcopy(middle);parent['expected_code']='KGS14P'
-        so.write(root/'kr-probes/KGS14P.json',parent)
+        artifact_io.write(root/'kr-probes/KGS14P.json',parent)
         direct=copy.deepcopy(parent);direct['url']='https://api.nhplug.com:8443/krstock/quote/v1/currentPrice'
-        (root/'kr-individual').mkdir();so.write(root/'kr-individual/005930.json',direct)
+        (root/'kr-individual').mkdir();artifact_io.write(root/'kr-individual/005930.json',direct)
         return root
 
     def test_parent_requires_individual_direct_evidence(self):
@@ -202,24 +203,24 @@ class MappingTest(unittest.TestCase):
 
     def test_market_code_is_not_sector(self):
         root=self.parent_fixture();self.master[0]['sUpCodeL']='KGG01P'
-        path=root/'kr-individual/005930.json';data=so.load(path)
-        data['payload']['Output_0'].update(bstp_cls_code='KGG01P',bstp_kor_isnm='코스피');so.write(path,data)
+        path=root/'kr-individual/005930.json';data=artifact_io.load(path)
+        data['payload']['Output_0'].update(bstp_cls_code='KGG01P',bstp_kor_isnm='코스피');artifact_io.write(path,data)
         self.assertEqual(self.grouped(root)['group_state'],'unmatched')
 
     def test_parent_duplicate_or_wrong_individual_identity_blocks(self):
-        root=self.parent_fixture();path=root/'kr-individual/005930.json';data=so.load(path)
-        so.write(root/'kr-individual/duplicate.json',data)
+        root=self.parent_fixture();path=root/'kr-individual/005930.json';data=artifact_io.load(path)
+        artifact_io.write(root/'kr-individual/duplicate.json',data)
         self.assertEqual(self.grouped(root)['group_state'],'unmatched')
         (root/'kr-individual/duplicate.json').unlink()
-        data['payload']['Output_0']['iem_cd']='999999';so.write(path,data)
+        data['payload']['Output_0']['iem_cd']='999999';artifact_io.write(path,data)
         self.assertEqual(self.grouped(root)['group_state'],'unmatched')
 
     def test_parent_label_conflict_and_stale_evidence_block(self):
-        root=self.parent_fixture();path=root/'kr-individual/005930.json';data=so.load(path)
-        data['payload']['Output_0']['bstp_kor_isnm']='코스피 다른명';so.write(path,data)
+        root=self.parent_fixture();path=root/'kr-individual/005930.json';data=artifact_io.load(path)
+        data['payload']['Output_0']['bstp_kor_isnm']='코스피 다른명';artifact_io.write(path,data)
         self.assertEqual(self.grouped(root)['group_state'],'unmatched')
         data['payload']['Output_0']['bstp_kor_isnm']='코스피 금융'
-        data['observed_at']='2026-09-01T00:00:00+00:00';so.write(path,data)
+        data['observed_at']='2026-09-01T00:00:00+00:00';artifact_io.write(path,data)
         self.assertEqual(self.grouped(root)['group_state'],'unmatched')
 
     def test_parent_does_not_override_original_type_conflict(self):

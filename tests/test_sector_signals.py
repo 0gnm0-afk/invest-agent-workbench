@@ -7,7 +7,7 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-import sector_signals as signals
+import sectors.signals as signals
 
 
 def fixture(count=100):

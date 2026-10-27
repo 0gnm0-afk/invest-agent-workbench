@@ -5,8 +5,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
-import sector_observation as so
-import wics_classification as wics
+import sectors.observation as so
+import sectors.wics as wics
 import test_sector_observation as fixtures
 
 

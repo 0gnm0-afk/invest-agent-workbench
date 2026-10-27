@@ -2,12 +2,14 @@ import json,sys,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-import automatic_scope as a
-import market_scope as m
+import atomic_io as artifact_io
+import market.scope as a
+from sectors.classification_refresh import refresh_classification_source
+import market.scope as m
 
 class AutomaticScopeTests(unittest.TestCase):
     def setUp(self):
-        self.registry_patch=patch('market_exclusion_review.read_records',return_value=([],b''))
+        self.registry_patch=patch('market.exclusions.read_records',return_value=([],b''))
         self.registry_patch.start();self.addCleanup(self.registry_patch.stop)
 
     def test_retired_rule_ignored_even_when_legacy_config_is_enabled(self):
@@ -49,19 +51,18 @@ class AutomaticScopeTests(unittest.TestCase):
         self.assertTrue(all(x['approved_on'] in ('2026-10-04','2026-10-06') and x.get('identity_bound') for x in policy['records']))
 
     def test_review_classification_refresh_changes_no_observations(self):
-        from market_collect import write_json
-        import sector_observation as so
+        from atomic_io import write_json
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);source=root/'source';source.mkdir()
             snapshot={'universe':[{'market':'US','symbol':'TEST'}],'series':[{'symbol':'TEST','bars':[{'close':123}]}],
                       'classification_refresh':{'path':'old','sha256':'old'}}
             write_json(source/'snapshot.json',snapshot);write_json(source/'summary.json',{'state':'partial'})
-            write_json(source/'manifest.json',{'snapshot.json':so.sha(source/'snapshot.json'),'summary.json':so.sha(source/'summary.json')})
+            write_json(source/'manifest.json',{'snapshot.json':artifact_io.sha(source/'snapshot.json'),'summary.json':artifact_io.sha(source/'summary.json')})
             ref={'path':'new','sha256':'new'}
-            out=a.refresh_classification_source(source,ref,root/'derived')
-            self.assertEqual(so.load(out/'snapshot.json'),{**snapshot,'classification_refresh':ref})
-            self.assertEqual(so.load(source/'snapshot.json'),snapshot)
-            self.assertEqual(a.refresh_classification_source(out,ref,root/'unused'),out)
+            out=refresh_classification_source(source,ref,root/'derived')
+            self.assertEqual(artifact_io.load(out/'snapshot.json'),{**snapshot,'classification_refresh':ref})
+            self.assertEqual(artifact_io.load(source/'snapshot.json'),snapshot)
+            self.assertEqual(refresh_classification_source(out,ref,root/'unused'),out)
             self.assertFalse((root/'unused').exists())
 
 

@@ -9,8 +9,8 @@ import threading
 import unittest
 from unittest.mock import patch
 
-import market_exclusion_review as m
-import market_scope
+import market.exclusions as m
+import market.scope as market_scope
 from invest_agent.trading.store import instance_lock
 
 
@@ -31,7 +31,7 @@ def saved(root,name,snapshot=None,quality=None,*,artifact=True):
     path=root/'runtime'/name;path.mkdir(parents=True)
     source=path/'source';source.mkdir()
     m.save(source/'snapshot.json',snapshot)
-    from sector_observation import sha
+    from atomic_io import sha
     m.save(source/'manifest.json',{'snapshot.json':sha(source/'snapshot.json')})
     run={'market_source':str(source),'output':str(path),'state':'partial'}
     m.save(path/'run.json',run);m.save(path/'quality.json',quality)
@@ -107,7 +107,7 @@ class ReviewFixture(unittest.TestCase):
 
 class Approval(ReviewFixture):
     def test_durable_consent_recalculation_and_next_collection(self):
-        from sector_observation import sha
+        from atomic_io import sha
         original=sha(self.run/'source/snapshot.json')
         s=self.service();self.approve(s);done=self.finish(s)
         self.assertEqual(done['job']['state'],'completed');self.assertEqual(done['issues'],[])
@@ -119,7 +119,7 @@ class Approval(ReviewFixture):
         f=TossMarketPipelineTests();f.setUp()
         try:
             f.config['universe']+=fixture()[0]['universe'][:1]
-            with patch('market_scope.load',return_value=policy):result=f.run_collect()
+            with patch('market.scope.load',return_value=policy):result=f.run_collect()
             self.assertNotIn('FAIL',[c.args[1] for c in f.candles.call_args_list])
             self.assertEqual(len(result['universe']),2)
         finally:f.doCleanups()
@@ -212,7 +212,7 @@ class Approval(ReviewFixture):
         s=self.service()
         with patch.object(s,'_start'):self.approve(s)
         job=m.registry(self.path)[0]['jobs'][-1]['id']
-        import daily_market,repair_market_scope
+        import market.daily as daily_market, market.repair as repair_market_scope
         policy=market_scope.load(user_registry=self.path)
         def run(config,source):
             derived=m.load(source/'snapshot.json');self.assertEqual([r['symbol'] for r in derived['universe']],['KEEP'])
@@ -220,7 +220,7 @@ class Approval(ReviewFixture):
             return {'state':'failed','stages':{'report':'completed'},'output':str(result)}
         m.save(self.root/'config.json',{})
         with patch.object(m,'ROOT',self.root),patch.object(m,'REGISTRY',self.path),patch.object(repair_market_scope,'ROOT',self.root),\
-             patch('market_scope.load',return_value=policy),patch.object(repair_market_scope,'audit',return_value={'state':'partial'}),patch.object(daily_market,'run',side_effect=run):
+             patch('market.scope.load',return_value=policy),patch.object(repair_market_scope,'audit',return_value={'state':'partial'}),patch.object(daily_market,'run',side_effect=run):
             m.apply_job(job)
         self.assertEqual(m.registry(self.path)[0]['jobs'][-1]['state'],'computed')
         self.assertEqual(Path(m.load(self.root/'runtime/latest.json')['output']).name,'partial-after')
@@ -229,7 +229,7 @@ class Approval(ReviewFixture):
         s=self.service()
         with patch.object(s,'_start'):self.approve(s)
         job=m.registry(self.path)[0]['jobs'][-1]['id'];before=m.load(self.root/'runtime/latest.json')
-        import daily_market,repair_market_scope
+        import market.daily as daily_market, market.repair as repair_market_scope
         policy=market_scope.load(user_registry=self.path)
         def run(config,source):
             with socket.socket() as sock, self.assertRaisesRegex(AssertionError,'offline_network_forbidden'):
@@ -240,7 +240,7 @@ class Approval(ReviewFixture):
             return {'state':'failed'}
         m.save(self.root/'config.json',{})
         with patch.object(m,'ROOT',self.root),patch.object(m,'REGISTRY',self.path),patch.object(repair_market_scope,'ROOT',self.root),\
-             patch('market_scope.load',return_value=policy),patch.object(repair_market_scope,'audit',return_value={'state':'succeeded'}),patch.object(daily_market,'run',side_effect=run):
+             patch('market.scope.load',return_value=policy),patch.object(repair_market_scope,'audit',return_value={'state':'succeeded'}),patch.object(daily_market,'run',side_effect=run):
             with self.assertRaisesRegex(ValueError,'exclusion_calculation_failed'):m.apply_job(job)
         self.assertEqual(m.load(self.root/'runtime/latest.json'),before)
         self.assertEqual(m.registry(self.path)[0]['jobs'][-1]['state'],'failed')

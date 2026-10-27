@@ -6,8 +6,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
-import hybrid_market as market
-from toss_candles import daily_series
+import market.toss_collection as market
+from market.providers.toss_candles import daily_series
 
 
 class IncrementalMarketTests(unittest.TestCase):

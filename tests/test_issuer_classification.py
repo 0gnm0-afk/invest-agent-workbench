@@ -1,8 +1,8 @@
 import copy,hashlib,json,sys,tempfile,unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from classification_refresh import apply_issuer_links
-from sector_observation import checked,classification_age_issue
+from sectors.classification_refresh import apply_issuer_links
+from atomic_io import checked; from sectors.observation import classification_age_issue
 
 class IssuerTests(unittest.TestCase):
     def setUp(self):

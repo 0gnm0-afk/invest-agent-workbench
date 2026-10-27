@@ -85,7 +85,7 @@ def audit_real_records(root, mother):
 
 
 def prepare(root, out, protocol_path):
-    from saved_us_history import SavedMarketHistories
+    from market.history.saved import SavedMarketHistories
     protocol=read_json(protocol_path)
     if (out/'data_audit.json').exists(): raise FileExistsError('prepared_output_is_immutable')
     out.mkdir(parents=True,exist_ok=True)
