@@ -1,6 +1,6 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 global.window=global;
-for(const f of ['format.js','drawings/drawing-tools.js'])vm.runInThisContext(fs.readFileSync(__dirname+'/../dashboard/'+f,'utf8'));
+for(const f of ['shell/format.js','drawings/drawing-tools.js'])vm.runInThisContext(fs.readFileSync(__dirname+'/../dashboard/'+f,'utf8'));
 const D=DrawingTools;
 const daily=[
  {date:'2025-04-07',open:141.55,high:152.85,low:140.53,close:146.75},

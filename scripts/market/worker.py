@@ -10,7 +10,7 @@ from pathlib import Path
 import runpy
 import sys
 from invest_agent.trading.store import instance_lock
-from run_journal import RunJournal
+from launch.journal import RunJournal
 
 
 def main():

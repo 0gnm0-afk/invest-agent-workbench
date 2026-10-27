@@ -1,6 +1,6 @@
 const fs=require('fs'),vm=require('vm'),assert=require('assert'),path=require('path');
 const root=path.resolve(__dirname,'..');global.window={};
-vm.runInThisContext(fs.readFileSync(path.join(root,'dashboard/format.js'),'utf8'));
+vm.runInThisContext(fs.readFileSync(path.join(root,'dashboard/shell/format.js'),'utf8'));
 global.WorkbenchFormat=window.WorkbenchFormat;
 vm.runInThisContext(fs.readFileSync(path.join(root,'dashboard/analysis/collaboration.js'),'utf8'));
 const fixture=JSON.parse(fs.readFileSync(path.join(__dirname,'fixtures/collaboration-v1.json'),'utf8'));

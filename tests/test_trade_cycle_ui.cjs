@@ -1,6 +1,6 @@
 'use strict';
 const fs=require('fs'),vm=require('vm'),assert=require('node:assert/strict');
-global.window={};vm.runInThisContext(fs.readFileSync('dashboard/format.js','utf8'));global.WorkbenchFormat=window.WorkbenchFormat;
+global.window={};vm.runInThisContext(fs.readFileSync('dashboard/shell/format.js','utf8'));global.WorkbenchFormat=window.WorkbenchFormat;
 vm.runInThisContext(fs.readFileSync('dashboard/cycles/trade-cycle.js','utf8'));
 const ui=window.WorkbenchTradeCycle;
 const base=ui.incompletePlan({stock_key:'US:SYNTH',currency:'USD',budget:'1,000.50',initial_holding:{quantity:null,average_price:null}});
@@ -27,5 +27,5 @@ const cycle={adopted:{version:2,plan,combination_id:'a'},state:{...metric('15'),
 const progress=ui.progressHTML(cycle,'USD');assert.match(progress,/원래 확정한 계획과 현재 전망 비교/);assert.match(progress,/50\.00/);assert.match(progress,/60\.00/);assert.match(progress,/실제 거래 기록/);assert.match(progress,/새 사이클 시작/);
 assert.match(ui.progressHTML({...cycle,state:{...cycle.state,phase:'selling',cancelled_buy_steps:[2]}},'USD'),/매도 전환으로 취소/);
 assert.match(ui.editorHTML({...base,stop:null}),/data-trigger="stop:kind"/);
-const index=fs.readFileSync('dashboard/index.html','utf8');assert.match(index,/src="\/trade-cycle.js"/);assert.match(index,/href="#cycles"/);
+const index=fs.readFileSync('dashboard/shell/index.html','utf8');assert.match(index,/src="\/trade-cycle.js"/);assert.match(index,/href="#cycles"/);
 console.log('trade-cycle UI PASS: missing values retained, 36-combination selection/sorting, currency formatting, escaped agent text, explicit triggers, actual markers/pending lines, original/current projection, re-entry and assets');

@@ -1,6 +1,6 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const root=require('node:path').resolve(__dirname,'..');global.window=global;
-for(const f of ['format.js','drawings/drawing-tools.js'])vm.runInThisContext(fs.readFileSync(root+'/dashboard/'+f,'utf8'));
+for(const f of ['shell/format.js','drawings/drawing-tools.js'])vm.runInThisContext(fs.readFileSync(root+'/dashboard/'+f,'utf8'));
 const D=DrawingTools;
 const bars=[
  {date:'2026-09-28',open:90,high:135,low:70,close:100.123456},

@@ -2,7 +2,7 @@ const fs=require('node:fs');
 const path=require('node:path');
 const vm=require('node:vm');
 const assert=require('node:assert/strict');
-const source=fs.readFileSync(path.join(__dirname,'../dashboard/app.js'),'utf8');
+const source=fs.readFileSync(path.join(__dirname,'../dashboard/shell/app.js'),'utf8');
 const code=source.slice(source.indexOf('async function pollDaily()'));
 const failed={enabled:true,view_ready:true,state:'failed',day:'2026-10-04',attempt_id:'a1',reused:true,retry_available:true,error:'market_worker_failed',targets:{}};
 function element(){

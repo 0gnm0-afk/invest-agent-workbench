@@ -13,7 +13,7 @@ from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from market.history.chart import HistoryStore, aggregate, validate_bars
 from drawings.store import defaults, moving_averages
-from dashboard import handler_for, ThreadingHTTPServer
+from web.server import handler_for, ThreadingHTTPServer
 
 def bar(day, price=10, volume=100):
     return dict(date=day,open=price,high=price+3,low=price-2,close=price+1,volume=volume)

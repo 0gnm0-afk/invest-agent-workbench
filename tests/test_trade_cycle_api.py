@@ -135,7 +135,7 @@ class CycleApiTests(unittest.TestCase):
 
     def test_two_local_servers_keep_separate_confirmation_cookies(self):
         import http.client,json
-        from dashboard import handler_for,ThreadingHTTPServer
+        from web.server import handler_for,ThreadingHTTPServer
         c=self.prepare();store=TradeCycleStore(self.store.path)
         c=store.save_draft(c['stock_key'],plan(),c['cycle_id'],c['revision'],c['draft']['source'])
         servers=[];cookies=[]

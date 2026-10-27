@@ -12,7 +12,7 @@ from invest_agent.trading.market_provider import completed_sessions
 from invest_agent.trading.runner import atomic_write
 from invest_agent.trading.store import instance_lock
 from market.providers.toss_candles import daily_series
-from daily_launch import capped_sessions
+from launch.daily import capped_sessions
 from market.providers.toss_universe import discover
 from market.quality import complete_cap, error_disposition
 import market.scope as market_scope
@@ -44,7 +44,7 @@ def collector_version():
         'market/providers/toss_api.py',
         'market/quality.py',
         'market/policies/lifecycle.json',
-        'daily_launch.py',
+        'launch/daily.py',
         'market/scope.py',
         'market/policies/exclusions.json',
         'atomic_io.py',

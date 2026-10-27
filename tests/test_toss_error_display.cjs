@@ -10,7 +10,7 @@ async function check(code, expected) {
   const context=vm.createContext({$:()=>banner,esc:String,num:String,stamp:String,
     fetch:async()=>({ok:true,json:async()=>state}),location:{hash:'#stock/US/AAA'},
     document:{createElement:node},setTimeout(){},clearTimeout(){}});
-  const app=fs.readFileSync(path.join(root,'dashboard/app.js'),'utf8');
+  const app=fs.readFileSync(path.join(root,'dashboard/shell/app.js'),'utf8');
   vm.runInContext(app.slice(app.indexOf('async function pollDaily()')),context);
   await context.pollDaily();
   assert.ok(banner.innerHTML.includes(expected));
@@ -22,7 +22,7 @@ async function check(code, expected) {
     fetch:async(url,opts)=>{calls.push([url,opts?.method||'GET']);return {ok:true,json:async()=>
       url==='/health'?{token:'synthetic'}:url.startsWith('/api/chart-history')?{history:{state:'failed'}}:
       {bars:[],history:{state:'failed',reason:code,daily_count:0}}};}});
-  vm.runInContext(fs.readFileSync(path.join(root,'dashboard/stock-chart.js'),'utf8'),chartContext);
+  vm.runInContext(fs.readFileSync(path.join(root,'dashboard/charts/stock-chart.js'),'utf8'),chartContext);
   await chartContext.window.WorkbenchStockChart.mount({stock:{},market:'US',symbol:'AAA',currency:'USD',isCurrent:()=>true});
   assert.ok(elements['#history-status'].textContent.includes(expected));
   assert.equal(calls.filter(([,method])=>method==='POST').length,1);

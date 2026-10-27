@@ -1,5 +1,5 @@
 const fs=require('fs'),vm=require('vm'),assert=require('node:assert/strict');
-global.window={};vm.runInThisContext(fs.readFileSync('dashboard/format.js','utf8'));global.WorkbenchFormat=window.WorkbenchFormat;
+global.window={};vm.runInThisContext(fs.readFileSync('dashboard/shell/format.js','utf8'));global.WorkbenchFormat=window.WorkbenchFormat;
 vm.runInThisContext(fs.readFileSync('dashboard/alerts/trailing.js','utf8'));
 const api=window.WorkbenchTrailing,match={market:'US',symbol:'S',currency:'USD'};
 const p={...match,account:'a',quantity:2,average_cost:90.125,active:true,line:97,status:'monitoring'};

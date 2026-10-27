@@ -143,7 +143,7 @@ class NHSelection(unittest.TestCase):
 class RetryHTTP(unittest.TestCase):
     def test_browser_schema_csrf_and_real_service_sequence(self):
         import http.client
-        from dashboard import handler_for,ThreadingHTTPServer
+        from web.server import handler_for,ThreadingHTTPServer
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);saved(root,'before');registry=root/'runtime/market-scope-user/records.json'
             calls=[]

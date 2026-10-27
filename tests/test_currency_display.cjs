@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 global.window = global;
-vm.runInThisContext(fs.readFileSync(path.join(__dirname,'../dashboard/format.js'),'utf8'));
+vm.runInThisContext(fs.readFileSync(path.join(__dirname,'../dashboard/shell/format.js'),'utf8'));
 for (const [value,currency,expected] of [[1234.5,'KRW','1,235'],[-1234.5,'KRW','-1,235'],
   [1234.5,'USD','1,234.50'],[0,'KRW','0'],[0,'USD','0.00'],[-.001,'USD','0.00'],
   [null,'KRW','미확인'],['','USD','미확인'],[NaN,'KRW','미확인'],['1,234.5','USD','1,234.50']])
@@ -20,7 +20,7 @@ let refs, move;
 global.LightweightCharts={CrosshairMode:{Normal:0},createChart(){refs=[];return {
   addSeries(type,options){const ref={options,setData(data){this.data=data;}};refs.push(ref);return ref;},
   timeScale(){return {fitContent(){}};},subscribeCrosshairMove(fn){move=fn;},remove(){}};}};
-vm.runInThisContext(fs.readFileSync(path.join(__dirname,'../dashboard/charts.js'),'utf8'));
+vm.runInThisContext(fs.readFileSync(path.join(__dirname,'../dashboard/charts/charts.js'),'utf8'));
 for(const currency of ['KRW','USD']) {
   const data=[{time:'2026-09-30',open:1234.5,high:1235.5,low:1233.5,close:1234.5}],legend={};
   WorkbenchCharts.create({},[{type:'candles',currency,label:currency,data}],{legend});

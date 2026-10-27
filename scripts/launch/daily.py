@@ -11,7 +11,8 @@ from uuid import uuid4
 
 from invest_agent.trading.market_provider import completed_sessions
 from atomic_io import atomic_write
-from run_journal import error_frames
+from workbench_paths import SCRIPTS
+from launch.journal import error_frames
 from invest_agent.trading.store import instance_lock, BusyError
 
 
@@ -210,7 +211,7 @@ class DailyLaunch:
         python = Path(sys.executable)
         if python.name.lower() == 'pythonw.exe':
             python = python.with_name('python.exe')
-        command = [str(python), '-u', str(Path(__file__).parent/'market/worker.py'),
+        command = [str(python), '-u', str(SCRIPTS/'market/worker.py'),
                    '--root', str(self.root), '--',
                    '--session-cutoff',plan['cutoff'],'--evaluated-at',plan['evaluated_at']]
         if plan.get('prior_run'):
@@ -253,7 +254,7 @@ class DailyLaunch:
             progress({'stage':'accounts'})
             result['account_attempted'] = True
             try:
-                from dashboard_data import refresh_account_snapshot
+                from accounts import refresh_account_snapshot
                 account = refresh_account_snapshot(self.root)
                 result['account_state'] = account['query_state']
                 result['account_error'] = account.get('reason')

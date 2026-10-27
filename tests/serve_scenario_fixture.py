@@ -7,7 +7,7 @@ from copy import deepcopy
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from test_collaboration import CollaborationTests, ROOT
-from dashboard import handler_for, ThreadingHTTPServer
+from web.server import handler_for, ThreadingHTTPServer
 from market.history.chart import aggregate
 from drawings.store import defaults
 

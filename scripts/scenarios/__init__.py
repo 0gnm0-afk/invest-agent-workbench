@@ -16,7 +16,7 @@ def dispatch(service, op, args, origin, principal, session):
         if key is not None and (not isinstance(key, str) or len(key) > 100):
             raise ValueError('invalid_stock_key')
         from datetime import datetime, timezone
-        from daily_launch import plan_for
+        from launch.daily import plan_for
         checked_at = datetime.now(timezone.utc)
         value = store.read(key, now=checked_at, targets=plan_for(checked_at)['targets'])
         for monitor in value['monitors']:

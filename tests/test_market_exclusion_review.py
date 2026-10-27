@@ -250,7 +250,7 @@ class Approval(ReviewFixture):
 class HTTP(ReviewFixture):
     def setUp(self):
         super().setUp()
-        from dashboard import handler_for,ThreadingHTTPServer
+        from web.server import handler_for,ThreadingHTTPServer
         self.review=self.service()
         assets=Path(__file__).resolve().parents[1]/'dashboard'
         self.server=ThreadingHTTPServer(('127.0.0.1',0),handler_for({}, {}, assets,'token',self.root/'workspace.sqlite3',

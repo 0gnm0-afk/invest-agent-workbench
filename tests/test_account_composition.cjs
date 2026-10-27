@@ -1,7 +1,7 @@
 // Display-only grouping must not invent missing amounts or double-count deposits.
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const context={window:{},WorkbenchFormat:{money:()=>''}};
-vm.runInNewContext(fs.readFileSync('dashboard/risk-workbench.js','utf8'),context);
+vm.runInNewContext(fs.readFileSync('dashboard/accounts/risk-workbench.js','utf8'),context);
 const {composition,isEquity}=context.window.WorkbenchRisk;
 const sample=()=>({valuation:{base_currency:'KRW',fx_to_base:{USD:1000}},accounts:[{alias:'a',holdings_complete:true,cash_complete:false,cash:{},positions:[{symbol:'A',currency:'USD',quantity:2,price:10},{symbol:'CMA',currency:'KRW',instrument_class_hint:'CMA_note_from_broker_label',observed_evaluation_krw:500}],observed_deposits:{KR:{dca:10,nxt_dd_dca:200,nxt2_dd_dca:300},US:{fc_dca:3,krw_dca:3000}}}]});
 let b=sample(),before=JSON.stringify(b),c=composition(b);

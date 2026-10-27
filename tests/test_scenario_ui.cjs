@@ -1,7 +1,7 @@
 'use strict';
 const fs=require('fs'),vm=require('vm'),assert=require('node:assert/strict');
 global.window={};
-vm.runInThisContext(fs.readFileSync('dashboard/format.js','utf8'));
+vm.runInThisContext(fs.readFileSync('dashboard/shell/format.js','utf8'));
 global.WorkbenchFormat=window.WorkbenchFormat;
 vm.runInThisContext(fs.readFileSync('dashboard/scenarios/scenario-monitor.js','utf8'));
 assert.deepEqual(window.WorkbenchScenarios.monitoringPlans([

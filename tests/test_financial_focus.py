@@ -145,7 +145,7 @@ class FocusTests(unittest.TestCase):
     def test_http_serves_new_assets_and_identical_result(self):
         import http.client, tempfile, threading
         from types import SimpleNamespace
-        from dashboard import handler_for, ThreadingHTTPServer
+        from web.server import handler_for, ThreadingHTTPServer
         from test_analysis import AnalysisTests
         fixture=AnalysisTests();fixture.setUp()
         result=summarize(normal(),{});fixture.fin.read=lambda k:dict(state='complete',result=result);fixture.hist.saved.markets={}

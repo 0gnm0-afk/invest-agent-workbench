@@ -13,8 +13,8 @@ from unittest.mock import Mock
 
 SCRIPTS = Path(__file__).resolve().parents[1]/'scripts'
 sys.path.insert(0, str(SCRIPTS))
-from daily_launch import DailyLaunch
-from run_journal import RunJournal
+from launch.daily import DailyLaunch
+from launch.journal import RunJournal
 
 NOW = datetime(2026, 10, 7, 0, tzinfo=timezone.utc)
 PLAN = dict(day='2026-10-07', cutoff='2026-10-06', evaluated_at=NOW.isoformat(), targets={})
@@ -46,7 +46,7 @@ print(json.dumps({'state':'failed','output':str(root/'runtime/fixture'),'stages'
 (root/'done').write_text('complete')
 """, encoding='utf-8')
             program = ('import sys;sys.path.insert(0,'+repr(str(SCRIPTS))+');'
-                       'from daily_launch import DailyLaunch;from datetime import datetime;'
+                       'from launch.daily import DailyLaunch;from datetime import datetime;'
                        'DailyLaunch('+repr(str(root))+',planner=lambda n:'+repr(PLAN)+',accounts=False).once('
                        'datetime.fromisoformat('+repr(NOW.isoformat())+'),scheduled=True)')
             parent = subprocess.Popen([sys.executable, '-c', program], stdout=subprocess.DEVNULL,

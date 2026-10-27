@@ -11,18 +11,19 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-import dashboard_startup as startup
+import launch.startup as startup
 
 
 class Startup(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
+        (self.root / 'shell').mkdir()
         self.ready = self.root / 'data-ready.json'
         self.state = {}
-        (self.root / 'index.html').write_text('<head><script defer src="/app.js"></script></head><div class="loading">저장 자료를 불러오고 있습니다…</div>', encoding='utf-8')
-        (self.root / 'style.css').write_text('body{}')
-        (self.root / 'startup.js').write_text('void 0;')
+        (self.root / 'shell/index.html').write_text('<head><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/financial-focus.css"><script defer src="/app.js"></script></head><div class="loading">저장 자료를 불러오고 있습니다…</div>', encoding='utf-8')
+        (self.root / 'shell/style.css').write_text('body{}')
+        (self.root / 'shell/startup.js').write_text('void 0;')
         self.server = ThreadingHTTPServer(('127.0.0.1', 0), startup.handler_for(self.root, self.state, self.ready))
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -44,7 +45,7 @@ class Startup(unittest.TestCase):
         def slow_main():
             entered.set()
             blocked.wait(5)
-        with patch.dict(sys.modules, {'dashboard': type('FakeDashboard', (), {'main': staticmethod(slow_main)})}), patch.object(sys, 'argv', []):
+        with patch.dict(sys.modules, {'web.server': type('FakeDashboard', (), {'main': staticmethod(slow_main)})}), patch.object(sys, 'argv', []):
             worker = threading.Thread(target=startup.run_dashboard, args=([], self.ready, self.state), daemon=True)
             worker.start()
             try:
@@ -52,6 +53,7 @@ class Startup(unittest.TestCase):
                 page = self.get('/')
                 self.assertIn('스크리닝', page)
                 self.assertIn('/startup.js', page)
+                self.assertNotIn('/financial-focus.css', page)
                 self.assertNotIn('/app.js', page)
                 self.assertEqual(json.loads(self.get('/api/startup')), {'state': 'loading'})
                 self.assertEqual(self.get('/style.css'), 'body{}')
@@ -75,7 +77,7 @@ class Startup(unittest.TestCase):
     def test_worker_failure_persists_traceback_without_console_output(self):
         def failed_main():
             raise RuntimeError('preparation_fixture_failure')
-        with patch.dict(sys.modules, {'dashboard': type('FailedDashboard', (), {'main': staticmethod(failed_main)})}), patch.object(sys, 'argv', []), patch.object(sys, 'stderr', io.StringIO()):
+        with patch.dict(sys.modules, {'web.server': type('FailedDashboard', (), {'main': staticmethod(failed_main)})}), patch.object(sys, 'argv', []), patch.object(sys, 'stderr', io.StringIO()):
             startup.run_dashboard([], self.ready, self.state)
         self.assertTrue(self.state['failed'])
         diagnostic = self.ready.with_suffix('.err.log').read_text(encoding='utf-8')

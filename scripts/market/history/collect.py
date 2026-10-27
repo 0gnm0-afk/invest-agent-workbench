@@ -1,4 +1,4 @@
-"""Resumable stock/US ADR history collection, isolated from dashboard runs."""
+"""Resumable stock/US ADR history collection, isolated from web.server runs."""
 
 if not __package__:
     import sys

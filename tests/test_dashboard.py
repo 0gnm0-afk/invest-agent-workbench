@@ -12,8 +12,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-import dashboard_data as d
-from dashboard import handler_for, ThreadingHTTPServer
+import web.data as d
+import accounts as account_data
+from web.server import handler_for, ThreadingHTTPServer
 
 
 class StoredData(unittest.TestCase):
@@ -126,7 +127,7 @@ class BrokerBoundary(unittest.TestCase):
         return [reader(path, inputs)[0]]
 
     def test_exact_account_balance_allowlist(self):
-        raw = d.collect_balances(self.reader, self.pages, self.Error)
+        raw = account_data.collect_balances(self.reader, self.pages, self.Error)
         self.assertEqual(raw['endpoint_calls'], ['/n2/acctinfo','/krstock/inquiry/v1/balance','/gbstock/inquiry/v1/balance'])
         self.assertNotIn('SYNTH_ACCOUNT_254aa248acb4', json.dumps(raw))
         self.assertEqual(raw['accounts'][0]['markets']['KR']['state'], 'received')
@@ -135,28 +136,28 @@ class BrokerBoundary(unittest.TestCase):
         def pages(path, inputs, reader):
             return reader('/krstock/inquiry/v1/dailyOrderExecution', inputs)
         with self.assertRaisesRegex(ValueError, 'read_only'):
-            d.collect_balances(self.reader, pages, self.Error)
+            account_data.collect_balances(self.reader, pages, self.Error)
 
     def test_one_market_error_is_not_empty_success(self):
         def reader(path, inputs, continuation=None):
             if 'gbstock' in path: raise self.Error('http_503')
             return self.reader(path, inputs, continuation)
-        raw = d.collect_balances(reader, self.pages, self.Error)
+        raw = account_data.collect_balances(reader, self.pages, self.Error)
         self.assertEqual(raw['accounts'][0]['markets']['US'], {'state':'unavailable','reason':'http_503'})
         self.assertEqual(raw['accounts'][0]['markets']['KR']['state'],'received')
 
     def test_unconfirmed_empty_account_list_rejected(self):
         with self.assertRaisesRegex(ValueError, 'empty_account_list'):
-            d.collect_balances(lambda *args: ({'Output_0': []}, {}), self.pages, self.Error)
+            account_data.collect_balances(lambda *args: ({'Output_0': []}, {}), self.pages, self.Error)
 
     def test_confirmed_zero_accounts(self):
-        raw = d.collect_balances(lambda *args: ({'Output_0': [], 'rsp_msg': '조회완료'}, {}), self.pages, self.Error)
+        raw = account_data.collect_balances(lambda *args: ({'Output_0': [], 'rsp_msg': '조회완료'}, {}), self.pages, self.Error)
         self.assertEqual(raw['accounts'], [])
 
     def test_duplicate_account_rejected(self):
         row = {'acct_type': '01', 'acct_no': 'SYNTH_ACCOUNT_254aa248acb4'}
         with self.assertRaisesRegex(ValueError, 'identity'):
-            d.collect_balances(lambda *args: ({'Output_0': [row, row]}, {}), self.pages, self.Error)
+            account_data.collect_balances(lambda *args: ({'Output_0': [row, row]}, {}), self.pages, self.Error)
 
 
 class HttpBoundary(unittest.TestCase):
@@ -183,7 +184,11 @@ class HttpBoundary(unittest.TestCase):
 
     def test_feature_assets_keep_existing_urls_after_folder_move(self):
         assets=Path(__file__).resolve().parents[1]/'dashboard'
-        groups={'market': ('market-exclusions.js','market-exclusions.css'),
+        groups={'shell': ('app.js','style.css','format.js','tooltips.js'),
+                'charts': ('charts.js','stock-chart.js','chart-events.js'),
+                'accounts': ('risk-workbench.js','risk-workbench.css'),
+                'financials': ('financial-focus.js','financial-focus.css','financials.css'),
+                'market': ('market-exclusions.js','market-exclusions.css'),
                 'alerts': ('trailing.js',),
                 'cycles': ('trade-cycle.js','trade-cycle.css'),
                 'drawings': ('drawing-tools.js','chart-workspace.js','chart-tools.css'),
@@ -252,7 +257,7 @@ class AccountFallback(unittest.TestCase):
         snapshot={'as_of':'2026-10-06T00:00:00+00:00','accounts':[],'limitations':[]}
         d.write(self.root/'runtime/nh-live/exports/account-test.json',snapshot)
         with patch('nh_api.read', side_effect=nh_api.NHError('http_503')):
-            value=d.refresh_account_snapshot(self.root)
+            value=account_data.refresh_account_snapshot(self.root)
         self.assertEqual(value['query_state'],'failed')
         output=self.root/'runtime/dashboard/read';output.mkdir()
         with patch('nh_api.read',side_effect=AssertionError('unexpected duplicate read')):

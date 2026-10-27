@@ -4,7 +4,7 @@ import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from daily_launch import attempt_id
+from launch.daily import attempt_id
 
 
 class RetryConflict(ValueError):

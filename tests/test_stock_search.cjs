@@ -3,7 +3,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
 
-const source = fs.readFileSync(path.join(__dirname, '../dashboard/app.js'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '../dashboard/shell/app.js'), 'utf8');
 const start = source.indexOf('function mountStockSearch()');
 const end = source.indexOf('\nfunction marketStatus()', start);
 assert.ok(start >= 0 && end > start, 'stock search controller exists');

@@ -284,7 +284,7 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
                 if prior_run.is_file():
                     previous = artifact_io.load(prior_run).get('market_source')
             if prior_result:
-                from daily_launch import DailyLaunch
+                from launch.daily import DailyLaunch
                 checked_prior = DailyLaunch(ROOT).checked_run(prior_result)
                 previous = checked_prior.get('market_source')
                 inputs[str(Path(prior_result)/'run.json')] = artifact_io.sha(Path(prior_result)/'run.json')
@@ -312,7 +312,7 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
                 if prior_run.is_file():
                     previous = artifact_io.load(prior_run).get('market_source')
             if prior_result:
-                from daily_launch import DailyLaunch
+                from launch.daily import DailyLaunch
                 previous = DailyLaunch(ROOT).checked_run(prior_result).get('market_source')
             source, fallback, fallback_inputs = nh_fallback.recover(
                 original_source,output/'nh_fallback',config,
@@ -552,7 +552,7 @@ def main():
     if bool(args.session_cutoff) != bool(args.evaluated_at) or args.session_cutoff and any((args.source,args.verify,args.recover,args.review)):
         parser.error('cutoff/evaluated-at must be paired and live-only')
     if args.session_cutoff:
-        from daily_launch import plan_for
+        from launch.daily import plan_for
         if plan_for(datetime.fromisoformat(args.evaluated_at))['cutoff'] != args.session_cutoff:
             parser.error('cutoff must match the first launch KST previous date')
     config = artifact_io.load(ROOT/'config.json')

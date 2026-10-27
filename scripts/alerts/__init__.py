@@ -92,7 +92,8 @@ def holding_series(path, expected_hash, keys):
 
 def saved_inputs(root, market_run, keys=None, *, account_failed=False):
     """Verified saved run + saved accounts + selected series; never refresh providers."""
-    from dashboard_data import account_view, load, checked
+    from accounts import account_view
+    from atomic_io import load_bom as load, checked_saved as checked
     import tempfile
     root = Path(root)
     run_dir = Path(market_run).resolve()

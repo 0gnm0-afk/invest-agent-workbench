@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from market.history.saved import packed
 from market.history.chart import HistoryStore
 from drawings.store import moving_averages
-from dashboard import handler_for, ThreadingHTTPServer
+from web.server import handler_for, ThreadingHTTPServer
 
 
 def bar(day, price=10):

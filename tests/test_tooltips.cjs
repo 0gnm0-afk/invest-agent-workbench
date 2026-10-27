@@ -2,7 +2,7 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('n
 global.window=global;const events={},outer={};let bubble;
 global.innerWidth=600;global.innerHeight=400;global.addEventListener=(k,fn)=>outer[k]=fn;
 global.document={activeElement:null,addEventListener:(k,fn)=>events[k]=fn,body:{append:x=>bubble=x},createElement:()=>({style:{},offsetWidth:380,offsetHeight:170,setAttribute(){},addEventListener(){}})};
-vm.runInThisContext(fs.readFileSync(path.join(__dirname,'../dashboard/tooltips.js'),'utf8'));
+vm.runInThisContext(fs.readFileSync(path.join(__dirname,'../dashboard/shell/tooltips.js'),'utf8'));
 const h=WorkbenchHelp;
 assert.equal((h.text('RS 68.3 · 피벗 거리 4.5% · 구조 위험 7.0%').match(/data-help=/g)||[]).length,3);
 assert.equal(h.text('RSI 57.7'),'RSI 57.7');

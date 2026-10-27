@@ -120,7 +120,7 @@ class AnalysisTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.s.dispatch('context',{'analysis_key':self.cid,'context':{'price_scale':'log'}},'http://127.0.0.1:1')
 
     def test_http_write_auth_size_origin_and_read_only_boundaries(self):
-        from dashboard import handler_for, ThreadingHTTPServer
+        from web.server import handler_for, ThreadingHTTPServer
         h=handler_for({'accounts':self.accounts,'market':{}},{'US:NVDA':self.stock},ROOT/'dashboard','secret',self.root/'http.sqlite3')
         server=ThreadingHTTPServer(('127.0.0.1',0),h);thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
         origin='http://127.0.0.1:'+str(server.server_port)

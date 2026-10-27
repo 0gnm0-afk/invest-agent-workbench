@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from drawings.store import WorkspaceStore, defaults, validate, Conflict, moving_averages
-from dashboard import handler_for, ThreadingHTTPServer
+from web.server import handler_for, ThreadingHTTPServer
 
 
 def drawing(kind='trend', ident='test'):

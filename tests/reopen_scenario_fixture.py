@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from dashboard import handler_for,ThreadingHTTPServer
+from web.server import handler_for,ThreadingHTTPServer
 from market.history.chart import aggregate
 root=Path(__file__).resolve().parents[1];folder=root/'runtime/scenario-monitor-verification'
 ready=json.loads((folder/'fixture-ready.json').read_text());packet=json.loads((folder/'fixture-input.json').read_text())

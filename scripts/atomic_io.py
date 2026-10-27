@@ -53,3 +53,27 @@ def checked(path, expected, inputs):
 
 def write_json(path, value):
     atomic_write(path, json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2))
+
+
+def load_bom(path):
+    """Read existing dashboard/account receipts, including UTF-8 BOM files."""
+    return json.loads(Path(path).read_text(encoding='utf-8-sig'))
+
+
+def checked_saved(path, expected):
+    if not expected or sha(path) != expected:
+        raise ValueError('saved_artifact_hash_mismatch:' + Path(path).name)
+    return load_bom(path)
+
+
+def write_new_json(path, payload):
+    """Create an immutable receipt; never overwrite an earlier file."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('x', encoding='utf-8') as stream:
+        json.dump(payload, stream, ensure_ascii=False, allow_nan=False)
+
+
+def utc_now():
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()

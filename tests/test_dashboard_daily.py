@@ -11,9 +11,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from daily_launch import DailyLaunch, attempt_id
-from dashboard_daily import DashboardDaily, RetryConflict
-from dashboard import handler_for, ThreadingHTTPServer
+from launch.daily import DailyLaunch, attempt_id
+from web.refresh import DashboardDaily, RetryConflict
+from web.server import handler_for, ThreadingHTTPServer
 
 NOW = datetime(2026, 10, 4, 5, tzinfo=timezone.utc)
 DAY = '2026-10-04'

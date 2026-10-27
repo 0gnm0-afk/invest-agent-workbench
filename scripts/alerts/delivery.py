@@ -239,7 +239,7 @@ def dispatch(root=ROOT, targets=None, *, config=None, sender=None, include_trail
             if not config:
                 return {'state':'disabled'}
             if targets is None:
-                from daily_launch import plan_for
+                from launch.daily import plan_for
                 targets = plan_for(datetime.now(timezone.utc))['targets']
             from alerts.trailing import TrailingStore
             # Keep legacy events in storage, but do not send obsolete warning rules.

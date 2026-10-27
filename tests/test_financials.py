@@ -90,7 +90,7 @@ class StoredRequest(unittest.TestCase):
 class FinancialHttp(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        from dashboard import handler_for,ThreadingHTTPServer
+        from web.server import handler_for,ThreadingHTTPServer
         cls.temp=tempfile.TemporaryDirectory()
         cls.server=ThreadingHTTPServer(('127.0.0.1',0),handler_for({}, {'US:ABC':{'symbol':'ABC','market':'US','bars':[]}},Path('.'),'test-token',workspace_path=Path(cls.temp.name)/'workspace.sqlite3'))
         cls.thread=threading.Thread(target=cls.server.serve_forever,daemon=True);cls.thread.start()
@@ -116,7 +116,7 @@ class FinancialHttp(unittest.TestCase):
             self.assertEqual(self.request('POST',headers=h,body='{"refresh":"yes"}')[0],400)
             collector.assert_not_called()
     def test_valid_explicit_request_only(self):
-        with patch('dashboard.FinancialStore.start',return_value={'state':'running'}) as start:
+        with patch('web.server.FinancialStore.start',return_value={'state':'running'}) as start:
             self.assertEqual(self.request('POST',headers=self.headers(),body='{"refresh":true}')[0],202)
             self.assertTrue(start.call_args.kwargs['refresh'])
 

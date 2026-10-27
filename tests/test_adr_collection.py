@@ -15,8 +15,8 @@ from market.providers.toss_universe import listing_requests
 from test_toss_universe import FakeToss
 import market.toss_collection as hybrid
 from market.collect import audit
-from dashboard_data import saved_market, write, sha
-from dashboard import handler_for, ThreadingHTTPServer
+from web.data import saved_market, write, sha
+from web.server import handler_for, ThreadingHTTPServer
 
 
 class AdrToss(FakeToss):

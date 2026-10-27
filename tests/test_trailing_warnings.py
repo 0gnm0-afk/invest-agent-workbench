@@ -198,7 +198,7 @@ class SavedAlertInputs(unittest.TestCase):
                 'output_hashes': {'run.json': hashlib.sha256(runfile.read_bytes()).hexdigest()},
                 'input_hashes': {str(market): hashlib.sha256(market.read_bytes()).hexdigest()}}))
             accounts = {'query_state':'received','accounts':[{'positions':[{'market':'US','symbol':'A'}]}]}
-            with patch('dashboard_data.account_view',return_value=accounts) as read:
+            with patch('accounts.account_view',return_value=accounts) as read:
                 bundle, stocks = saved_inputs(root,run)
                 self.assertIs(bundle,accounts); self.assertEqual(set(stocks),{'US:A'})
                 self.assertFalse(read.call_args.kwargs['refresh'])

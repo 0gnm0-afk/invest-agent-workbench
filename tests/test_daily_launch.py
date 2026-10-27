@@ -9,21 +9,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from daily_launch import DailyLaunch, plan_for, capped_sessions
+from launch.daily import DailyLaunch, plan_for, capped_sessions
 
 NOW=datetime(2026,9,30,8,tzinfo=timezone.utc)
 
 class Calendar(unittest.TestCase):
     def test_kst_previous_date_even_after_kr_close(self):
-        with patch('daily_launch.completed_sessions',return_value=['2026-09-28','2026-09-29','2026-09-30']):
+        with patch('launch.daily.completed_sessions',return_value=['2026-09-28','2026-09-29','2026-09-30']):
             plan=plan_for(NOW)
         self.assertEqual(plan['day'],'2026-09-30');self.assertEqual(plan['targets'],{'KR':'2026-09-29','US':'2026-09-29'})
     def test_us_not_closed_and_different_holidays(self):
-        with patch('daily_launch.completed_sessions',side_effect=lambda market,now: {'KR':['2026-09-23'],'US':['2026-09-24']}[market]):
+        with patch('launch.daily.completed_sessions',side_effect=lambda market,now: {'KR':['2026-09-23'],'US':['2026-09-24']}[market]):
             plan=plan_for(datetime(2026,9,26,0,tzinfo=timezone.utc))
         self.assertEqual(plan['targets'],{'KR':'2026-09-23','US':'2026-09-24'})
     def test_kst_midnight_not_utc_day_and_invalid(self):
-        with patch('daily_launch.completed_sessions',return_value=['2026-09-29']):
+        with patch('launch.daily.completed_sessions',return_value=['2026-09-29']):
             self.assertEqual(plan_for(datetime(2026,9,29,15,tzinfo=timezone.utc))['day'],'2026-09-30')
         with self.assertRaises(ValueError):plan_for(datetime(2026,9,30))
         with self.assertRaises(ValueError):capped_sessions(['2026-09-30'],'2026-09-29')
@@ -49,8 +49,8 @@ class Launch(unittest.TestCase):
     def runner(self,plan,progress):
         self.calls.append(plan);progress({'stage':'stock_screen'});return self.result('run-'+str(len(self.calls)))
     def test_receipt_retries_temporary_windows_file_lock(self):
-        from daily_launch import atomic_write
-        with patch('daily_launch.atomic_write',side_effect=[PermissionError(),None]) as writer:
+        from launch.daily import atomic_write
+        with patch('launch.daily.atomic_write',side_effect=[PermissionError(),None]) as writer:
             self.gate.save({'day':'2026-09-30','state':'running'})
         self.assertEqual(writer.call_count,2)
 
@@ -139,23 +139,23 @@ class Launch(unittest.TestCase):
         refresh.assert_called_once_with(self.root,new['output'],self.targets)
         self.gate.accounts=True
         order=[]
-        with patch('dashboard_data.refresh_account_snapshot',side_effect=lambda root: (order.append('account') or {'query_state':'received'})) as account, patch('alerts.trailing.refresh_saved',side_effect=lambda *a:order.append('risk')), patch('alerts.delivery.dispatch',side_effect=lambda *a,**kw: (order.append('telegram') or {'state':'ready'})) as delivery:
+        with patch('accounts.refresh_account_snapshot',side_effect=lambda root: (order.append('account') or {'query_state':'received'})) as account, patch('alerts.trailing.refresh_saved',side_effect=lambda *a:order.append('risk')), patch('alerts.delivery.dispatch',side_effect=lambda *a,**kw: (order.append('telegram') or {'state':'ready'})) as delivery:
             got=self.gate.execute({**self.plan(NOW),'prior_run':old['output']},lambda _:None)
         self.assertEqual(order,['account','risk','telegram']);account.assert_called_once_with(self.root)
         delivery.assert_called_once_with(self.root,self.targets,include_trailing=True,include_scenarios=False)
         self.assertEqual(got['telegram_state'],'ready')
         self.assertEqual(got['account_state'],'received')
-        with patch('dashboard_data.refresh_account_snapshot',side_effect=OSError('test')), patch('alerts.trailing.refresh_saved') as warning, patch('alerts.delivery.dispatch') as delivery:
+        with patch('accounts.refresh_account_snapshot',side_effect=OSError('test')), patch('alerts.trailing.refresh_saved') as warning, patch('alerts.delivery.dispatch') as delivery:
             got=self.gate.execute({**self.plan(NOW),'prior_run':old['output']},lambda _:None)
         self.assertEqual(got['account_state'],'failed');self.assertEqual(got['trailing_state'],'unavailable');warning.assert_not_called();delivery.assert_not_called()
-        with patch('dashboard_data.refresh_account_snapshot',return_value={'query_state':'received'}), patch('alerts.trailing.refresh_saved'), patch('alerts.delivery.dispatch',side_effect=OSError('private_failure')):
+        with patch('accounts.refresh_account_snapshot',return_value={'query_state':'received'}), patch('alerts.trailing.refresh_saved'), patch('alerts.delivery.dispatch',side_effect=OSError('private_failure')):
             got=self.gate.execute({**self.plan(NOW),'prior_run':old['output']},lambda _:None)
         self.assertEqual(got['telegram_state'],'unavailable');self.assertEqual(got['state'],'succeeded')
 
 
 class DashboardViews(unittest.TestCase):
     def test_published_view_and_update_status_are_read_only(self):
-        from dashboard import handler_for, ThreadingHTTPServer
+        from web.server import handler_for, ThreadingHTTPServer
         with tempfile.TemporaryDirectory() as tmp:
             holder={'view':({'generation':1},{'KR:A':{'bars':[1]}})}
             server=ThreadingHTTPServer(('127.0.0.1',0),handler_for({}, {},Path(tmp),'token',Path(tmp)/'workspace.sqlite3',views=holder,daily_status=lambda:{'enabled':True,'state':'partial','view_ready':True}))

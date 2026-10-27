@@ -16,7 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 sys.path.insert(0, str(Path(sys.argv[1])/'scripts'))
 sys.path.insert(0, str(Path(sys.argv[2])/'src'))
-import dashboard_data as d
+import web.data as d
 from market.history.chart import HistoryStore
 with tempfile.TemporaryDirectory() as tmp:
     mother=Path(tmp)/'mother'; adapters=mother/'scripts'; adapters.mkdir(parents=True)

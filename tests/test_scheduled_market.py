@@ -9,8 +9,8 @@ from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
 import test_daily_launch as fixtures
-from daily_launch import DailyLaunch, plan_for
-from scheduled_market import run_scheduled, exit_code
+from launch.daily import DailyLaunch, plan_for
+from launch.scheduled import run_scheduled, exit_code
 
 NOW = fixtures.NOW
 

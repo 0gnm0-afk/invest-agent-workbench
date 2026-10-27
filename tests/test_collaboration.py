@@ -179,7 +179,7 @@ class CollaborationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'database_markdown_mismatch'):self.read()
 
     def test_legacy_bridge_blocks_new_writes_without_restarting(self):
-        import analysis_bridge
+        import analysis.bridge as analysis_bridge
         with patch.object(analysis_bridge,'ensure',return_value=dict(url=self.origin,token='legacy',analysis_capabilities={})),patch.dict('os.environ',{'INVEST_ANALYSIS_ROLE':'collaboration'}):
             with self.assertRaisesRegex(ValueError,'upgrade_required'):analysis_bridge.call('plan_save',{})
         with patch.object(analysis_bridge,'ensure',return_value=dict(url=self.origin,token='legacy',analysis_capabilities={})),patch.dict('os.environ',{'INVEST_ANALYSIS_ROLE':'risk'}):
@@ -232,14 +232,14 @@ class CollaborationTests(unittest.TestCase):
         import asyncio
         from mcp import ClientSession,StdioServerParameters
         from mcp.client.stdio import stdio_client
-        from dashboard import handler_for,ThreadingHTTPServer
+        from web.server import handler_for,ThreadingHTTPServer
         capabilities={'collaboration':'stdio-collab','risk':'stdio-risk'}
         server=ThreadingHTTPServer(('127.0.0.1',0),handler_for(self.data,{'US:SYNTH':self.stock},ROOT/'dashboard','browser',self.store.path,
             analysis_capabilities=capabilities,analysis_dependencies={'histories':self.hist,'financials':self.fin}))
         thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
         endpoint=self.root/'endpoint.json';endpoint.write_text(json.dumps(dict(url='http://127.0.0.1:'+str(server.server_port),analysis_capabilities=capabilities)),encoding='utf-8')
         wrapper=self.root/'mcp_fixture.py'
-        wrapper.write_text('import sys,runpy\nfrom pathlib import Path\nsys.path.insert(0,'+repr(str(ROOT/'scripts'))+')\nimport analysis_bridge\nanalysis_bridge.ENDPOINT=Path('+repr(str(endpoint))+')\nrunpy.run_module("analysis_mcp",run_name="__main__")\n',encoding='utf-8')
+        wrapper.write_text('import sys,runpy\nfrom pathlib import Path\nsys.path.insert(0,'+repr(str(ROOT/'scripts'))+')\nimport analysis.bridge as analysis_bridge\nanalysis_bridge.ENDPOINT=Path('+repr(str(endpoint))+')\nrunpy.run_module("analysis_mcp",run_name="__main__")\n',encoding='utf-8')
         async def session(role, action):
             params=StdioServerParameters(command=sys.executable,args=[str(wrapper)],env={'INVEST_ANALYSIS_ROLE':role,'PYTHONUTF8':'1'})
             async with stdio_client(params) as (read,write):
@@ -264,7 +264,7 @@ class CollaborationTests(unittest.TestCase):
         finally:server.shutdown();server.server_close();thread.join()
 
     def test_offline_blocks_refresh_but_saved_chart_remains_available(self):
-        from dashboard import handler_for, ThreadingHTTPServer
+        from web.server import handler_for, ThreadingHTTPServer
         handler = handler_for(self.data, {'US:SYNTH': self.stock}, ROOT/'dashboard', 'browser', self.store.path,
                               analysis_dependencies={'histories': self.hist, 'financials': self.fin}, offline=True)
         server = ThreadingHTTPServer(('127.0.0.1', 0), handler)
@@ -286,8 +286,8 @@ class CollaborationTests(unittest.TestCase):
             conn.close(); server.shutdown(); server.server_close(); worker.join()
 
     def test_http_capability_cookie_origin_and_mcp_transport(self):
-        from dashboard import handler_for,ThreadingHTTPServer
-        import analysis_bridge
+        from web.server import handler_for,ThreadingHTTPServer
+        import analysis.bridge as analysis_bridge
         capabilities={'collaboration':'collab-secret','risk':'risk-secret'}
         deps={'histories':self.hist,'financials':self.fin}
         h=handler_for(self.data,{'US:SYNTH':self.stock},ROOT/'dashboard','legacy-token',self.store.path,

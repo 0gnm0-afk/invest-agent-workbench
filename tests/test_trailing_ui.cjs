@@ -1,6 +1,6 @@
 'use strict';
 const fs=require('fs'),vm=require('vm'),assert=require('node:assert/strict');global.window={};
-vm.runInThisContext(fs.readFileSync('dashboard/format.js','utf8'));global.WorkbenchFormat=window.WorkbenchFormat;
+vm.runInThisContext(fs.readFileSync('dashboard/shell/format.js','utf8'));global.WorkbenchFormat=window.WorkbenchFormat;
 vm.runInThisContext(fs.readFileSync('dashboard/alerts/trailing.js','utf8'));
 const p={active:true,line:263150,currency:'KRW',prices:[{date:'2026-10-01',close:270000},{date:'2026-10-02',close:265000}],history:[{date:'2026-10-01',line:260000}]};
 let priceLine,crosshair,config;
@@ -14,7 +14,7 @@ crosshair({time:'2026-10-01',seriesData:new Map([[ref,{value:270000}]])});assert
 crosshair({});assert.match(legend.innerHTML,/265,000/);
 assert.deepEqual(config[0].options.autoscaleInfoProvider(()=>({priceRange:{minValue:265000,maxValue:270000}})).priceRange,{minValue:263150,maxValue:270000});
 priceLine=null;window.WorkbenchTrailing.mountChart({},legend,{...p,active:false});assert.equal(priceLine,null);assert.match(legend.innerHTML,/최종 트레일링/);
-const app=fs.readFileSync('dashboard/app.js','utf8');assert.ok(app.includes("page==='risk'"));assert.ok(!app.includes('기존 위험관리'));
+const app=fs.readFileSync('dashboard/shell/app.js','utf8');assert.ok(app.includes("page==='risk'"));assert.ok(!app.includes('기존 위험관리'));
 assert.ok(fs.readFileSync('dashboard/alerts/trailing.js','utf8').includes('stock-price-legend trailing-price-legend'));
 console.log('trailing UI: full-width latest dotted price line, axis numbers, top-left legend, hover/reset, missing state and scale PASS');
 

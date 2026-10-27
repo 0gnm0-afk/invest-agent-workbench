@@ -98,7 +98,7 @@ class RecentTrendlineTests(unittest.TestCase):
 
     def test_main_chart_api_keeps_drawings_and_matches_screening(self):
         import http.client,threading
-        from dashboard import handler_for,ThreadingHTTPServer
+        from web.server import handler_for,ThreadingHTTPServer
         from market.history.chart import HistoryStore
         from drawings.store import defaults
         bars=example();line=r.select(bars)

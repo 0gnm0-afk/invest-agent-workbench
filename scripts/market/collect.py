@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from market.toss_collection import collect, collector_version
-from daily_launch import capped_sessions
+from launch.daily import capped_sessions
 from invest_agent.trading.contracts import digest
 from invest_agent.trading.market import check_bars, usable_tail
 from invest_agent.trading.market_provider import completed_sessions
