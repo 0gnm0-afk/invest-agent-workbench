@@ -1,7 +1,7 @@
 'use strict';
 const fs=require('fs'),vm=require('vm'),assert=require('node:assert/strict');
 global.window={};vm.runInThisContext(fs.readFileSync('dashboard/format.js','utf8'));global.WorkbenchFormat=window.WorkbenchFormat;
-vm.runInThisContext(fs.readFileSync('dashboard/trade-cycle.js','utf8'));
+vm.runInThisContext(fs.readFileSync('dashboard/cycles/trade-cycle.js','utf8'));
 const ui=window.WorkbenchTradeCycle;
 const base=ui.incompletePlan({stock_key:'US:SYNTH',currency:'USD',budget:'1,000.50',initial_holding:{quantity:null,average_price:null}});
 const normalized=ui.normalizePlan(base);assert.equal(normalized.budget,'1000.50');assert.equal(normalized.initial_holding.quantity,null);assert.equal(normalized.buy_steps[0].confirmation_price,null);assert.equal(base.budget,'1,000.50');

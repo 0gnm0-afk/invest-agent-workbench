@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 import sqlite3
 
+from cycles.ledger import saved_cycles
+
 
 def packed(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False)
@@ -22,19 +24,6 @@ def basis(cycle):
     evidence = dict(version=cycle['adopted']['version'], combination_id=cycle['adopted'].get('combination_id'),
                     fills=cycle.get('fills', []))
     return hashlib.sha256(packed(evidence).encode()).hexdigest()
-
-
-def cycle_rows(path):
-    """No migration or creation when the feature has no saved cycles yet."""
-    path = Path(path)
-    if not path.exists():
-        return []
-    with closing(sqlite3.connect(path)) as db:
-        tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    if 'trade_cycles' not in tables:
-        return []
-    from trade_cycle import TradeCycleStore
-    return TradeCycleStore(path).list()['cycles']
 
 
 def number(value):
@@ -191,7 +180,7 @@ def refresh_saved(root, market_run, targets, now=None, *, account_failed=False):
     from trailing_warnings import holding_series
     import tempfile
     root = Path(root); path = root/'runtime/chart-workspaces.sqlite3'
-    cycles = [c for c in cycle_rows(path) if active(c)]
+    cycles = [c for c in saved_cycles(path) if active(c)]
     if not cycles: return dict(states=[], events=[])
     store = TradeCycleAlertStore(path)
     run_dir = Path(market_run).resolve()
@@ -213,7 +202,7 @@ def delivery_events(root, events, targets, *, include_cycles=True, now=None):
     with closing(sqlite3.connect(path)) as db:
         exists = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='trade_cycle_alert_states'").fetchone()
     if not exists: return events
-    cycles = {c['cycle_id']: c for c in cycle_rows(path) if active(c)}
+    cycles = {c['cycle_id']: c for c in saved_cycles(path) if active(c)}
     saved = TradeCycleAlertStore(path).read(); now = now or datetime.now(timezone.utc)
     states = {}
     for state in saved['states']:

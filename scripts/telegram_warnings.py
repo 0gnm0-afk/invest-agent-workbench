@@ -96,11 +96,11 @@ def api(config, method, payload):
 
 def message(e):
     if e['kind'] == 'trade_cycle':
-        from trade_cycle_alerts import message as cycle_message
+        from cycles.alerts import message as cycle_message
         return cycle_message(e)
     body = base_message(e)
     if e.get('cycle_context'):
-        from trade_cycle_alerts import context_text
+        from cycles.alerts import context_text
         body += '\n\n' + context_text(e)
     return body
 
@@ -226,7 +226,7 @@ def dispatch(root=ROOT, targets=None, *, config=None, sender=None, include_trail
                     continue
                 # Preserve the monitor's account scope when matching an approved cycle.
                 events.append({**event, 'account':monitor.get('account_alias')})
-            from trade_cycle_alerts import delivery_events
+            from cycles.alerts import delivery_events
             cycle_context_failed = False
             try:
                 events = delivery_events(root, events, targets, include_cycles=include_cycles)

@@ -279,7 +279,7 @@ class DailyLaunch:
                 result['scenario_state'] = 'unavailable'
         if result.get('state') in ('succeeded', 'partial'):
             try:
-                from trade_cycle_alerts import refresh_saved as refresh_cycles
+                from cycles.alerts import refresh_saved as refresh_cycles
                 cycles = refresh_cycles(self.root, result['output'], plan['targets'],
                                         account_failed=result.get('account_state') == 'failed')
                 if cycles['states']:

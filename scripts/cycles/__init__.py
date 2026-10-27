@@ -136,8 +136,8 @@ def links(service, cycle, origin):
 
 
 def dispatch(service, op, args, origin, principal, session):
-    from trade_cycle import TradeCycleStore, calculate
-    from trade_cycle_agent import manager_for
+    from cycles.ledger import TradeCycleStore, calculate
+    from cycles.agent import manager_for
     store = TradeCycleStore(service.store.path)
     if principal == 'risk' and op not in ('cycle_list','cycle_read'):
         raise Forbidden('risk_cannot_write_trade_cycles')
@@ -145,7 +145,7 @@ def dispatch(service, op, args, origin, principal, session):
         raise Forbidden('local_browser_confirmation_required')
     if op == 'cycle_save_draft' and principal not in ('browser','collaboration'):
         raise Forbidden('collaboration_or_browser_required')
-    manager = manager_for(service)
+    manager = manager_for(service.store.path, service.root)
     if op == 'cycle_context':
         fields(args, ('stock_key','account_alias'), ('stock_key',))
         return context(service,args['stock_key'],args.get('account_alias'))

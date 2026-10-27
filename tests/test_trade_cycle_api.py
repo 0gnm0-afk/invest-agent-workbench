@@ -13,9 +13,9 @@ import test_collaboration as fixtures
 from test_trade_cycle import plan, COMBO, fill
 from analysis import Forbidden
 from drawings.store import Conflict
-from trade_cycle import TradeCycleStore
-from trade_cycle_agent import DraftJobs, cli_command, generate, SCHEMA
-import trade_cycle_agent
+from cycles.ledger import TradeCycleStore
+from cycles.agent import DraftJobs, cli_command, generate, SCHEMA
+from cycles import agent as trade_cycle_agent
 
 
 class CycleApiTests(unittest.TestCase):
@@ -29,7 +29,7 @@ class CycleApiTests(unittest.TestCase):
         self.accounts['accounts'][0].update(alias='synthetic',cash={'USD':'1000'},holdings_complete=True)
         self.accounts['accounts'][0]['positions']=[]
         args={'stock_key':'US:SYNTH','budget':'1000','account_alias':'synthetic'}
-        from trade_cycle_api import context,source_for,empty_plan
+        from cycles import context,source_for,empty_plan
         ctx=context(self.s,args['stock_key'],args['account_alias'])
         source,_=source_for(self.s,ctx,self.origin)
         return TradeCycleStore(self.store.path).save_draft(args['stock_key'],empty_plan(ctx,'1000'),source=source)
@@ -111,7 +111,7 @@ class CycleApiTests(unittest.TestCase):
             self.assertIn('features.shell_tool=false',command)
             self.assertNotIn('--dangerously-bypass-approvals-and-sandbox',command)
             return type('R',(),{'returncode':0,'stderr':''})()
-        with patch('trade_cycle_agent.subprocess.run',side_effect=fake),patch('trade_cycle_agent.shutil.which',return_value='codex.exe'):
+        with patch('cycles.agent.subprocess.run',side_effect=fake),patch('cycles.agent.shutil.which',return_value='codex.exe'):
             p=generate(packet,self.root)
         self.assertEqual(p['budget'],'1000')
         self.assertNotIn('step',p['scenarios']['bearish']['events'][-1])
@@ -124,8 +124,8 @@ class CycleApiTests(unittest.TestCase):
         c=store.record_fill(c['cycle_id'],fill('buy',20,10,1),c['revision'],principal='browser')
         stop=fill('stop',20,9,None);stop.pop('step',None)
         c=store.record_fill(c['cycle_id'],stop,c['revision'],principal='browser')
-        from trade_cycle_agent import manager_for
-        with patch.object(manager_for(self.s),'start',return_value={'state':'queued'}):
+        from cycles.agent import manager_for
+        with patch.object(manager_for(self.s.store.path, self.s.root),'start',return_value={'state':'queued'}):
             new=self.rpc('request_draft',{'stock_key':'US:SYNTH','account_alias':'synthetic',
                 'budget':'500','reentry_from':c['cycle_id']})['cycle']
         self.assertNotEqual(new['cycle_id'],c['cycle_id'])

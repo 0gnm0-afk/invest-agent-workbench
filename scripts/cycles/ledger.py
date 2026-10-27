@@ -498,6 +498,18 @@ def progress(plan, combination, fills=None):
         return dict(state=state, next_steps=next_steps, ledger=ledger.ledger)
 
 
+def saved_cycles(path):
+    """No migration or creation when the feature has no saved cycles yet."""
+    path = Path(path)
+    if not path.exists():
+        return []
+    with closing(sqlite3.connect(path)) as db:
+        tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if 'trade_cycles' not in tables:
+        return []
+    return TradeCycleStore(path).list()['cycles']
+
+
 class TradeCycleStore:
     """Immutable draft/event rows and a revisioned head in the analysis database."""
     def __init__(self, path):

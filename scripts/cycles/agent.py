@@ -196,7 +196,7 @@ class DraftJobs:
             return deepcopy(job)
 
     def run(self,job,packet):
-        from trade_cycle import TradeCycleStore
+        from cycles.ledger import TradeCycleStore
         job = deepcopy(job)
         try:
             job['state']='running';self.write(job)
@@ -226,9 +226,9 @@ _MANAGERS = {}
 _LOCK = threading.Lock()
 
 
-def manager_for(service):
-    key = str(Path(service.store.path).resolve())
+def manager_for(path, root):
+    key = str(Path(path).resolve())
     with _LOCK:
         if key not in _MANAGERS:
-            _MANAGERS[key] = DraftJobs(service.store.path,service.root)
+            _MANAGERS[key] = DraftJobs(path,root)
         return _MANAGERS[key]

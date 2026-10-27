@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from analysis import Forbidden
 from drawings.store import Conflict
-from trade_cycle import TradeCycleStore, calculate, combination_id, progress
+from cycles.ledger import TradeCycleStore, calculate, combination_id, progress
 
 
 def plan():
@@ -163,6 +163,20 @@ class StoreTests(unittest.TestCase):
 
     def record(self, cycle, value):
         return self.store.record_fill(cycle['cycle_id'], value, cycle['revision'], principal='browser')
+
+    def test_saved_lookup_leaves_missing_and_unrelated_databases_untouched(self):
+        from cycles.ledger import saved_cycles
+        missing = self.path.parent / 'missing.sqlite3'
+        self.assertEqual(saved_cycles(missing), [])
+        self.assertFalse(missing.exists())
+        legacy = self.path.parent / 'unrelated.sqlite3'
+        with closing(sqlite3.connect(legacy)) as db, db:
+            db.execute('CREATE TABLE original (value TEXT)')
+        before = legacy.read_bytes()
+        self.assertEqual(saved_cycles(legacy), [])
+        self.assertEqual(legacy.read_bytes(), before)
+        draft = self.draft()
+        self.assertEqual(saved_cycles(self.path), [self.store.read(draft['cycle_id'])])
 
     def test_migration_drafts_and_original_adoption_are_preserved(self):
         draft = self.draft()

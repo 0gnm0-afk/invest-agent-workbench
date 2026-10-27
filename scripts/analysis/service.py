@@ -259,7 +259,7 @@ class AnalysisService:
         if op in ('risk_overview','risk_calculate','risk_save','risk_review_save','calculate'):
             raise ValueError('retired_risk_operation')
         if not isinstance(a,dict): raise ValueError('object_required')
-        from trade_cycle_api import OPS as CYCLE_OPS, dispatch as cycle_dispatch
+        from cycles import OPS as CYCLE_OPS, dispatch as cycle_dispatch
         if op in CYCLE_OPS:
             return cycle_dispatch(self, op, a, origin, principal, session)
         from scenarios import OPS as MONITOR_OPS, dispatch as monitor_dispatch

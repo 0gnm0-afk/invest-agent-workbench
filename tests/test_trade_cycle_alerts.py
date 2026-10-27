@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
-from trade_cycle_alerts import TradeCycleAlertStore, delivery_events, basis, context_text
+from cycles.alerts import TradeCycleAlertStore, delivery_events, basis, context_text
 import telegram_warnings as telegram
 
 
@@ -101,12 +101,12 @@ class CycleAlerts(unittest.TestCase):
     def test_context_scope_privacy_and_no_fabricated_fill(self):
         self.update()
         event = dict(id='old', kind='trailing', market='US', symbol='S', currency='USD', account='PRIVATE_ACCOUNT', date='2026-10-13')
-        with patch('trade_cycle_alerts.cycle_rows', return_value=[self.cycle]):
+        with patch('cycles.alerts.saved_cycles', return_value=[self.cycle]):
             output = delivery_events(self.root, [event, {**event,'account':'OTHER_ACCOUNT'}], {'US':'2026-10-13'}, now=self.now)
         text = context_text(output[0]); self.assertIn('20%', text); self.assertIn('예정 2주', text)
         self.assertNotIn('PRIVATE_ACCOUNT', text); self.assertNotIn('cycle_context', output[1])
         self.assertEqual(output[2]['kind'], 'trade_cycle'); self.assertFalse(self.cycle['fills'])
-        with patch('trade_cycle_alerts.cycle_rows', side_effect=AssertionError('must_not_read_failed_cycle_inputs')):
+        with patch('cycles.alerts.saved_cycles', side_effect=AssertionError('must_not_read_failed_cycle_inputs')):
             self.assertEqual(delivery_events(self.root,[event],{'US':'2026-10-13'},include_cycles=False),[event])
 
     def test_closed_changed_or_test_cycle_does_not_deliver(self):
@@ -119,7 +119,7 @@ class CycleAlerts(unittest.TestCase):
                 current['adopted']['source']['test_record'] = True
                 self.store.update([current], self.bundle, {'US:S':self.stock}, {'US':'2026-10-13'}, self.now,
                     {'US':[b['date'] for b in self.bars]})
-            with patch('trade_cycle_alerts.cycle_rows', return_value=[current]):
+            with patch('cycles.alerts.saved_cycles', return_value=[current]):
                 self.assertFalse(delivery_events(self.root, [], {'US':'2026-10-13'}, now=self.now))
 
     def test_existing_delivery_ledger_deduplicates_new_cycle_events(self):
@@ -128,7 +128,7 @@ class CycleAlerts(unittest.TestCase):
         endpoint = self.root/'runtime/dashboard/analysis-endpoint.json'; endpoint.parent.mkdir(parents=True)
         endpoint.write_text(json.dumps({'url':'http://127.0.0.1:43210'}))
         def sender(body): sent.append(body); return dict(message_id=len(sent))
-        with patch('trade_cycle_alerts.cycle_rows', return_value=[self.cycle]):
+        with patch('cycles.alerts.saved_cycles', return_value=[self.cycle]):
             for _ in range(2):
                 result = telegram.dispatch(self.root, {'US':'2026-10-13'}, config=config, sender=sender,
                     include_trailing=False, include_scenarios=False)
@@ -148,7 +148,7 @@ class CycleAlerts(unittest.TestCase):
         with closing(store.connect()) as db, db:
             db.execute('INSERT INTO warnings VALUES(?,?)', (warning['id'], json.dumps(warning)))
         config = dict(enabled_at=(self.now-timedelta(hours=1)).isoformat(), token='fake', chat='fake'); sent=[]
-        with patch('trade_cycle_alerts.cycle_rows', return_value=[self.cycle]):
+        with patch('cycles.alerts.saved_cycles', return_value=[self.cycle]):
             for _ in range(2):
                 telegram.dispatch(self.root, {'US':'2026-10-13'}, config=config,
                     sender=lambda body:(sent.append(body) or {'message_id':len(sent)}), include_scenarios=False)
@@ -159,13 +159,13 @@ class CycleAlerts(unittest.TestCase):
         warning['id']='existing-after-cycle-error'
         with closing(store.connect()) as db, db:
             db.execute('INSERT INTO warnings VALUES(?,?)', (warning['id'], json.dumps(warning)))
-        with patch('trade_cycle_alerts.cycle_rows',side_effect=ValueError('cycle_saved_record_integrity_failed')):
+        with patch('cycles.alerts.saved_cycles',side_effect=ValueError('cycle_saved_record_integrity_failed')):
             result=telegram.dispatch(self.root,{'US':'2026-10-13'},config=config,
                 sender=lambda body:(sent.append(body) or {'message_id':len(sent)}),include_scenarios=False)
         self.assertEqual(len(sent),2); self.assertEqual(result['trade_cycle_state'],'unavailable')
 
     def test_actual_cycle_store_contract_and_fills_preserved(self):
-        from trade_cycle import TradeCycleStore, combination_id
+        from cycles.ledger import TradeCycleStore, combination_id
         def step(price, comparator):
             return dict(confirmation_price=str(price), assumed_fill_price=str(price), condition='합성 조건',
                         trigger=dict(kind='price', comparator=comparator, evaluation='daily_close'))
