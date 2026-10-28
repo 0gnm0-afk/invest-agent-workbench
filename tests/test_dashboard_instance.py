@@ -48,6 +48,39 @@ class Instance(unittest.TestCase):
             instance.reuse(self.root, self.value, ['--daily-refresh','--retry-market','--saved-accounts'])
             self.assertEqual(request.call_args.args[1:3], ('/api/launch',dict(daily_refresh=True,retry_market=True,saved_accounts=True)))
 
+    def test_pythonw_reuse_failure_is_logged_without_starting_another_server(self):
+        with patch.object(startup, 'ROOT', self.root), patch.object(startup, 'acquire', return_value=None), patch.object(startup, 'existing', return_value=self.value), patch.object(startup, 'reuse', side_effect=ValueError('reuse_fixture_failure')), patch.object(startup, 'serve') as build, patch.object(sys, 'argv', ['startup', '--daily-refresh', '--open-browser']), patch.object(sys, 'stdout', None), patch.object(sys, 'stderr', None):
+            try:
+                with self.assertRaises(SystemExit) as error:
+                    startup.main()
+                self.assertEqual(error.exception.code, 1)
+            finally:
+                for stream in (sys.stdout, sys.stderr):
+                    if stream is not None:
+                        stream.close()
+        build.assert_not_called()
+        logs = list((self.root/'runtime/dashboard').glob('launch-*.err.log'))
+        self.assertEqual(len(logs), 1)
+        diagnostic = logs[0].read_text(encoding='utf-8')
+        self.assertIn('Traceback (most recent call last)', diagnostic)
+        self.assertIn('ValueError: reuse_fixture_failure', diagnostic)
+        self.assertFalse(list((self.root/'runtime/dashboard').glob('*.json')))
+
+    def test_pythonw_lease_failure_uses_explicit_receipt_log_before_serve(self):
+        receipt = self.root/'diagnostics'/'ready.json'
+        with patch.object(startup, 'ROOT', self.root), patch.object(startup, 'acquire', side_effect=OSError('lease_fixture_failure')), patch.object(startup, 'serve') as build, patch.object(sys, 'argv', ['startup', '--ready-file', str(receipt)]), patch.object(sys, 'stdout', None), patch.object(sys, 'stderr', None):
+            try:
+                with self.assertRaises(SystemExit) as error:
+                    startup.main()
+                self.assertEqual(error.exception.code, 1)
+            finally:
+                for stream in (sys.stdout, sys.stderr):
+                    if stream is not None:
+                        stream.close()
+        build.assert_not_called()
+        self.assertFalse(receipt.exists())
+        self.assertIn('OSError: lease_fixture_failure', receipt.with_suffix('.err.log').read_text(encoding='utf-8'))
+
     def test_slow_loading_probe_waits_for_existing_owner(self):
         loading = dict(self.value,state='loading',dashboard_url=None)
         with patch.object(instance, 'existing', side_effect=[TimeoutError(),self.value]), patch.object(instance.time,'sleep'), patch.object(instance,'request',return_value={'workspace':str(self.root),'token':'local'}):

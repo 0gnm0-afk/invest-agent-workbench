@@ -110,11 +110,6 @@ def serve(args, remaining):
     # Reject a reused receipt instead of ever redirecting to an old server.
     if args.ready_file.exists() or inner_ready.exists():
         raise ValueError('ready-file must be new for each launch')
-    # pythonw desktop launches have no console; keep diagnostics in private runtime.
-    if sys.stdout is None:
-        sys.stdout = args.ready_file.with_suffix('.log').open('a', encoding='utf-8', buffering=1)
-    if sys.stderr is None:
-        sys.stderr = args.ready_file.with_suffix('.err.log').open('a', encoding='utf-8', buffering=1)
     state = {'instance_id': uuid.uuid4().hex}
     server = ThreadingHTTPServer(('127.0.0.1', 0), handler_for(ROOT / 'dashboard', state, inner_ready))
     server.daemon_threads = True
@@ -148,6 +143,26 @@ def main():
     parser.add_argument('--ready-file', type=Path)
     parser.add_argument('--open-browser', action='store_true')
     args, remaining = parser.parse_known_args()
+    # Reuse and lease errors happen before serve(); pythonw needs diagnostics here too.
+    detached_errors = sys.stderr is None
+    if sys.stdout is None or detached_errors:
+        diagnostic = args.ready_file or ROOT / 'runtime/dashboard' / ('launch-' + uuid.uuid4().hex + '.json')
+        diagnostic.parent.mkdir(parents=True, exist_ok=True)
+        if sys.stdout is None:
+            sys.stdout = diagnostic.with_suffix('.log').open('a', encoding='utf-8', buffering=1)
+        if detached_errors:
+            sys.stderr = diagnostic.with_suffix('.err.log').open('a', encoding='utf-8', buffering=1)
+    try:
+        return launch(parser, args, remaining)
+    except Exception:
+        if not detached_errors:
+            raise
+        traceback.print_exc()
+        sys.stderr.flush()
+        raise SystemExit(1) from None
+
+
+def launch(parser, args, remaining):
     if '--retry-market' in remaining and '--daily-refresh' not in remaining:
         parser.error('--retry-market requires --daily-refresh')
     if '--offline' in remaining and any(flag in remaining for flag in ('--daily-refresh', '--retry-market')):
