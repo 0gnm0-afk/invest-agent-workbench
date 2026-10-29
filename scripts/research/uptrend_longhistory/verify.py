@@ -33,6 +33,11 @@ def preliminary():
     write(OUT/'verification-preliminary.json',receipt);print(receipt)
 
 def final():
+    protected=json.loads((INPUT/'protocol-receipt.json').read_bytes())
+    for path,digest in protected['prior_files'].items():assert sha(ROOT/path)==digest,('protected prior file changed',path)
+    assert sha(ROOT/'scripts/research/uptrend_extension/signals.py')==protected['signals_sha256']
+    assert sha(ROOT/'scripts/research/uptrend_extension/protocol.json')==protected['protocol_sha256']
+    assert sha(OLD/'inventory.json')==protected['inventory_sha256']
     rr=records();usable=0;reconciled=0;checked=0;totals={m:np.zeros((3,72,len(COLS))) for m in ['KR','US']};inherited={m:np.zeros((72,len(COLS))) for m in ['KR','US']};eps={m:np.zeros((72,10)) for m in ['KR','US']}
     allsources=[]
     for rec in rr:
@@ -50,19 +55,20 @@ def final():
             assert np.all(e[:,:, :,1]<=e[:,:,:,0]);totals[rec['market']]+=a
             if rec.get('research_source_group')=='inherited':inherited[rec['market']]+=a[2];eps[rec['market']]+=e[2,0]
         checked+=a.size
-    old=pd.read_csv(INPUT/'evaluate-metrics.csv');rows=[]
+    old=pd.read_csv(INPUT/'evaluate-metrics.csv');original=pd.read_csv(PRIOR/'docs/uptrend-confirmation-2026-10-23/evaluate-metrics.csv');rows=[]
     for market in ['KR','US']:
         meta=features.metadata(market);ids=[b['id'] for b in meta];v=metrics(inherited[market],eps[market])
-        for key in [b['id'] for b in new_signals.META.values()]:
-            oldrow=old[(old.market==market)&(old.period=='test')&(old.id==key)].iloc[0]
-            for metric in ['known','signals','early','day0','day1_5','late','short','other','before5','precision','capture','mean_delay','first_rise','annual','rate_ratio']:
-                actual=v[metric][ids.index(key)];expected=oldrow[metric]
-                assert np.isclose(actual,expected,rtol=2e-12,atol=1e-8,equal_nan=True),(market,key,metric,actual,expected)
-                reconciled+=1
-            rows.append(dict(market=market,id=key,checks=15,status='PASS'))
+        for source,frame,keys in [('extension',old,[b['id'] for b in new_signals.META.values()]),('original',original,[b['id'] for b in meta if b['id'] not in features.NEW])]:
+            for key in keys:
+                oldrow=frame[(frame.market==market)&(frame.period=='test')&(frame.id==key)].iloc[0]
+                for metric in ['known','signals','early','day0','day1_5','late','short','other','before5','precision','capture','mean_delay','first_rise','annual','rate_ratio']:
+                    actual=v[metric][ids.index(key)];expected=oldrow[metric]
+                    assert np.isclose(actual,expected,rtol=2e-12,atol=1e-8,equal_nan=True),(source,market,key,metric,actual,expected)
+                    reconciled+=1
+                rows.append(dict(market=market,id=key,source=source,checks=15,status='PASS'))
     pd.DataFrame(allsources).to_csv(OUT/'input-manifest.csv',index=False,encoding='utf-8-sig')
     pd.DataFrame(rows).to_csv(OUT/'prior-window-reconciliation.csv',index=False)
-    receipt=dict(usable_caches=usable,all_inventory=len(rr),prior_window_values=reconciled,aggregate_cells_checked=checked,monthly_conservation='PASS',episode_conservation='PASS',partition_conservation='PASS',source_hashes='PASS',finished_utc=datetime.now(timezone.utc).isoformat())
+    receipt=dict(usable_caches=usable,all_inventory=len(rr),prior_window_values=reconciled,protected_prior_files=len(protected['prior_files'])+3,aggregate_cells_checked=checked,monthly_conservation='PASS',episode_conservation='PASS',partition_conservation='PASS',source_hashes='PASS',finished_utc=datetime.now(timezone.utc).isoformat())
     write(OUT/'verification-final.json',receipt);print(receipt)
 
 if __name__=='__main__':{'preliminary':preliminary,'final':final}[sys.argv[1]]()

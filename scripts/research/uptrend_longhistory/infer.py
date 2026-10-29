@@ -69,7 +69,7 @@ def completed_files(stage, market):
     files = sorted((OUT / stage).glob(market + '_*.npz'))
     coverage = OUT.parents[1] / 'docs/research/uptrend-longhistory-2026-10-29/coverage-stocks.csv'
     if coverage.exists():
-        inventory = pd.read_csv(coverage)
+        inventory = pd.read_csv(coverage, keep_default_na=False, na_values=[''])
         selected = inventory[(inventory.market == market) & (inventory.status == 'ok')]
         expected = {f'{market}_{symbol}.npz' for symbol in selected.symbol}
         actual = {f.name for f in files}
