@@ -16,8 +16,8 @@ Use Python with numpy, pandas and matplotlib; the workbench's sibling engine vir
 2. Run `verify.py` for synthetic prefix/formula checks, then `verify.py freeze` **once before market calculations**. A repeat freeze deliberately fails; preserve the original receipt.
 3. `study.py select --workers 4`, then `study.py aggregate-select`.
 4. `study.py evaluate --workers 4`, then `study.py aggregate-evaluate`.
-5. `paths.py --workers 4` and `infer.py` (inspect CLI options in each script).
-6. `artifacts.py` reconciles all signal ledgers, scalar price paths, labels, matched samples and protected input hashes. Additional reporting scripts produce the durable tables and figures.
+5. `paths.py --workers 4`, `infer.py classification`, then `infer.py paths`.
+6. `artifacts.py` reconciles all signal ledgers, scalar price paths, labels, matched samples and protected input hashes. Then run `summarize.py`, `verify_formulas.py`, `figures.py`, `report.py`, and `package.py`, in that order. Inspect the six PNGs before recording visual acceptance. The completed run used4 workers for selection and6 for evaluation/path computation; this does not change the definitions.
 
 Outputs are under `runtime/uptrend-extension-20261029/`; inspectable report tables and receipts are copied to `docs/research/uptrend-extension-2026-10-29/`. Runtime files contain the full compressed per-signal ledger and per-stock sufficient statistics. A cache's existence is not evidence of completion: use final receipts and the report.
 
