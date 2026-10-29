@@ -6,7 +6,7 @@ import gzip,csv,shutil
 DOC=ROOT/'docs/research/downtrend-extension-2026-10-29'
 
 def finish():
-    DOC.mkdir(exist_ok=True);rows=[];cases=[];checks=[];inputs=[];ledger_n=0;scalar_n=0;match_n=0;label_n=0;prior=json.loads((OUT/'protocol-receipt.json').read_bytes())
+    DOC.mkdir(exist_ok=True);rows=[];cases=[];checks=[];inputs=[];ledger_n=0;scalar_n=0;match_n=0;label_n=0;benchmark_cells=0;prior=json.loads((OUT/'protocol-receipt.json').read_bytes())
     for rel,h in prior['prior_files'].items():assert sha(ROOT/rel)==h,rel
     assert sha(OLD/'inventory.json')==prior['inventory_sha256']
     stats=pd.read_csv(OUT/'evaluate-metrics.csv');stats=stats[stats.period=='test'].set_index(['market','id'])
@@ -27,7 +27,15 @@ def finish():
                 new=OUT/'features'/file.name;newmeta=json.loads(new.with_suffix('.json').read_bytes())
                 assert sha(new)==newmeta['cache_sha256'] and sha(Path(signals.__file__))==newmeta['code_sha256'] and newmeta['source_sha256']==source_cache_hash
                 inputs.append(dict(market=m,symbol=symbol,source=rec['source'],source_sha256=rec['source_sha256'],original_cache=str(src.relative_to(ROOT)),original_cache_sha256=newmeta['source_sha256'],new_features_sha256=newmeta['cache_sha256']))
-                with np.load(src) as zz:dates=zz['date']
+                with np.load(src) as zz,np.load(new) as nf:
+                    dates=zz['date']
+                    original_ids=list(signals.original.META);new_ids=[b['id'] for b in BASE]
+                    for key in signals.BENCHMARKS:
+                        left=nf['flags'][:,new_ids.index(key)];right=zz['flags'][:,original_ids.index(key)]
+                        assert np.array_equal(left,right),(m,symbol,key,'old benchmark changed')
+                        benchmark_cells+=len(left)
+                    assert np.array_equal(nf['context'],zz['context'])
+                    assert np.allclose(nf['atr'],zz['atr'],equal_nan=True)
                 with np.load(OUT/'evaluate'/file.name) as ev:
                     meta0=json.loads((OUT/f'evaluate-{m}-features.json').read_bytes());expected_hits=ev['totals'][1,[[b['id'] for b in meta0].index(k) for k in ids],C['early']]
                 ledger_hits=np.array([a[a[:,0]==j,2].sum() for j in range(len(ids))])
@@ -129,7 +137,7 @@ def finish():
     for file in OUT.glob('*.csv'):shutil.copyfile(file,DOC/file.name)
     for name in ['frozen.json','selection-receipt.json','verification-synthetic.json','classification-inference.json','paths-inference.json','paths-compute-receipt.json']:
         shutil.copyfile(OUT/name,DOC/name)
-    result=dict(status='PASS',original_files_unchanged=len(prior['prior_files']),inventory_sha256=prior['inventory_sha256'],ledger_rows=ledger_n,scalar_horizon_checks=scalar_n,matched_horizon_checks=match_n,independent_label_checks=label_n,ledger_reconciliations=checks,classification_rows=len(raw),selection_training_totals_unchanged=True)
+    result=dict(status='PASS',original_files_unchanged=len(prior['prior_files']),inventory_sha256=prior['inventory_sha256'],original_benchmark_flag_cells=benchmark_cells,ledger_rows=ledger_n,scalar_horizon_checks=scalar_n,matched_horizon_checks=match_n,independent_label_checks=label_n,ledger_reconciliations=checks,classification_rows=len(raw),selection_training_totals_unchanged=True)
     write(DOC/'reproduction-manifest.json',dict(code={str(p.relative_to(ROOT)):sha(p) for p in Path(__file__).parent.glob('*.py')},csv={p.name:sha(p) for p in DOC.glob('*.csv')},input_caches=len(inputs),source_raw_hashes_inherited_not_newly_reaudited=True))
     write(OUT/'verification-final.json',result);write(DOC/'verification-final.json',result);print(result,flush=True)
 
