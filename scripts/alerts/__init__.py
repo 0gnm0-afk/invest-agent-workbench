@@ -60,6 +60,14 @@ def packed(value):
 
 def holding_series(path, expected_hash, keys):
     """Read selected series from our indent=2 immutable snapshot without loading the universe."""
+    if not path.exists():
+        from atomic_io import checked_saved
+        value = checked_saved(path, expected_hash)
+        rows = [s for s in value['series'] if s['market']+':'+s['symbol'] in keys]
+        result = {s['market']+':'+s['symbol']: s for s in rows}
+        if len(result) != len(rows):
+            raise ValueError('duplicate_market_series')
+        return result
     with path.open('rb') as stream:
         if not expected_hash or hashlib.file_digest(stream, 'sha256').hexdigest() != expected_hash:
             raise ValueError('saved_artifact_hash_mismatch')

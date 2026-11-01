@@ -33,7 +33,16 @@ def atomic_write(path, text):
 
 
 def load(path):
-    return _hydrate(json.loads(Path(path).read_text(encoding='utf-8')))
+    return _hydrate(json.loads(read_bytes(path).decode('utf-8')))
+
+
+def read_bytes(path):
+    """A retired price JSON is recovered byte-for-byte; other missing files fail."""
+    try:
+        return Path(path).read_bytes()
+    except FileNotFoundError:
+        from market.price_files import recover_bytes
+        return recover_bytes(path)
 
 
 def _hydrate(value):
@@ -46,8 +55,11 @@ def _hydrate(value):
     return value
 
 def sha(path):
-    with Path(path).open('rb') as stream:
-        return hashlib.file_digest(stream, 'sha256').hexdigest()
+    try:
+        with Path(path).open('rb') as stream:
+            return hashlib.file_digest(stream, 'sha256').hexdigest()
+    except FileNotFoundError:
+        return hashlib.sha256(read_bytes(path)).hexdigest()
 
 def write(path, value):
     Path(path).write_text(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False), encoding='utf-8')
@@ -70,7 +82,7 @@ def write_json(path, value):
 
 def load_bom(path):
     """Read existing dashboard/account receipts, including UTF-8 BOM files."""
-    return _hydrate(json.loads(Path(path).read_text(encoding='utf-8-sig')))
+    return _hydrate(json.loads(read_bytes(path).decode('utf-8-sig')))
 
 
 def checked_saved(path, expected):
@@ -94,4 +106,4 @@ def utc_now():
 
 def load_json_bytes(path):
     """Preserve the research readers' JSON byte-encoding detection."""
-    return json.loads(Path(path).read_bytes())
+    return json.loads(read_bytes(path))

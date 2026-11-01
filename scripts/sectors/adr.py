@@ -20,6 +20,7 @@ from bs4 import BeautifulSoup
 import requests
 
 from workbench_paths import ROOT
+from atomic_io import sha
 SECTORS = {'Basic Materials':'Basic Materials', 'Materials':'Basic Materials',
     'Communication Services':'Communication Services', 'Consumer Cyclical':'Consumer Cyclical',
     'Consumer Discretionary':'Consumer Cyclical', 'Consumer Defensive':'Consumer Defensive',
@@ -27,11 +28,6 @@ SECTORS = {'Basic Materials':'Basic Materials', 'Materials':'Basic Materials',
     'Financial':'Financial', 'Healthcare':'Healthcare', 'Health Care':'Healthcare',
     'Industrials':'Industrials', 'Real Estate':'Real Estate', 'Technology':'Technology',
     'Information Technology':'Technology', 'Utilities':'Utilities'}
-
-
-def sha(path):
-    with Path(path).open('rb') as f:
-        return hashlib.file_digest(f, 'sha256').hexdigest()
 
 
 def read(path):

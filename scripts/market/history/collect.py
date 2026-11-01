@@ -22,6 +22,8 @@ from market.providers.toss_client import TossMarketClient, MarketReadError
 from market.providers.toss_universe import listing_requests, validate_listing_rows
 from invest_agent.trading.market_provider import completed_sessions
 from invest_agent.trading.store import instance_lock
+from atomic_io import read_bytes
+from market.price_files import available
 
 
 def packed(value):
@@ -40,7 +42,7 @@ def save_checked(path, value):
 
 
 def read_checked(path):
-    packet = json.loads(path.read_bytes())
+    packet = json.loads(read_bytes(path))
     if hashlib.sha256(packed(packet['data'])).hexdigest() != packet['sha256']:
         raise ValueError('saved_hash_mismatch')
     return packet['data']
@@ -168,7 +170,7 @@ class Collector:
             return {'symbol':item['symbol'],'market':self.market,'state':'excluded','reason':exclusion['reason'],'bars':[]}
         symbol = item['symbol']
         saved = self.root/'series'/(hashlib.sha256(symbol.encode()).hexdigest()+'.json')
-        if saved.exists():
+        if available(saved):
             old = read_checked(saved)
             if old['symbol'] != symbol or old['requested_end'] != end or old['market'] != self.market or old['listing'] != item:
                 raise ValueError('saved_identity_mismatch')

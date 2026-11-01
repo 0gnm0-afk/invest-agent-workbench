@@ -148,6 +148,7 @@ class AdrCollection(unittest.TestCase):
         def candles(get, symbol, market, sessions, *, benchmark=None, provider_symbol=None, adjusted=True):
             return dict(symbol=symbol, market=market, currency='USD', benchmark=benchmark,
                         provider='Toss OpenAPI candles', provider_symbol=provider_symbol or symbol,
+                        price_basis='toss_adjusted_ohlc_no_order_authority',
                         instrument_type='EQUITY' if benchmark else 'BENCHMARK_PROXY',
                         bars=[dict(date=d, open=10, high=12, low=9, close=11, volume=100) for d in days])
         with patch.object(hybrid, 'completed_sessions', return_value=days), patch.object(hybrid, 'daily_series', side_effect=candles):

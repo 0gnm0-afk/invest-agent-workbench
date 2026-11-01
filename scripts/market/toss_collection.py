@@ -17,6 +17,8 @@ from market.providers.toss_universe import discover
 from market.quality import complete_cap, error_disposition
 import market.scope as market_scope
 from market.prices import PriceStore, freeze_series, default_path
+from market.price_files import available
+from atomic_io import read_bytes
 
 COLLECTOR_ID = 'toss_openapi_kr_us_v1'
 
@@ -190,9 +192,9 @@ def _collect(config, account, root, get, now, refresh, prior_series, prior_sourc
         }
         key = digest({'version': version, **identity})
         path = root / 'series' / (key + '.json')
-        if not refresh and path.is_file():
+        if not refresh and available(path):
             try:
-                cached = json.loads(path.read_text(encoding='utf-8'))
+                cached = json.loads(read_bytes(path))
                 observed = datetime.fromisoformat(cached['observed_at'])
                 if (cached['key'] == key and digest(cached['payload']) == cached['hash']
                         and 0 <= (now - observed).total_seconds() <= 86400):

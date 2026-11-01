@@ -164,8 +164,8 @@ def run(root, config_path=None, prior_source=None, *, session_cutoff=None, evalu
                 if not prior.is_relative_to(runtime.resolve()):
                     raise ValueError('Prior source must stay inside private runtime')
                 manifest = json.loads((prior/'manifest.json').read_text(encoding='utf-8'))
-                with (prior/'snapshot.json').open('rb') as stream:
-                    actual_hash = hashlib.file_digest(stream, 'sha256').hexdigest()
+                from atomic_io import sha
+                actual_hash = sha(prior/'snapshot.json')
                 if manifest.get('snapshot.json') != actual_hash:
                     raise ValueError('Prior snapshot hash mismatch')
             frozen = {'config': config, 'config_hash': digest(config), 'version': version,
@@ -187,8 +187,8 @@ def run(root, config_path=None, prior_source=None, *, session_cutoff=None, evalu
             prior_rows = {}
             if frozen.get('prior_source'):
                 prior_path = Path(frozen['prior_source'])/'snapshot.json'
-                with prior_path.open('rb') as stream:
-                    actual_hash = hashlib.file_digest(stream, 'sha256').hexdigest()
+                from atomic_io import sha
+                actual_hash = sha(prior_path)
                 if actual_hash != frozen['prior_snapshot_sha256']:
                     raise ValueError('Prior snapshot changed after freeze')
                 previous = load(prior_path)

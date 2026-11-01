@@ -113,7 +113,8 @@ class SavedHistory:
             self.error = True
 
     def read(self, name, wrapped=False):
-        raw = (self.root / name).read_bytes()
+        from atomic_io import read_bytes
+        raw = read_bytes(self.root / name)
         if hashlib.sha256(raw).hexdigest() != self.manifest.get(name):
             raise ValueError('artifact_hash_mismatch')
         value = json.loads(raw)

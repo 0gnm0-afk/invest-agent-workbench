@@ -17,6 +17,8 @@ import exchange_calendars as xcals
 from invest_agent.trading.market_provider import KR_CLOSURES
 from market.history.collect import read_checked, packed, parse_page, write
 from market.providers.toss_universe import listing_requests, validate_listing_rows
+from atomic_io import read_bytes
+from market.price_files import available
 
 
 def verify(root, require_finished=False):
@@ -39,7 +41,12 @@ def verify(root, require_finished=False):
         assert config.get('security_types')==expected_types and universe.get('exchanges'), 'collection_scope_mismatch'
     packets={}
     first_dates=[]
-    for f in (root/'series').glob('*.json'):
+    saved_files = set((root/'series').glob('*.json'))
+    for symbol in targets:
+        path = root/'series'/(hashlib.sha256(symbol.encode()).hexdigest()+'.json')
+        if available(path):
+            saved_files.add(path)
+    for f in sorted(saved_files):
         d=read_checked(f)
         assert d['symbol'] not in packets, 'duplicate_saved_symbol'
         assert f.stem==hashlib.sha256(d['symbol'].encode()).hexdigest(), 'filename_identity_mismatch'
@@ -123,7 +130,7 @@ def verify(root, require_finished=False):
         rows.append(record);counts[d['state']]+=1;total+=len(dates)
         if d['first']:earliest[d['first']]+=1
         series_path=root/'series'/(hashlib.sha256(symbol.encode()).hexdigest()+'.json')
-        manifest[str(series_path.relative_to(root))]=hashlib.sha256(series_path.read_bytes()).hexdigest()
+        manifest[str(series_path.relative_to(root))]=hashlib.sha256(read_bytes(series_path)).hexdigest()
     not_attempted=sorted(set(targets)-set(packets))
     if require_finished:assert not not_attempted, 'unattempted_symbols'
     summary=dict(verified_at=datetime.now(timezone.utc).isoformat(),scope=config['scope'],requested=len(targets),verified=len(packets),counts=dict(counts),not_attempted=not_attempted,total_bars=total,source_pages=raw_count,earliest=min(earliest,default=None),latest=config['end'],start_distribution=dict(sorted(earliest.items())),with_invalid_ohlc=sum(bool(r['invalid_ohlc']) for r in rows),with_internal_gaps=sum(bool(r['missing_sessions']) for r in rows),with_non_sessions=sum(bool(r['non_sessions']) for r in rows),without_latest_session=sum(r['latest_session_missing'] for r in rows),before_2016=sum(bool(r['first']) and r['first']<'2016-01-01' for r in rows),calendar='exchange_calendars '+calendar_name+' '+xcals.__version__,extra_closures=extra_closures,integrity='PASS',all_attempted=not not_attempted)

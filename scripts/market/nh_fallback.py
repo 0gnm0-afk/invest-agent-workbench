@@ -9,7 +9,8 @@ from invest_agent.trading.market import check_bars
 from invest_agent.trading.universe_gate import evaluate as gate
 
 from market.collect import audit
-from atomic_io import write_json
+from atomic_io import write_json, sha, load_bom
+from market.price_files import available
 from market.quality import adr_cap_unavailable, is_depositary_receipt
 from market.providers.nh_auth import NHMarketError
 from market.providers.nh_client import MarketClient, PERIOD, KR_PERIOD, CURRENT, us_period_inputs, kr_period_inputs
@@ -43,15 +44,10 @@ def fallback_targets(snapshot):
     return list(targets.values())
 
 
-def sha(path):
-    with Path(path).open('rb') as stream:
-        return hashlib.file_digest(stream,'sha256').hexdigest()
-
-
 def load_checked(path, expected):
     if sha(path) != expected:
         raise ValueError('nh_reference_hash_mismatch')
-    return json.loads(Path(path).read_text(encoding='utf-8-sig'))
+    return load_bom(path)
 
 
 def _reference_rows(config, prior_source, inputs):
@@ -63,7 +59,7 @@ def _reference_rows(config, prior_source, inputs):
     if prior_source:
         path = Path(prior_source)/'snapshot.json'
         manifest = Path(prior_source)/'manifest.json'
-        if path.is_file() and manifest.is_file():
+        if available(path) and manifest.is_file():
             expected = json.loads(manifest.read_text(encoding='utf-8')).get('snapshot.json')
             if expected:
                 previous = load_checked(path,expected)
@@ -213,7 +209,7 @@ def recover(source, output, config, *, evidence_root=None, prior_source=None, on
     if output.exists():
         raise ValueError('nh_fallback_output_already_exists')
     output.mkdir(parents=True)
-    original = json.loads((source/'snapshot.json').read_text(encoding='utf-8'))
+    original = load_bom(source/'snapshot.json')
     import market.scope as market_scope
     policy = market_scope.load()
     write_json(output/'input-scope-policy.json',policy)
