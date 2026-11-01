@@ -6,6 +6,7 @@ import sys
 from atomic_io import load_bom as load, sha, write_new_json as write, checked_saved as checked, utc_now as now
 from workbench_paths import ROOT
 from accounts.store import AccountStore
+from accounts.brokers import nh_requests, nh_success, nh_pages, normalize_nh, query_state
 import uuid
 
 
@@ -21,10 +22,8 @@ def collect_balances(reader, pages, error_type):
     started = now()
     body, _ = restricted('/n2/acctinfo', {})
     rows = body.get('Output_0')
-    if not isinstance(rows, list) or any(word in str(body.get('rsp_msg', '')) for word in ('실패', '오류', '불가', '권한')):
+    if not isinstance(rows, list) or any(not isinstance(r,dict) for r in rows) or not nh_success(body):
         raise ValueError('account_list_not_confirmed')
-    if not rows and not any(word in str(body.get('rsp_msg', '')) for word in ('완료', '조회되었습니다', '내역이 없습니다')):
-        raise ValueError('empty_account_list_unconfirmed')
     accounts, seen = [], set()
     for row in rows:
         if row.get('acct_type') not in ('01', '02'):
@@ -35,34 +34,31 @@ def collect_balances(reader, pages, error_type):
         seen.add(account)
         item = {'alias': 'nh-' + hashlib.sha256(account.encode()).hexdigest()[:12],
                 'account_type': row['acct_type'], 'markets': {}, 'details': {}}
-        requests = {
-            'KR': ('/krstock/inquiry/v1/balance', {'act_no': account, 'bnc_bse_cd': '1',
-                    'ltg_aot_dit_cd': '9', 'aet_bse': '1', 'qut_dit_cd': 'UNT'}),
-            'US': ('/gbstock/inquiry/v1/balance', {'act_no': account, 'qut_iqr_dit_cd': '1',
-                    'fc_sec_trd_nat_cd': '200', 'cur_cd': 'USD', 'xns_dit_cd': '0'})}
+        requests = nh_requests(account)
         for market, (path, inputs) in requests.items():
             try:
                 item['markets'][market] = {'state': 'received', 'pages': pages(path, inputs, restricted)}
             except error_type as exc:
                 # Transport errors are controlled codes from the existing adapter.
-                item['markets'][market] = {'state': 'unavailable', 'reason': str(exc)}
+                item['markets'][market] = {'state': 'unavailable', 'reason': str(exc),
+                                          'pages': getattr(exc,'pages',[])}
         accounts.append(item)
     return {'provider': 'NH PLUG', 'source': 'broker_export', 'as_of': started,
             'collected_until': now(), 'scope': 'KR_US_balances_only_no_orders',
-            'accounts': accounts, 'endpoint_calls': calls}
+            'accounts': accounts, 'accounts_complete': True, 'endpoint_calls': calls,
+            'query_basis': {m: inputs for m, (_, inputs) in nh_requests('<account>').items()}}
 
 
-def account_view(config, output, refresh=True, saved_dashboard_root=None, request_id=None):
+def _nh_account_view(config, output, refresh=True, saved_dashboard_root=None, request_id=None):
     store = AccountStore(Path(saved_dashboard_root or output.parent).parent/'accounts.sqlite3')
     mother = Path(config['mother'])
     # Reuse account-only adapters without shadowing current market/chart modules.
     mother_scripts = str(mother / 'scripts')
     if mother_scripts not in sys.path:
         sys.path.append(mother_scripts)
-    from nh_snapshot import normalize
-    from nh_collect import pages
     from nh_api import read, NHError
-    from nh_diagnostics import successful
+    def pages(path, inputs, reader):
+        return nh_pages(path, inputs, reader, NHError)
     previous_paths = list((mother / 'runtime/nh-live/exports').glob('account-*.json'))
     previous_paths += list(Path(saved_dashboard_root or output.parent).glob('*/account-snapshot.private.json'))
     previous = None
@@ -76,6 +72,8 @@ def account_view(config, output, refresh=True, saved_dashboard_root=None, reques
     for path in previous_paths:
         try:
             candidate = load(path)
+            if candidate.get('provider') != 'NH PLUG':
+                continue  # Combined views must not become a provider's observation.
             meta = None
             if path.name.endswith('.private.json'):
                 hashes = load(path.parent / 'manifest.json')['files']
@@ -112,18 +110,18 @@ def account_view(config, output, refresh=True, saved_dashboard_root=None, reques
             if evidence.get('path') and sha(evidence['path']) == evidence.get('sha256'):
                 from nh_master import parse
                 listings = parse(Path(evidence['path']).read_bytes())
-            snapshot = normalize(raw, listings)
+            snapshot = normalize_nh(raw, listings)
             snapshot['listing_source'] = evidence
             for account, source in zip(snapshot['accounts'], raw['accounts']):
                 account['query_markets'] = {m: {
-                    'state': ('received' if successful(v) and isinstance(v['pages'][-1].get('Output_1'), list)
+                    'state': ('received' if v.get('pages') and all(nh_success(p) for p in v['pages']) and isinstance(v['pages'][-1].get('Output_1'), list)
                               and isinstance(v['pages'][-1].get('Output_0'), dict) else 'unavailable'),
                     'reason': v.get('reason'), 'pages': len(v.get('pages', []))}
                     for m, v in source['markets'].items()}
                 for value in account['query_markets'].values():
                     if value['state'] == 'unavailable' and not value['reason']:
                         value['reason'] = 'broker_response_or_shape_unconfirmed'
-            result['query_state'] = ('received' if all(a['holdings_complete'] for a in snapshot['accounts']) else 'partial')
+            result['query_state'] = query_state(snapshot)
             result['source_mode'] = 'live_read_only'
             receipt = store.complete('nh',lease['request_id'],lease['lease'],metadata=result,snapshot=snapshot,raw=raw)
             result.update(snapshot_ref=receipt['snapshot_ref'], request_id=lease['request_id'])
@@ -141,14 +139,25 @@ def account_view(config, output, refresh=True, saved_dashboard_root=None, reques
             result.update({k:previous_meta.get(k) for k in ('query_state','reason','attempted_at')})
     if snapshot is None:
         return result
-    normalized_path = output / 'account-snapshot.private.json'
     result['snapshot_ref'] = store.save(snapshot)
-    write(normalized_path, {'account_store_ref':result['snapshot_ref']})
     result.update(accounts=snapshot['accounts'], as_of=snapshot['as_of'],
-                  snapshot_sha256=sha(normalized_path), limitations=result['limitations'] + snapshot.get('limitations', []))
+                  limitations=result['limitations'] + snapshot.get('limitations', []))
     result['stale'] = (datetime.now(timezone.utc) - datetime.fromisoformat(snapshot['as_of'])).total_seconds() > 86400
     result['valuation'] = {k: snapshot.get(k) for k in ('base_currency', 'fx_to_base')}
     result['accounts_complete'] = snapshot.get('accounts_complete', False)
+    return result
+
+
+def account_view(config, output, refresh=True, saved_dashboard_root=None, request_id=None):
+    """Daily owns the NH refresh; other providers are read from their saved receipts."""
+    from accounts.saved import merge_saved
+    nh = _nh_account_view(config, output, refresh, saved_dashboard_root, request_id)
+    store = AccountStore(Path(saved_dashboard_root or output.parent).parent/'accounts.sqlite3')
+    result = merge_saved(store, nh)
+    if result.get('snapshot_ref'):
+        path = output/'account-snapshot.private.json'
+        write(path, {'account_store_ref':result['snapshot_ref']})
+        result['snapshot_sha256'] = sha(path)
     return result
 
 

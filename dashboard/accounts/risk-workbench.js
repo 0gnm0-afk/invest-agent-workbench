@@ -12,20 +12,20 @@ window.WorkbenchRisk = (() => {
  };
  function composition(bundle,alias=null) {
   const currency=bundle?.valuation?.base_currency||'KRW',rates=bundle?.valuation?.fx_to_base||{},rows=[];
-  const add=(account,kind,label,amount,c,source)=>{amount=numeric(amount);const rate=c===currency?1:numeric(rates[c]);rows.push({account,kind,label,amount,currency:c,value:amount!=null&&rate>0?amount*rate:null,source});};
+  const add=(account,kind,label,amount,c,source,accountRates=rates)=>{amount=numeric(amount);const rate=c===currency?1:numeric(accountRates[c]);rows.push({account,kind,label,amount,currency:c,value:amount!=null&&rate>0?amount*rate:null,source});};
   const accounts=(bundle?.accounts||[]).filter(a=>!alias||a.alias===alias);
   for(const a of accounts){
    for(const p of a.positions||[]){
     const stock=isEquity(p),q=numeric(p.quantity),price=numeric(p.price);
     const observed=p.currency==='KRW'?numeric(p.observed_evaluation_krw):null;
     const amount=stock?(p.data_unavailable_reason?null:q!=null&&price!=null?q*price:null):numeric(p.native_value??p.market_value)??observed??(q!=null&&price!=null?q*price:null);
-    add(a.alias,stock?'stock':'cash',p.name||p.symbol,amount,p.currency,'저장 평가');
+    add(a.alias,stock?'stock':'cash',p.name||p.symbol,amount,p.currency,'저장 평가',a.fx_to_base??rates);
    }
    const cash=a.cash||{},d=a.observed_deposits||{};
-   for(const [c,v] of Object.entries(cash))add(a.alias,'cash',c+' 예수금',v,c,'저장 잔액');
+   for(const [c,v] of Object.entries(cash))add(a.alias,'cash',c+' 예수금',v,c,'저장 잔액',a.fx_to_base??rates);
    // D+1/D+2 and KRW representations of foreign cash are not extra balances.
-   if(!Object.hasOwn(cash,'KRW')&&d.KR&&Object.hasOwn(d.KR,'dca'))add(a.alias,'cash','원화 예수금',d.KR.dca,'KRW','관측 예수금');
-   if(!Object.hasOwn(cash,'USD')&&d.US&&Object.hasOwn(d.US,'fc_dca'))add(a.alias,'cash','외화 예수금',d.US.fc_dca,'USD','관측 예수금');
+   if(!Object.hasOwn(cash,'KRW')&&d.KR&&Object.hasOwn(d.KR,'dca'))add(a.alias,'cash','원화 예수금',d.KR.dca,'KRW','관측 예수금',a.fx_to_base??rates);
+   if(!Object.hasOwn(cash,'USD')&&d.US&&Object.hasOwn(d.US,'fc_dca'))add(a.alias,'cash','외화 예수금',d.US.fc_dca,'USD','관측 예수금',a.fx_to_base??rates);
   }
   const groups=['stock','cash'].map(kind=>{const items=rows.filter(r=>r.kind===kind),known=items.filter(r=>r.value!=null);return {kind,items,subtotal:known.length?known.reduce((n,r)=>n+r.value,0):!items.length&&accounts.length&&accounts.every(a=>(kind==='stock'?a.holdings_complete:a.cash_complete)===true)?0:null,missing:items.filter(r=>r.value==null).length};});
   const total=groups.every(g=>g.subtotal!=null)?groups.reduce((n,g)=>n+g.subtotal,0):null;

@@ -64,15 +64,9 @@ class AccountStoreTests(unittest.TestCase):
         calls=[]
         def read(path, inputs, continuation=None):
             calls.append(path)
-            return ({'Output_0':[{'acct_type':'01','acct_no':'SYNTH_ACCOUNT_254aa248acb4'}]} if path=='/n2/acctinfo'
-                    else {'Output_0':{},'Output_1':[],'rsp_msg':'OK'}),{}
-        def normalize(raw, listings):
-            return {**self.snapshot,'as_of':raw['as_of'],
-                    'accounts':[{'alias':raw['accounts'][0]['alias'],'positions':[],'holdings_complete':True}]}
-        modules={'nh_snapshot':SimpleNamespace(normalize=normalize),
-                 'nh_collect':SimpleNamespace(pages=lambda p,i,r:[r(p,i)[0]]),
-                 'nh_api':SimpleNamespace(read=read,NHError=RuntimeError),
-                 'nh_diagnostics':SimpleNamespace(successful=lambda v:True)}
+            return ({'Output_0':[{'acct_type':'01','acct_no':'SYNTH_ACCOUNT_254aa248acb4'}],'rsp_msg':'조회가 완료되었습니다.'} if path=='/n2/acctinfo'
+                    else {'Output_0':{},'Output_1':[],'rsp_msg':'OK'}),{'cts_flag':'N'}
+        modules={'nh_api':SimpleNamespace(read=read,NHError=RuntimeError)}
         outputs=[self.root/'runtime/dashboard'/name for name in ('one','two','three')]
         for out in outputs:out.mkdir(parents=True)
         config={'mother':str(self.root/'mother')}

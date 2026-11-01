@@ -15,4 +15,8 @@ assert.equal(composition(b,'missing').total,null);assert.equal(composition(null)
 assert.equal(isEquity({asset_type:'bond'}),false);assert.equal(isEquity({asset_type:'adr'}),true);
 b=sample();b.accounts[0].positions.push({asset_type:'bond',symbol:'BOND',currency:'KRW',market_value:100});assert.equal(composition(b).groups[1].subtotal,3610);
 b=sample();b.accounts[0].observed_deposits.US.fc_dca=-5;assert.equal(composition(b).canChart,false);
+b=sample();b.accounts[0].fx_to_base={USD:1500};c=composition(b);assert.equal(c.groups[0].subtotal,30000);assert.equal(c.groups[1].subtotal,5010);
+b.accounts.push({alias:'meritz-synthetic',provider:'meritz',fx_to_base:{USD:1600},positions:[{symbol:'SYN',currency:'USD',quantity:0.125,price:100}],cash_complete:false,holdings_complete:true,observed_deposits:{KR:{dca:20},US:{fc_dca:4}}});
+c=composition(b);assert.equal(c.groups[0].subtotal,50000);assert.equal(c.groups[1].subtotal,11430);
+assert.equal(composition(b,'meritz-synthetic').groups[0].subtotal,20000);
 console.log('account composition: classification, missing values, FX, deposit duplicates, scope, zero, negative, immutability PASS');

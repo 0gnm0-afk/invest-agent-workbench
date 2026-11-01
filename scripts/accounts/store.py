@@ -48,9 +48,14 @@ class AccountStore:
         def validate(item):
             if isinstance(item, dict):
                 for k,v in item.items():
-                    if k.lower().replace('-','_') in {'authorization','access_token','refresh_token','app_secret',
-                            'app_key','secret','client_secret','token'}:
+                    if k.lower().replace('-','').replace('_','') in {
+                            'authorization','accesstoken','refreshtoken','appsecret','appkey','secret',
+                            'clientsecret','clientid','token','xclientid','xclientsecret',
+                            'nhappkey','nhappsecret','nhplugappkey','nhplugappsecret',
+                            'meritzappkey','meritzappsecret'}:
                         raise ValueError('account_credentials_forbidden')
+                    if k == 'raw_json' and isinstance(v,str):
+                        validate(json.loads(v))
                     validate(v)
             elif isinstance(item, list):
                 for v in item: validate(v)
