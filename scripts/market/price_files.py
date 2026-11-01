@@ -13,8 +13,10 @@ from copy import deepcopy
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import zlib
+from market.price_receipts import packed_record, packed_exists, save_one
 
 from market.prices import PriceStore, default_path, digest, identity, normalized, FIELDS
 
@@ -28,14 +30,8 @@ class PriceFiles:
         self.store = store or PriceStore(default_path())
         self.references = None
 
-    def connect(self, write=False):
-        db = self.store.connect(write=write)
-        if write:
-            db.execute('''CREATE TABLE IF NOT EXISTS price_files(
-                path TEXT PRIMARY KEY, source_sha256 TEXT NOT NULL,
-                original_bytes INTEGER NOT NULL, recipe_sha256 TEXT NOT NULL,
-                recipe BLOB NOT NULL)''')
-        return db
+    def connect(self):
+        return self.store.connect()
 
     def _references(self):
         if self.references is None:
@@ -79,8 +75,10 @@ class PriceFiles:
         return value
 
     def prepare(self, path):
+        return self.prepare_bytes(path,Path(path).read_bytes())
+
+    def prepare_bytes(self, path, raw):
         path = Path(path).resolve()
-        raw = path.read_bytes()
         expected = hashlib.sha256(raw).hexdigest()
         size = len(raw)
         row = self._record(path)
@@ -95,19 +93,22 @@ class PriceFiles:
         bom = raw.startswith(b'\xef\xbb\xbf')
         text = raw.decode('utf-8-sig')
         value = json.loads(text)
-        suffix = text[len(text.rstrip()):]
-        indent = 2 if '\n  "' in text[:2000] else None
-        encoder = None
-        for ascii_only in (False, True):
-            options = dict(ensure_ascii=ascii_only, indent=indent, allow_nan=False)
-            if json.dumps(value, **options) + suffix == text:
-                encoder = options
-                break
-        if encoder is None:
-            raise ValueError('price_file_encoding_not_reproducible')
+        crlf = '\r\n' in text
+        suffix = text[len(text.rstrip()):].replace('\r\n','\n')
+        indentation = re.match(r'^\{\r?\n( +)"', text)
+        encoder = dict(ensure_ascii=text.isascii(), indent=len(indentation[1]) if indentation else None, allow_nan=False)
+        if not indentation and re.match(r'^\{"[^"]+":(?! )',text):
+            encoder['separators'] = (',', ':')
         del raw, text
+        return self._prepare_value(path,value,encoder,suffix,bom,crlf,expected,size)
+
+    def _prepare_value(self,path,value,encoder,suffix,bom,crlf,expected,size,load_bars=None):
         paths = []
         if isinstance(value, dict):
+            if 'bars' in value and 'market' in value and 'symbol' in value:
+                paths.append([])
+            paths.extend([key] for key,row in value.items() if isinstance(row,dict) and 'bars' in row
+                         and key==str(row.get('market'))+':'+str(row.get('symbol')))
             for name in ('series', 'risk_series'):
                 if isinstance(value.get(name), list):
                     paths.extend([name, i] for i, row in enumerate(value[name]) if 'bars' in row)
@@ -122,6 +123,8 @@ class PriceFiles:
         count = 0
         for address in paths:
             series = self._at(value, address)
+            if load_bars:
+                series['bars']=load_bars(series['bars'])
             bars = series['bars']
             if not bars:
                 continue
@@ -135,25 +138,28 @@ class PriceFiles:
                                 order_overrides=overrides))
             count += len(bars)
             series['bars'] = []
-        recipe = dict(schema=1, value=value, patches=patches, encoder=encoder, suffix=suffix, bom=bom)
-        restored = self._restore(recipe)
-        if len(restored) != size or hashlib.sha256(restored).hexdigest() != expected:
-            raise ValueError('price_file_byte_roundtrip_mismatch')
-        del restored
+        recipe = dict(schema=1, value=value, patches=patches, encoder=encoder, suffix=suffix, bom=bom, crlf=crlf)
+        self.check_recipe(recipe,size,expected)
         body = json.dumps(recipe, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')
         compressed = zlib.compress(body)
-        with closing(self.connect(write=True)) as db, db:
-            prior = db.execute('SELECT source_sha256 FROM price_files WHERE path=?', (file_key(path),)).fetchone()
-            if prior and prior[0] != expected:
-                raise ValueError('price_file_source_changed')
-            db.execute('INSERT OR REPLACE INTO price_files VALUES (?,?,?,?,?)',
-                       (file_key(path), expected, size, hashlib.sha256(body).hexdigest(), compressed))
+        self.save_record(path, expected, size, hashlib.sha256(body).hexdigest(), compressed)
         return dict(path=str(path), sha256=expected, bytes=size, recipe_bytes=len(compressed),
                     series=len(patches), bars=count)
 
-    def _restore(self, recipe):
+    def check_recipe(self, recipe, size, expected):
+        restored = self._restore(recipe)
+        if len(restored)!=size or hashlib.sha256(restored).hexdigest()!=expected:
+            raise ValueError('price_file_byte_roundtrip_mismatch')
+
+    def save_record(self, path, expected, size, recipe_hash, compressed):
+        save_one(self.store.path.parent,path,expected,size,recipe_hash,compressed)
+
+    def reader(self):
+        return closing(self.store.connect())
+
+    def _expand(self, recipe):
         value = deepcopy(recipe['value'])
-        with closing(self.store.connect()) as db:
+        with self.reader() as db:
             for patch in recipe['patches']:
                 # The outer original-file SHA verifies every restored value.
                 bars = self.store.read(patch['reference'], verify=False, connection=db)
@@ -165,10 +171,44 @@ class PriceFiles:
                 orders = dict(patch.get('order_overrides', []))
                 self._at(value, patch['path'])['bars'] = [{k: b[k] for k in orders.get(i,patch['order'])}
                                                         for i,b in enumerate(bars)]
+        return value
+
+    @staticmethod
+    def _encode(value, recipe):
         raw = (json.dumps(value, **recipe['encoder']) + recipe['suffix']).encode('utf-8')
+        if recipe.get('crlf'):
+            raw = raw.replace(b'\n', b'\r\n')
         return (b'\xef\xbb\xbf' if recipe['bom'] else b'') + raw
 
+    def _restore(self, recipe):
+        return self._encode(self._expand(recipe),recipe)
+
+    def market_snapshot(self, path, expected):
+        """Return a verified market view with the same pinned bar references used in replay."""
+        from atomic_io import checked_saved,sha
+        record = self._record(path)
+        if record is None:
+            return checked_saved(path,expected)
+        source,size,recipe_hash,compressed = record
+        if source!=expected or (Path(path).is_file() and sha(path)!=expected):
+            raise ValueError('saved_artifact_hash_mismatch:'+Path(path).name)
+        body=zlib.decompress(compressed)
+        if hashlib.sha256(body).hexdigest()!=recipe_hash:
+            raise ValueError('price_file_recipe_hash_mismatch')
+        recipe=json.loads(body)
+        value=self._expand(recipe)
+        raw=self._encode(value,recipe)
+        if len(raw)!=size or hashlib.sha256(raw).hexdigest()!=expected:
+            raise ValueError('price_file_recovery_hash_mismatch')
+        for patch in recipe['patches']:
+            self._at(value,patch['path'])['bars_ref']=patch['reference']
+        value['ohlcv_store']={'schema':1,'path':str(self.store.path)}
+        return value
+
     def _record(self, path):
+        record = packed_record(self.store.path.parent, path)
+        if record is not None:
+            return record
         if not self.store.path.is_file():
             return None
         with closing(self.connect()) as db:
@@ -191,6 +231,8 @@ class PriceFiles:
         return raw
 
     def contains(self, path):
+        if packed_exists(self.store.path.parent, path):
+            return True
         if not self.store.path.is_file():
             return False
         with closing(self.connect()) as db:

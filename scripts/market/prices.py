@@ -131,9 +131,8 @@ class PriceStore:
         ident = identity(series)
         bars = series.get('bars') or []
         validate(bars)
-        meta = {k: v for k, v in series.items() if k not in ('bars', 'bars_ref')}
-        if metadata:
-            meta.update(metadata)
+        from market.price_metadata import observation_metadata
+        meta = observation_metadata({**series, **(metadata or {})})
         source = str(source)
         observed = series.get('collected_at') or utc_now()
         values = [(b['date'], *(b[k] for k in FIELDS)) for b in bars]
@@ -171,6 +170,9 @@ class PriceStore:
             ref = dict(series_id=sid, revision=revision, first=values[0][0] if values else None,
                        last=values[-1][0] if values else None, count=len(bars), sha256=reference_hash,
                        identity=ident, numeric_sha256=reference_hash)
+            excluded = sorted(old.keys() - {v[0] for v in values})
+            if excluded:
+                ref['excluded_dates'] = excluded
             db.execute('INSERT OR REPLACE INTO price_observations(series_id,revision,kind,source,source_sha256,reference,metadata) VALUES (?,?,?,?,?,?,?)',
                        (sid, revision, kind, source, source_sha256, packed(ref), packed(meta)))
             return ref
@@ -181,7 +183,16 @@ class PriceStore:
             row = db.execute('SELECT identity FROM price_series WHERE id=?', (ref['series_id'],)).fetchone()
             if not row or json.loads(row[0]) != ref['identity']:
                 raise ValueError('ohlcv_reference_identity_mismatch')
-            if ref['count'] == 0:
+            if 'segments' in ref:
+                parts=ref['segments']
+                if len(parts)!=2 or any(p['series_id']!=ref['series_id'] or 'segments' in p for p in parts):
+                    raise ValueError('invalid_composed_price_reference')
+                prefix,suffix=parts
+                left=self.read(prefix,connection=db)
+                right=self.read(suffix,connection=db)
+                combined=[b for b in left if ref['first']<=b['date']<suffix['first']]+right
+                rows=[(b['date'],*(b[k] for k in FIELDS)) for b in combined if b['date']<=ref['last']]
+            elif ref['count'] == 0:
                 rows = []
             else:
                 args = (ref['series_id'], ref['first'], ref['last'], ref['revision'])
@@ -190,6 +201,23 @@ class PriceStore:
                     UNION ALL SELECT day,open,high,low,close,volume FROM price_corrections
                     WHERE series_id=? AND day>=? AND day<=? AND valid_from<=? AND valid_to>?
                     ORDER BY day''', (*args, *args, ref['revision'])).fetchall()
+            if ref.get('variants') or ref.get('old_versions'):
+                by_day = {r[0]: r for r in rows}
+                variants = ref.get('variants', [])
+                for start in range(0, len(variants), 400):
+                    ids = variants[start:start+400]
+                    fetched = db.execute('SELECT day,open,high,low,close,volume FROM price_variants WHERE series_id=? AND id IN (' +
+                                         ','.join('?' for _ in ids) + ')', (ref['series_id'], *ids)).fetchall()
+                    if len(fetched) != len(ids):
+                        raise ValueError('missing_historical_variant')
+                    by_day.update((r[0], r) for r in fetched)
+                for day, version in ref.get('old_versions', []):
+                    old = db.execute('SELECT day,open,high,low,close,volume FROM price_corrections WHERE series_id=? AND day=? AND valid_from=?',
+                                     (ref['series_id'], day, version)).fetchone()
+                    if not old:
+                        raise ValueError('missing_historical_correction')
+                    by_day[day] = old
+                rows = sorted(by_day.values())
         bars = [dict(zip(('date', *FIELDS), r)) for r in rows]
         if ref.get('excluded_dates'):
             excluded=set(ref['excluded_dates'])
@@ -203,6 +231,29 @@ class PriceStore:
                 raise ValueError('ohlcv_reference_hash_mismatch')
         return bars
 
+    def observe_historical(self, series, *, source, kind, source_sha256=''):
+        """Pin a fetched historical view without replacing current daily prices."""
+        from market.price_metadata import observation_metadata
+        from market.retire_history import HistoricalFiles
+        bars = series.get('bars') or []
+        validate(bars)
+        if not bars:
+            raise ValueError('ohlcv_history_empty')
+        source_sha256 = source_sha256 or digest(series)
+        with closing(self.connect(write=True)) as db, db:
+            db.execute('BEGIN IMMEDIATE')
+            revision = db.execute(
+                'INSERT INTO price_revisions(observed_at,source,source_sha256,kind,details) VALUES (?,?,?,?,?)',
+                (series.get('collected_at') or utc_now(),str(source),source_sha256,kind,
+                 packed({'received':len(bars),'mode':'historical_backfill'}))).lastrowid
+            ref = HistoricalFiles(self,db,only_identity=identity(series)).reference(series)
+            self.read(ref,connection=db)
+            db.execute('''INSERT OR REPLACE INTO price_observations
+                (series_id,revision,kind,source,source_sha256,reference,metadata) VALUES (?,?,?,?,?,?,?)''',
+                (ref['series_id'],revision,kind,str(source),source_sha256,packed(ref),
+                 packed(observation_metadata(series))))
+            return ref
+
     def failure(self, category, reason, *, market=None, symbol=None, details=None):
         with closing(self.connect(write=True)) as db, db:
             db.execute('INSERT INTO price_failures(observed_at,market,symbol,category,reason,details) VALUES (?,?,?,?,?,?)',
@@ -213,6 +264,11 @@ class PriceStore:
         ident, bars = identity(series), series.get('bars') or []
         validate(bars)
         wanted = digest(normalized(bars))
+        for candidate in (series.get('bars_ref'),series.get('daily_bars_ref')):
+            if (candidate and candidate.get('identity')==ident and candidate.get('count')==len(bars)
+                    and candidate.get('numeric_sha256',candidate.get('sha256'))==wanted):
+                self.read(candidate)
+                return candidate
         with closing(self.connect()) as db:
             db.execute('BEGIN')
             row=db.execute('SELECT id FROM price_series WHERE identity=?',(packed(ident),)).fetchone()
@@ -234,6 +290,19 @@ class PriceStore:
                         numeric_sha256=wanted,identity=ident,excluded_dates=excluded)
             if digest(normalized(current)) == wanted:
                 return reference
+            daily=series.get('daily_bars_ref')
+            if daily and daily.get('identity')==ident and daily.get('first') and bars and bars[0]['date']<daily['first']:
+                prefixes=db.execute("SELECT reference FROM price_observations WHERE series_id=? AND kind IN ('archive','selected') ORDER BY id DESC",(sid,)).fetchall()
+                for raw, in prefixes:
+                    prefix=json.loads(raw)
+                    if not prefix.get('first') or prefix['first']>bars[0]['date']:
+                        continue
+                    composed={**reference,'segments':[prefix,daily]}
+                    try:
+                        self.read(composed,connection=db)
+                        return composed
+                    except ValueError:
+                        continue
         # A former daily revision can pin the composed archive+daily view as it
         # existed then, including the explicit quality exclusions. No price write.
         for previous in dict.fromkeys(json.loads(r[0])['revision'] for r in refs):
@@ -262,6 +331,24 @@ class PriceStore:
             row = db.execute('SELECT reference,metadata,kind FROM price_observations WHERE series_id=?'+clause+' ORDER BY id DESC LIMIT 1', args).fetchone()
         return (json.loads(row[0]), json.loads(row[1]), row[2]) if row else None
 
+    def daily_seed(self, stock, cutoff, revision=None):
+        """Return a provider observation pinned at or before this collection's cutoff."""
+        if not self.path.is_file():
+            return None
+        sid = self.find(stock)
+        if sid is None:
+            return None
+        with closing(self.connect()) as db:
+            row = db.execute('''SELECT reference,metadata FROM price_observations
+                WHERE series_id=? AND kind IN ('series','benchmark','risk_series','checkpoint')
+                AND json_extract(reference,'$.last')<=? AND (? IS NULL OR revision<=?)
+                ORDER BY json_extract(reference,'$.last') DESC,revision DESC LIMIT 1''',
+                (sid,cutoff,revision,revision)).fetchone()
+            if row:
+                ref,metadata = map(json.loads,row)
+                return {**metadata,'bars':self.read(ref,connection=db),'bars_ref':ref}
+        return None
+
     def source_observation(self, source, kind):
         with closing(self.connect()) as db:
             row=db.execute('SELECT reference,metadata,kind FROM price_observations WHERE source=? AND kind=? ORDER BY id DESC LIMIT 1',
@@ -271,7 +358,7 @@ class PriceStore:
     def find(self, stock):
         """An explicit identity conflict never inherits another listing's bars."""
         with closing(self.connect()) as db:
-            rows = db.execute('SELECT id,identity FROM price_series WHERE json_extract(identity,\'$.market\')=? AND json_extract(identity,\'$.symbol\')=?',
+            rows = db.execute('SELECT id,identity FROM price_series WHERE json_extract(identity,\'$.market\')=? AND json_extract(identity,\'$.symbol\')=? AND EXISTS (SELECT 1 FROM price_observations o WHERE o.series_id=price_series.id)',
                               (stock['market'], stock['symbol'])).fetchall()
         candidates = []
         for sid, raw in rows:
@@ -310,11 +397,17 @@ def freeze_snapshot(snapshot, path, store=None, *, source_sha256=''):
     """Persist only metadata/references; no raw price arrays in a new snapshot."""
     store = store or PriceStore((snapshot.get('ohlcv_store') or {}).get('path'))
     value = dict(snapshot)
+    def freeze(series, kind):
+        if 'bars' not in series:
+            return series
+        if 'bars_ref' in series:
+            ref = store.pin(series)
+            store.read(ref)
+            return {**{k:v for k,v in series.items() if k!='bars'},'bars_ref':ref}
+        return freeze_series(store,series,source=str(path),kind=kind,source_sha256=source_sha256)
     for name in ('series', 'risk_series'):
-        value[name] = [freeze_series(store, s, source=str(path), kind=name,source_sha256=source_sha256) if 'bars' in s else s
-                       for s in snapshot.get(name, [])]
-    value['benchmarks'] = {k: freeze_series(store, s, source=str(path), kind='benchmark',source_sha256=source_sha256) if 'bars' in s else s
-                           for k, s in snapshot.get('benchmarks', {}).items()}
+        value[name] = [freeze(s,name) for s in snapshot.get(name, [])]
+    value['benchmarks'] = {k:freeze(s,'benchmark') for k,s in snapshot.get('benchmarks',{}).items()}
     value['ohlcv_store'] = {'schema': 1, 'path': str(store.path)}
     return value
 

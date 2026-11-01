@@ -290,7 +290,11 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
                 inputs[str(Path(prior_result)/'run.json')] = artifact_io.sha(Path(prior_result)/'run.json')
             kwargs = {'session_cutoff':session_cutoff,'evaluated_at':evaluated_at} if session_cutoff else {}
             collect(collection_root, ROOT/'config.json', prior_source=previous, **kwargs)
-            if previous:
+            frozen_path = collection_root/'frozen.json'
+            seed_revision = artifact_io.load(frozen_path)['config'].get('seed_revision') if frozen_path.is_file() else None
+            if seed_revision is not None:
+                run['incremental_seed'] = {'provider':'toss','price_revision':seed_revision}
+            elif previous:
                 previous = Path(previous)
                 inputs[str(previous/'snapshot.json')] = artifact_io.sha(previous/'snapshot.json')
                 inputs[str(previous/'manifest.json')] = artifact_io.sha(previous/'manifest.json')

@@ -152,6 +152,12 @@ def run(root, config_path=None, prior_source=None, *, session_cutoff=None, evalu
                       'scope': 'market_only_toss_provided_universe', 'universe_mode': 'exchange_listings',
                       'limit_per_exchange': None}
             config['ohlcv_path'] = str(default_path())
+            seed_store = PriceStore(config['ohlcv_path'])
+            if seed_store.meta('archive_import_complete',False):
+                from contextlib import closing
+                with closing(seed_store.connect()) as db:
+                    config['seed_revision'] = db.execute('SELECT max(id) FROM price_revisions').fetchone()[0]
+                prior_source = None
             if source.get('user_classification'):
                 config['user_classification'] = source['user_classification']
             if source.get('classification_refresh'):

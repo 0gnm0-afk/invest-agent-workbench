@@ -30,20 +30,28 @@ class History(unittest.TestCase):
         return {'result':{'nextBefore':None,'candles':[dict(timestamp=b['date']+'T00:00:00-04:00',currency='USD',openPrice=b['open'],highPrice=b['high'],lowPrice=b['low'],closePrice=b['close'],volume=b['volume']) for b in rows]}}
     def test_long_history_more_than_ten_pages(self):
         from datetime import date, timedelta
-        from market.providers.toss_candles import daily_series
         days=[];day=date(2016,1,1)
         while day<=date(2026,9,24):
             if day.weekday()<5:days.append(day.isoformat())
             day+=timedelta(days=1)
-        chunks=[list(reversed(days))[i:i+200] for i in range(0,len(days),200)]
+        # Toss may include a later session at the inclusive upper boundary.
+        available=['2026-09-25',*reversed(days)]
         calls=[]
         def get(path,params):
-            idx=len(calls);calls.append(params)
-            rows=[dict(timestamp=d+'T00:00:00-04:00',currency='USD',openPrice=10,highPrice=12,lowPrice=9,closePrice=11,volume=100) for d in chunks[idx]]
-            return {'result':{'candles':rows,'nextBefore':rows[-1]['timestamp'] if idx+1<len(chunks) else None}}
-        result=daily_series(get,'AAA','US',['2016-01-01','2026-09-24'],max_pages=40)
-        self.assertEqual(len(result['bars']),len(days));self.assertGreater(len(calls),10)
-        self.assertEqual(result['bars'][0]['date'],'2016-01-01')
+            calls.append(params)
+            self.assertEqual(params['count'],200)
+            eligible=[d for d in available if d<=params['before'][:10]]
+            page=eligible[:params['count']]
+            rows=[dict(timestamp=d+'T00:00:00-04:00',currency='USD',openPrice=10,highPrice=12,lowPrice=9,closePrice=11,volume=100) for d in page]
+            return {'result':{'candles':rows,'nextBefore':rows[-1]['timestamp'] if len(eligible)>len(page) else None}}
+        store=HistoryStore(self.path,lambda:get)
+        result=store.ensure(self.stock)
+        self.assertEqual(result['history']['state'],'complete')
+        self.assertEqual([b['date'] for b in result['bars']],days)
+        self.assertGreater(len(calls),10)
+        self.assertEqual(calls[0]['before'],'2026-09-25T00:00:00-04:00')
+        reopen=HistoryStore(self.path,lambda:self.fail('unexpected chart re-download')).ensure(self.stock)
+        self.assertEqual(reopen['bars'],result['bars'])
 
     def test_week_year_boundary_and_ohlcv(self):
         rows=[bar('2020-12-31'),bar('2021-01-01',12),bar('2021-01-04',14)]
@@ -81,13 +89,33 @@ class History(unittest.TestCase):
         self.assertEqual(extended['bars'][-1]['date'],'2026-09-25')
         self.assertEqual(extended['history']['daily_update_mode'],'merged')
         self.assertEqual(len(self.calls),1)
+    def test_selected_past_chart_preserves_newer_daily_correction(self):
+        store=HistoryStore(self.path,lambda:self.client)
+        current={**self.stock,'provider':'Toss OpenAPI candles',
+                 'price_basis':'toss_adjusted_ohlc_no_order_authority',
+                 'bars':[bar('2026-09-24',20),bar('2026-09-25',22)]}
+        live_ref=store.prices.put(current,source='live',kind='series')
+        stock={**current,'bars':self.stock['bars']}
+        selected=store.ensure(stock)
+        self.assertEqual(selected['history']['state'],'complete')
+        self.assertEqual(selected['bars'][-1]['date'],'2026-09-24')
+        self.assertEqual(store.prices.read(live_ref),current['bars'])
+        with closing(store.prices.connect()) as db:
+            latest=db.execute('SELECT day,close FROM prices ORDER BY day').fetchall()
+        self.assertEqual(latest,[('2026-09-24',21.0),('2026-09-25',23.0)])
+        newer={**current,'bars':[bar('2026-09-24',21),bar('2026-09-25',23)]}
+        updated=store.prices.put(newer,source='actual-correction',kind='series')
+        reopened=HistoryStore(self.path,lambda:self.fail).ensure(stock)
+        self.assertEqual(reopened['bars'],selected['bars'])
+        self.assertEqual(store.prices.read(updated),newer['bars'])
+        self.assertEqual(len(self.calls),1)
     def test_cutoff_not_silently_advanced(self):
         def wrong(path,params):
             packet=self.client(path,params);packet['result']['candles']=packet['result']['candles'][1:];return packet
         s=HistoryStore(self.path,lambda:wrong);r=s.ensure(self.stock);self.assertEqual(r['history']['state'],'failed');self.assertEqual(r['history']['last'],'2026-09-24')
     def test_cache_tampering_and_input_validation(self):
         s=HistoryStore(self.path,lambda:self.client);s.ensure(self.stock)
-        with closing(sqlite3.connect(s.prices.path)) as db, db:db.execute('UPDATE prices SET close=999')
+        with closing(sqlite3.connect(s.prices.path)) as db, db:db.execute('UPDATE price_variants SET close=999')
         self.assertEqual(s.view(self.stock)['history']['state'],'failed')
         with self.assertRaises(ValueError):validate_bars([bar('2026-10-01')],'2026-09-24')
         with self.assertRaises(ValueError):validate_bars([dict(bar('2026-09-24'),low=100)],'2026-09-24')

@@ -10,7 +10,7 @@ import threading
 from zoneinfo import ZoneInfo
 
 from market.history.saved import SavedMarketHistories, with_daily
-from market.prices import PriceStore, default_path, freeze_series
+from market.prices import PriceStore, default_path
 from market.providers.toss_candles import daily_series
 from market.providers.toss_client import TossMarketClient, MarketReadError
 
@@ -167,11 +167,10 @@ class HistoryStore:
                         raise ValueError('saved_cutoff_missing')
                     if self.client is None:
                         self.client = (self.client_factory or TossMarketClient)()
-                    # Start at the saved cutoff, never request a live/incomplete candle.
+                    # Use the saved chart cutoff. daily_series excludes bars after end.
                     before = datetime.combine(date.fromisoformat(end) + timedelta(days=1), datetime.min.time(), ZoneInfo('Asia/Seoul' if stock['market']=='KR' else 'America/New_York')).isoformat()
-                    def get(path, params):
-                        return self.client(path, {'before':before, **params})
-                    series = daily_series(get, stock['symbol'], stock['market'], [START, end], max_pages=40)
+                    series = daily_series(self.client, stock['symbol'], stock['market'], sorted({START, end}),
+                                          max_pages=40, first_before=before)
                     validate_bars(series['bars'], end)
                     if series['bars'][-1]['date'] != end:
                         raise ValueError('saved_cutoff_not_received')
@@ -190,8 +189,8 @@ class HistoryStore:
                     reason = str(exc) if str(exc) in known or isinstance(exc, MarketReadError) else 'history_collection_failed'
                     packet = {'history':{'state':'failed','reason':reason, 'attempted_at':datetime.now(timezone.utc).isoformat()}}
                 if 'series' in packet:
-                    freeze_series(self.prices, {**stock, **packet['series'], 'selected_history':packet['history']},
-                                  source='selected:'+self.identity(stock), kind='selected')
+                    self.prices.observe_historical({**stock, **packet['series'], 'selected_history':packet['history']},
+                                                   source='selected:'+self.identity(stock), kind='selected')
                     self.prices.set_meta('selected:'+self.identity(stock), None)
                 else:
                     self.prices.set_meta('selected:'+self.identity(stock), packet)

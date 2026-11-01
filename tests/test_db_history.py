@@ -12,7 +12,8 @@ from market.prices import PriceStore
 
 class DBHistoryTests(unittest.TestCase):
     def test_archive_view_quality_and_daily_composition_equal_original(self):
-        fixture=fixture_module.SavedHistoryTests();fixture.setUp();self.addCleanup(fixture.tearDown)
+        fixture=fixture_module.SavedHistoryTests();fixture.setUp()
+        self.addCleanup(fixture.doCleanups);self.addCleanup(fixture.tearDown)
         fixture.fixture(rows=[bar('1990-01-02'),dict(bar('2020-01-02'),open=99),bar('2026-09-30')],
                         invalid=['2020-01-02'],listing_values={'isinCode':'USAAA'})
         old=SavedHistory(fixture.root/'us-history/active.json','US')

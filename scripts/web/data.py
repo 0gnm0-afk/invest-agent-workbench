@@ -50,7 +50,10 @@ def saved_market(root=ROOT, run_dir=None):
     except (OSError, ValueError, KeyError) as exc:
         result['errors'].append('sectors_unavailable:' + type(exc).__name__)
     source = Path(run['market_source']) / 'snapshot.json'
-    snapshot = checked(source, manifest['input_hashes'].get(str(source)))
+    from market.price_files import PriceFiles
+    from market.prices import PriceStore,default_path
+    source_hash = manifest['input_hashes'].get(str(source))
+    snapshot = PriceFiles(PriceStore(default_path(root))).market_snapshot(source,source_hash)
     # Keep all saved symbols accessible from sector leaders and actual holdings.
     for s in snapshot['series']:
         result['stocks'][s['market'] + ':' + s['symbol']] = {
@@ -69,7 +72,7 @@ def saved_market(root=ROOT, run_dir=None):
             result['sectors'] = [dict(s,horizons=horizons[(s['market'],s['group_code'])]) for s in projected['signals']['sectors']]
             result['coverage'] = projected['observation']['coverage']
             result['classification_policy'] = projected['policy']
-        result['focus'] = cached(root, run_dir, snapshot, groups, result['sectors'], sha(source), config.get('sector_focus'))
+        result['focus'] = cached(root, run_dir, snapshot, groups, result['sectors'], source_hash, config.get('sector_focus'))
     except (OSError, ValueError, KeyError, TypeError, BusyError) as exc:
         result['focus'] = {'items': [], 'markets': {}, 'error': '자료 또는 캐시 확인 필요 ('+type(exc).__name__+')'}
     # Describe incomplete inputs separately from successful calculation stages.
@@ -84,7 +87,7 @@ def saved_market(root=ROOT, run_dir=None):
     if downtrend_options is not None and review.get('schema') == 4:
         from screening.projection import cached as trendline_projection
         try:
-            projected_review = trendline_projection(root,artifact('screen.json'),snapshot,review,sha(source),downtrend_options)
+            projected_review = trendline_projection(root,artifact('screen.json'),snapshot,review,source_hash,downtrend_options)
             result['entries'] = [e for g in projected_review['markets'].values() for e in g['entries']]
             result['candidate_count'] = projected_review['candidate_count']
             result['entry_candidate_count'] = projected_review['entry_candidate_count']

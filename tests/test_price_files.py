@@ -47,7 +47,9 @@ class PriceFilesTests(unittest.TestCase):
         self.assertEqual(self.files.recover(path), raw)
         with patch('market.price_files.default_path', return_value=self.store.path):
             self.assertEqual(sha(path), before)
-            self.assertEqual(checked_saved(path, before), value)
+            with patch('market.price_files.recover_bytes', wraps=self.files.recover) as recover:
+                self.assertEqual(checked_saved(path, before), value)
+                recover.assert_called_once_with(path)
             self.assertEqual(load(path), value)
             self.assertEqual(holding_series(path, before, {'US:AAA'})['US:AAA'], value['series'][0])
             with self.assertRaisesRegex(ValueError, 'saved_artifact_hash_mismatch'):
@@ -76,8 +78,14 @@ class PriceFilesTests(unittest.TestCase):
     def test_corruption_is_rejected_and_unknown_missing_file_stays_missing(self):
         path, _ = self.save('known.json', {'data': self.old})
         self.files.prepare(path)
-        with closing(self.files.connect(write=True)) as db, db:
-            db.execute("UPDATE price_files SET recipe_sha256='bad'")
+        from market.price_receipts import address
+        import zipfile
+        pack,name = address(self.root,path)
+        with zipfile.ZipFile(pack) as z:
+            header,body=z.read(name).split(b'\n',1)
+        data=json.loads(header);data['recipe_sha256']='bad'
+        with zipfile.ZipFile(pack,'w') as z:
+            z.writestr(name,json.dumps(data).encode()+b'\n'+body)
         with self.assertRaisesRegex(ValueError, 'recipe_hash_mismatch'):
             self.files.recover(path)
         with self.assertRaises(FileNotFoundError):

@@ -1,7 +1,8 @@
 """Read-only paginated KR/US daily candles; authentication is caller supplied."""
 import math
 import re
-from datetime import datetime
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 
 def _route(symbol, market, provider_symbol):
@@ -23,7 +24,7 @@ def _route(symbol, market, provider_symbol):
 
 
 def daily_series(get, symbol, market, sessions, *, benchmark=None, provider_symbol=None,
-                 adjusted=True, max_pages=10, stop_on_or_before=None, page_size=200):
+                 adjusted=True, max_pages=10, stop_on_or_before=None, page_size=200, first_before=None):
     if not sessions or sessions != sorted(set(sessions)):
         raise ValueError('Expected ordered unique completed sessions')
     if not isinstance(adjusted, bool) or not isinstance(max_pages, int) or isinstance(max_pages, bool) or not 1 <= max_pages <= 40:
@@ -32,7 +33,13 @@ def daily_series(get, symbol, market, sessions, *, benchmark=None, provider_symb
             or stop_on_or_before is not None and stop_on_or_before not in sessions):
         raise ValueError('Invalid incremental candle boundary')
     endpoint, code, index, benchmark_proxy = _route(symbol, market, provider_symbol)
-    params = {'interval': '1d', 'count': page_size}
+    # Toss stamps 1d candles at exchange-local midnight and treats before as
+    # inclusive. This bounds today's first page even when a later bar exists.
+    zone = ZoneInfo('Asia/Seoul' if market == 'KR' else 'America/New_York')
+    upper = first_before or datetime.fromisoformat(sessions[-1]).replace(tzinfo=zone).isoformat()
+    # A historical request may specify only the two endpoints of a multi-year range.
+    span = (date.fromisoformat(sessions[-1]) - date.fromisoformat(sessions[0])).days + 1
+    params = {'interval': '1d', 'count': min(page_size, span), 'before': upper}
     if not index:
         params.update(symbol=code, adjusted=str(adjusted).lower())
     expected_currency = 'KRW' if market == 'KR' else 'USD'

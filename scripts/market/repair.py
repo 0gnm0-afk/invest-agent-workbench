@@ -13,6 +13,7 @@ from unittest.mock import patch
 from uuid import uuid4
 import market.scope as market_scope
 from market.collect import audit
+from market.price_files import PriceFiles
 from atomic_io import write_json
 
 from workbench_paths import ROOT
@@ -27,7 +28,8 @@ def derive(saved_run, config):
         path=(source/name).resolve()
         if not path.is_relative_to(source.resolve()):raise ValueError('source_path_outside_root')
         artifact_io.checked(path,expected,{})
-    policy=market_scope.load();snapshot=market_scope.apply_snapshot(artifact_io.load(source/'snapshot.json'),policy)
+    policy=market_scope.load()
+    snapshot=market_scope.apply_snapshot(PriceFiles().market_snapshot(source/'snapshot.json',source_manifest['snapshot.json']),policy)
     snapshot['classification_refresh']=config.get('classification_refresh')
     snapshot['user_classification']=config.get('user_classification')
     output=ROOT/'runtime/scope-repair'/(datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')+'-'+uuid4().hex[:8])

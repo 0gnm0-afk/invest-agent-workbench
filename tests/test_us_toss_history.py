@@ -1,4 +1,7 @@
 import json
+import hashlib
+from contextlib import closing
+from copy import deepcopy
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,8 +29,91 @@ class HistoryTests(unittest.TestCase):
             for p in (Path(td)/'series').glob('*.json'):p.unlink()
             self.assertEqual(c.collect_one({'symbol':'AAPL'},'2026-09-30')['bars'],r['bars'])
             self.assertEqual(len(calls),2)
-            p=next((Path(td)/'series').glob('*.json'));v=json.loads(p.read_bytes());v['data']['bars'][0]['close']=22;p.write_text(json.dumps(v))
+            p=next((Path(td)/'series').glob('*.json'));v=json.loads(p.read_bytes())
+            self.assertNotIn('bars',v['data']);self.assertIn('bars_ref',v['data'])
+            self.assertEqual(Path(v['data']['ohlcv_path']),Path(td)/'ohlcv.sqlite3')
+            v['data']['first']='2000-01-01';p.write_text(json.dumps(v))
             with self.assertRaisesRegex(ValueError,'saved_hash_mismatch'):read_checked(p)
+
+    def test_backfill_marker_preserves_current_prices_and_replays_verified_raw(self):
+        from market.prices import PriceStore
+        from market.history.saved import SavedHistory
+        from market.history.verify import verify
+        from test_prices import series
+        with tempfile.TemporaryDirectory() as td:
+            workbench=Path(td);runtime=workbench/'runtime';root=runtime/'us-history'/'new'
+            root.mkdir(parents=True)
+            (workbench/'config.json').write_text(json.dumps({'ohlcv':{'path':'runtime/prices.sqlite3'}}))
+            store=PriceStore(runtime/'prices.sqlite3')
+            current=series();current.update(price_basis='toss_adjusted_ohlc_no_order_authority')
+            current['bars']=[dict(current['bars'][0],date='2026-09-30',close=11.5)]
+            pinned=store.put(current,source='daily')
+            item=dict(symbol='AAA',isinCode=current['isin_code'],market='US')
+            calls=[]
+            def get(path,params):
+                calls.append(params)
+                return {'result':{'candles':[candle('2026-09-30'),candle('2016-01-04')],'nextBefore':None}}
+            collector=Collector(root,get)
+            result=collector.collect_one(item,'2026-09-30')
+            self.assertEqual(store.read(pinned),current['bars'])
+            marker=root/'series'/(hashlib.sha256(b'AAA').hexdigest()+'.json')
+            receipt=json.loads(marker.read_bytes())
+            self.assertEqual(receipt['data']['ohlcv_path'],str(store.path))
+            self.assertNotIn('bars',receipt['data'])
+            self.assertEqual(read_checked(marker),result)
+            with closing(store.connect()) as db:
+                self.assertEqual(db.execute('SELECT count(*) FROM prices').fetchone()[0],1)
+                self.assertEqual(db.execute('SELECT count(*) FROM price_variants').fetchone()[0],2)
+            save_checked(root/'collection.json',{'markets':['US'],'end':'2026-09-30','scope':'synthetic'})
+            save_checked(root/'universe.json',{'rows':[item]})
+            verify(root,require_finished=True)
+            pointer=root.parent/'active.json'
+            pointer.write_text(json.dumps({'collection':root.name,
+                'manifest_sha256':hashlib.sha256((root/'manifest.json').read_bytes()).hexdigest()}))
+            replay=SavedHistory(pointer,'US')
+            self.assertFalse(replay.error)
+            self.assertEqual(replay.read('series/'+marker.name,wrapped=True),result)
+            self.assertEqual(Collector(root,lambda *_:self.fail('network')).collect_one(item,'2026-09-30'),result)
+            self.assertEqual(len(calls),1)
+            # Full marker and source responses remain valid after a later live correction.
+            newer=deepcopy(current);newer['bars'][0]['close']=11.75
+            store.put(newer,source='later')
+            self.assertEqual(read_checked(marker),result)
+            self.assertEqual(verify(root,require_finished=True)['counts'],{'received':1})
+
+    def test_standalone_backfill_never_selects_the_operating_database(self):
+        with tempfile.TemporaryDirectory() as td,patch('market.prices.default_path',side_effect=AssertionError('operating DB')):
+            value=Collector(td,lambda *_:{'result':{'candles':[candle('2026-09-30')],'nextBefore':None}}).collect_one({'symbol':'AAA'},'2026-09-30')
+            marker=next((Path(td)/'series').glob('*.json'))
+            self.assertEqual(read_checked(marker),value)
+            self.assertTrue((Path(td)/'ohlcv.sqlite3').exists())
+
+    def test_original_legacy_series_resume_preserves_sha_and_format(self):
+        from market.history.collect import packed
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td);saved=root/'series'/(hashlib.sha256(b'AAA').hexdigest()+'.json')
+            saved.parent.mkdir()
+            value=dict(symbol='AAA',market='US',listing={'symbol':'AAA'},requested_end='2026-09-30',
+                       state='received',bars=parse_page({'result':{'candles':[candle('2026-09-30')]}},'2026-09-30')[0])
+            raw=(json.dumps({'data':value,'sha256':hashlib.sha256(packed(value)).hexdigest()},indent=4)+'\n').encode()
+            saved.write_bytes(raw)
+            with patch('market.prices.default_path',side_effect=AssertionError('operating DB')):
+                self.assertEqual(Collector(root,lambda *_:self.fail('network')).collect_one({'symbol':'AAA'},'2026-09-30'),value)
+            self.assertEqual(saved.read_bytes(),raw)
+            self.assertFalse((root/'ohlcv.sqlite3').exists())
+
+    def test_parallel_backfill_workers_share_one_isolated_price_store(self):
+        from concurrent.futures import ThreadPoolExecutor
+        with tempfile.TemporaryDirectory() as td:
+            collector=Collector(td,lambda *_:{'result':{
+                'candles':[candle('2026-09-30')],'nextBefore':None}})
+            with ThreadPoolExecutor(max_workers=6) as pool:
+                results=list(pool.map(
+                    lambda i:collector.collect_one({'symbol':'TEST'+str(i)},'2026-09-30'),range(18)))
+            markers=list((Path(td)/'series').glob('*.json'))
+            self.assertEqual(len(markers),18)
+            self.assertEqual(sorted(read_checked(p)['symbol'] for p in markers),
+                             sorted(row['symbol'] for row in results))
 
     def test_resumed_workers_share_one_client_and_rate_limiter(self):
         from concurrent.futures import ThreadPoolExecutor

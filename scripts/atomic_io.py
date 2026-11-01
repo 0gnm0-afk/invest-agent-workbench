@@ -86,9 +86,12 @@ def load_bom(path):
 
 
 def checked_saved(path, expected):
-    if not expected or sha(path) != expected:
+    if not expected:
         raise ValueError('saved_artifact_hash_mismatch:' + Path(path).name)
-    return load_bom(path)
+    raw = read_bytes(path)
+    if hashlib.sha256(raw).hexdigest() != expected:
+        raise ValueError('saved_artifact_hash_mismatch:' + Path(path).name)
+    return _hydrate(json.loads(raw.decode('utf-8-sig')))
 
 
 def write_new_json(path, payload):

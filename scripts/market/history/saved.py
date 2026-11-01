@@ -119,9 +119,8 @@ class SavedHistory:
             raise ValueError('artifact_hash_mismatch')
         value = json.loads(raw)
         if wrapped:
-            if hashlib.sha256(packed(value['data'])).hexdigest() != value['sha256']:
-                raise ValueError('content_hash_mismatch')
-            value = value['data']
+            from market.history.collect import unpack_checked
+            value = unpack_checked(value)
         return value
 
     def packet(self, stock):

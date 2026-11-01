@@ -65,5 +65,65 @@ class AutomaticScopeTests(unittest.TestCase):
             self.assertEqual(refresh_classification_source(out,ref,root/'unused'),out)
             self.assertFalse((root/'unused').exists())
 
+    def test_retired_sources_keep_price_references_in_new_derivations(self):
+        import market.nh_fallback as nh
+        import market.repair as repair
+        from market.price_files import PriceFiles
+        from market.prices import PriceStore
+        from sectors.adr import derive
+        from test_prices import series
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);source=root/'source';source.mkdir()
+            store=PriceStore(root/'ohlcv.sqlite3')
+            stock=series()
+            pin=store.put(stock,source='test',kind='series')
+            profile={'ma_period':2,'rs_period':2,'slope_window':1,'transition_window':1,'activity_window':1}
+            snapshot={'series':[stock],'universe':[{'market':'US','symbol':'AAA'}],
+                      'benchmarks':{},'sessions':{'US':[b['date'] for b in stock['bars']]},'errors':[],
+                      'profile':{'US':profile},'coverage':{'listings':{},'scope_errors':[],'market_wide':False},'collection_stats':{}}
+            artifact_io.write_json(source/'snapshot.json',snapshot)
+            artifact_io.write_json(source/'summary.json',{'state':'partial'})
+            hashes={name:artifact_io.sha(source/name) for name in ('snapshot.json','summary.json')}
+            artifact_io.write_json(source/'manifest.json',hashes)
+            PriceFiles(store).prepare(source/'snapshot.json')
+            (source/'snapshot.json').unlink()
+            bundle=root/'adr.json'
+            artifact_io.write_json(bundle,{'schema':1,'records':[]})
+            reference={'path':str(bundle),'sha256':artifact_io.sha(bundle)}
+            saved=root/'run';saved.mkdir()
+            artifact_io.write_json(saved/'run.json',{'market_source':str(source)})
+            artifact_io.write_json(saved/'manifest.json',{'output_hashes':{'run.json':artifact_io.sha(saved/'run.json')},
+                'input_hashes':{str(source/'manifest.json'):artifact_io.sha(source/'manifest.json')}})
+            master=root/'master.json';artifact_io.write_json(master,[])
+            cfg={'nh_reference_snapshot':str(source/'snapshot.json'),'nh_reference_snapshot_sha256':hashes['snapshot.json'],
+                 'nh_us_master':str(master),'nh_kr_master':str(master),'nh_us_master_sha256':artifact_io.sha(master),
+                 'nh_kr_master_sha256':artifact_io.sha(master)}
+            policy={'scope':'market_symbol_until_user_restores','path':'test','sha256':'a'*64,'records':[]}
+            with patch('market.price_files.default_path',return_value=store.path), patch.object(repair,'ROOT',root), \
+                 patch('market.scope.load',return_value=policy), patch.object(nh,'MarketClient') as transport:
+                outputs=[refresh_classification_source(source,reference,root/'classification'),
+                         derive(source,root/'adr',reference),Path(repair.derive(saved,{})['source']),
+                         nh.recover(source,root/'nh',cfg)[0]]
+                transport.return_value.read.assert_not_called()
+                for output in outputs:
+                    thin=json.loads((output/'snapshot.json').read_bytes())
+                    self.assertNotIn('bars',thin['series'][0])
+                    self.assertEqual(thin['series'][0]['bars_ref'],pin)
+                    self.assertEqual(artifact_io.load(output/'snapshot.json')['series'][0]['bars'],stock['bars'])
+
+    def test_replayed_nh_value_never_replaces_newer_price(self):
+        from copy import deepcopy
+        from market.nh_fallback import pin_replayed_series
+        from market.prices import PriceStore
+        from test_prices import series
+        with tempfile.TemporaryDirectory() as tmp:
+            store=PriceStore(Path(tmp)/'ohlcv.sqlite3')
+            current={**series(),'provider':'NH PLUG period','price_basis':'nh_us_ohlc_historical_toss_parity'}
+            ref=store.put(current,source='current')
+            old=deepcopy(current);old['bars'][0]['close']=10
+            pin_replayed_series({'ohlcv_store':{'path':str(store.path)}},[old])
+            self.assertEqual(store.read(old['bars_ref']),old['bars'])
+            self.assertEqual(store.read(ref),current['bars'])
+
 
 if __name__=='__main__':unittest.main()

@@ -11,6 +11,8 @@ from pathlib import Path
 from financials.collect import Collector, SourceError, settings
 from financials.normalize import dart_normalize, sec_normalize
 from financials.calculate import VERSION, summarize
+from market.financial_price_receipts import pack_price_input, price_input_bytes, read_price_input
+from market.prices import PriceStore, default_path
 
 from workbench_paths import ROOT
 
@@ -73,8 +75,14 @@ def selected_stock(market,symbol,histories):
 
 
 class FinancialStore:
-    def __init__(self, root=None):
+    def __init__(self, root=None, *, price_store=None):
         self.root=Path(root or ROOT/'runtime/financials')
+        if price_store is None:
+            path = (default_path() if self.root.resolve()==(ROOT/'runtime/financials').resolve()
+                    else self.root.parent/'ohlcv.sqlite3' if self.root.name=='financials'
+                    else self.root/'ohlcv.sqlite3')
+            price_store=PriceStore(path)
+        self.price_store=price_store
         self.mutex=threading.Lock()
 
     def folder(self,key):
@@ -164,7 +172,9 @@ class FinancialStore:
                 result.update(collected_at=inherited['collected_at'],recalculated_at=now(),source_snapshot_id=inherited['snapshot_id'])
             if source.get('supplemented_at'):
                 result['supplemented_at']=source['supplemented_at']
-            save(base/'source.json',source);save(base/'normalized.json',normal);save(base/'saved-price.json',stock)
+            save(base/'source.json',source);save(base/'normalized.json',normal)
+            price_path=base/'saved-price.json'
+            save(price_path,pack_price_input(stock,price_path,self.price_store))
             save(base/'result.json',result)
             files={str(p.relative_to(base)).replace('\\','/'):hashlib.sha256(p.read_bytes()).hexdigest() for p in base.rglob('*') if p.is_file()}
             code_paths = {
@@ -172,6 +182,7 @@ class FinancialStore:
                 'financial_model.py': 'financials/normalize.py',
                 'financial_focus.py': 'financials/calculate.py',
                 'financial_store.py': 'financials/store.py',
+                'financial_price_receipts.py': 'market/financial_price_receipts.py',
                 'financial_business.py': 'financials/business.py',
                 'financial_cohort.py': 'financials/cohort.py',
                 'financial_revenue.py': 'financials/revenue.py',
@@ -225,12 +236,17 @@ class FinancialStore:
             for name,digest in manifest['files'].items():
                 path=(seed/name).resolve()
                 if not path.is_relative_to(seed.resolve()):raise ValueError('invalid_manifest_path')
-                if hashlib.sha256(path.read_bytes()).hexdigest()!=digest:
+                if name=='saved-price.json':
+                    price_raw=price_input_bytes(path,self.price_store)
+                    actual=hashlib.sha256(price_raw).hexdigest()
+                else:
+                    actual=hashlib.sha256(path.read_bytes()).hexdigest()
+                if actual!=digest:
                     raise ValueError('saved_input_hash_mismatch')
             prior=json.loads((seed/'result.json').read_bytes())
             if prior.get('key')!=key or prior.get('snapshot_id')!=sid:
                 raise ValueError('saved_identity_mismatch')
-            saved_stock=json.loads((seed/'saved-price.json').read_bytes())
+            saved_stock=read_price_input(price_raw,seed/'saved-price.json',self.price_store)
             if stock is not None:
                 market,symbol=key.split(':',1)
                 if (not isinstance(stock,dict) or any(

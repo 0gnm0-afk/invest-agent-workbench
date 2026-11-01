@@ -257,13 +257,15 @@ def derive(source, output, reference):
     from market.collect import audit
     from atomic_io import write_json, load
     from market.daily import source_check
+    from market.price_files import PriceFiles
     source, output = Path(source).resolve(), Path(output).resolve()
     source_check(source)
-    snapshot = apply_market(load(source/'snapshot.json'), reference)
+    source_hash = load(source/'manifest.json')['snapshot.json']
+    snapshot = apply_market(PriceFiles().market_snapshot(source/'snapshot.json',source_hash),reference)
     output.mkdir(parents=True, exist_ok=False)
     write_json(output/'snapshot.json', snapshot)
     write_json(output/'summary.json', audit(snapshot))
-    write_json(output/'derivation.json', {'source':str(source),'source_snapshot_sha256':sha(source/'snapshot.json'),
+    write_json(output/'derivation.json', {'source':str(source),'source_snapshot_sha256':source_hash,
                'adr_metadata':reference,'prices_changed':False})
     if (source/'basis').is_dir():
         shutil.copytree(source/'basis', output/'basis')

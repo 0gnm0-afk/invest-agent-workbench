@@ -147,6 +147,55 @@ class RecalculateSaved(unittest.TestCase):
                     self.store.recalculate_saved(self.key,stock=self.current_price(**fields))
                 work.assert_not_called()
 
+    def test_retired_financial_input_replays_then_writes_only_a_verified_reference(self):
+        from market.financial_price_receipts import FinancialPriceFiles, MARKER, read_price_input
+        original=self.current_price(provider='Toss OpenAPI candles',preferred_price={'symbol':'PREF','bar':{'close':7}})
+        store=self.store.price_store
+        active=store.put(original,source='daily',kind='series')
+        path=self.base/'saved-price.json'
+        self.signed_price(original)
+        old_manifest=(self.base/'manifest.json').read_bytes()
+        old_bytes=path.read_bytes()
+        FinancialPriceFiles(store).prepare(path)
+        path.unlink()
+        # A newer correction cannot change the prices used by the old financial report.
+        current=copy.deepcopy(original);current['bars'][0]['close']=11.5
+        store.put(current,source='later',kind='series')
+        with patch('financials.store.Collector') as collector,patch('financials.store.sec_normalize',return_value={}), \
+                patch('financials.store.summarize',return_value={'summary':[]}) as calculate:
+            result=self.store.recalculate_saved(self.key)
+            self.assertEqual(result['state'],'complete')
+            self.assertEqual(calculate.call_args.args[1],original)
+            snapshot=self.folder/'snapshots'/result['result']['snapshot_id']
+            new_path=snapshot/'saved-price.json'
+            marker=json.loads(new_path.read_bytes())
+            self.assertEqual(marker,{'schema':MARKER,'input_sha256':hashlib.sha256(old_bytes).hexdigest()})
+            self.assertEqual(read_price_input(new_path.read_bytes(),new_path,store),original)
+            self.assertEqual(json.loads((snapshot/'manifest.json').read_bytes())['files']['saved-price.json'],
+                             hashlib.sha256(new_path.read_bytes()).hexdigest())
+            self.assertEqual(self.store.recalculate_saved(self.key)['state'],'complete')
+            collector.assert_not_called()
+        self.assertEqual(FinancialPriceFiles(store).recover(path),old_bytes)
+        self.assertEqual((self.base/'manifest.json').read_bytes(),old_manifest)
+        self.assertEqual(store.read(active),original['bars'])
+
+    def test_financial_variant_is_historical_only_and_reused(self):
+        from contextlib import closing
+        from market.financial_price_receipts import pack_price_input,read_price_input
+        store=self.store.price_store
+        live=self.current_price(provider='Toss OpenAPI candles')
+        ref=store.put(live,source='live',kind='series')
+        historical=copy.deepcopy(live);historical['bars'][0]['close']=10
+        paths=[self.folder/'snapshots'/str(n)/'saved-price.json' for n in (1,2)]
+        for path in paths:
+            marker=pack_price_input(historical,path,store)
+            self.assertEqual(read_price_input(packed(marker),path,store),historical)
+        with closing(store.connect()) as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM price_variants').fetchone()[0],1)
+            self.assertEqual(db.execute('SELECT count(*) FROM price_revisions').fetchone()[0],1)
+            self.assertEqual(db.execute('SELECT count(*) FROM price_corrections').fetchone()[0],0)
+        self.assertEqual(store.read(ref),live['bars'])
+
     def test_price_recalculation_rejects_failed_or_incompatible_history(self):
         for fields in ({'bars':[]},*({'history':{'state':s}} for s in ('failed','excluded','unavailable','pending')),
                        {'history':{'state':'partial','daily_update_reason':'listing_identity_changed'}},

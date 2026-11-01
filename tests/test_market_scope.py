@@ -148,6 +148,24 @@ class RefreshTests(unittest.TestCase):
     def run_refresh(self,row=None):return refresh.apply([row or self.row],self.snapshot,checked,{},'2026-10-02T06:00:00+00:00',classification_age_issue,SECTORS)
     def test_exact_identity_and_direct_evidence_refresh(self):
         self.assertEqual(self.run_refresh()[0]['group_name'],'Healthcare');self.assertEqual(self.row['group_state'],'unmatched')
+
+    def test_retired_identity_snapshot_still_verifies_original_classification(self):
+        from market.price_files import PriceFiles
+        from market.prices import PriceStore
+        from test_prices import series
+        path = self.root/'snapshot.json'
+        sample = {**series(),'symbol':'NEW','isin_code':'US0001'}
+        snapshot = json.loads(path.read_bytes())
+        self.write('snapshot.json',{**snapshot,'series':[sample]})
+        self.manifest['identity_snapshot']['sha256'] = self.sha('snapshot.json')
+        self.sync()
+        db = PriceStore(self.root/'ohlcv.sqlite3')
+        db.put(sample,source='test',kind='series')
+        PriceFiles(db).prepare(path)
+        expected = self.run_refresh()
+        path.unlink()
+        with patch('market.price_files.default_path',return_value=db.path):
+            self.assertEqual(self.run_refresh(),expected)
     def test_changed_isin_is_not_inherited(self):
         self.assertEqual(self.run_refresh({**self.row,'isin_code':'US0002'})[0]['group_state'],'unmatched')
     def test_tampered_html_is_rejected(self):

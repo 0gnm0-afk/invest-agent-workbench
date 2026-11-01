@@ -16,7 +16,7 @@ def apply(groups, snapshot, checked, inputs, applied, age_issue, allowed_sectors
     if manifest.get('schema') != 1:
         raise ValueError('invalid_classification_refresh_schema')
     source = checked(Path(manifest['identity_snapshot']['path']), manifest['identity_snapshot']['sha256'], inputs)
-    identities = {(r['market'],r['symbol'],r.get('isin_code'),r['listing_exchange_family']) for r in json.loads(source.read_text(encoding='utf-8'))['universe']}
+    identities = {(r['market'],r['symbol'],r.get('isin_code'),r['listing_exchange_family']) for r in artifact_io.load_json_bytes(source)['universe']}
     updates = {}
     for record in manifest['records']:
         key = tuple(record[k] for k in ('market','symbol','isin_code','exchange'))
@@ -115,15 +115,19 @@ def apply_issuer_links(groups, manifest, identities, checked, inputs, applied, a
 def refresh_classification_source(source, reference, output):
     """A review may refresh classification without changing any market observations."""
     from atomic_io import write_json
+    from market.price_files import PriceFiles
     source,output=Path(source).resolve(),Path(output).resolve()
-    snapshot=artifact_io.load(source/'snapshot.json')
+    manifest=artifact_io.load(source/'manifest.json')
+    source_hash=manifest.get('snapshot.json')
+    snapshot=PriceFiles().market_snapshot(source/'snapshot.json',source_hash)
     if snapshot.get('classification_refresh')==reference:
         return source
+    summary=artifact_io.checked_saved(source/'summary.json',manifest.get('summary.json'))
     output.mkdir(parents=True,exist_ok=False)
     snapshot['classification_refresh']=reference
     write_json(output/'snapshot.json',snapshot)
-    write_json(output/'summary.json',artifact_io.load(source/'summary.json'))
+    write_json(output/'summary.json',summary)
     write_json(output/'classification-derivation.json',{'source':str(source),
-        'source_manifest_sha256':artifact_io.sha(source/'manifest.json'),'source_snapshot_sha256':artifact_io.sha(source/'snapshot.json')})
+        'source_manifest_sha256':artifact_io.sha(source/'manifest.json'),'source_snapshot_sha256':source_hash})
     write_json(output/'manifest.json',{p.name:artifact_io.sha(p) for p in output.iterdir() if p.is_file()})
     return output

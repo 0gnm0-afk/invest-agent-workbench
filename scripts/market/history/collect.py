@@ -43,9 +43,23 @@ def save_checked(path, value):
 
 def read_checked(path):
     packet = json.loads(read_bytes(path))
+    return unpack_checked(packet)
+
+
+def unpack_checked(packet):
     if hashlib.sha256(packed(packet['data'])).hexdigest() != packet['sha256']:
         raise ValueError('saved_hash_mismatch')
-    return packet['data']
+    value = packet['data']
+    if 'bars_ref' not in value:
+        return value
+    from market.prices import PriceStore, identity
+    if value['bars_ref']['identity'] != identity(value):
+        raise ValueError('saved_identity_mismatch')
+    result = {k:v for k,v in value.items() if k not in ('bars_ref','ohlcv_path','data_sha256')}
+    result['bars'] = PriceStore(value['ohlcv_path']).read(value['bars_ref'])
+    if hashlib.sha256(packed(result)).hexdigest() != value['data_sha256']:
+        raise ValueError('saved_hash_mismatch')
+    return result
 
 
 def parse_page(payload, end, currency="USD"):
@@ -99,7 +113,25 @@ class Collector:
         self.log_lock = threading.Lock()
         self.client = client
         self.client_lock = threading.Lock()
+        self.price_lock = threading.Lock()
         self.http_counts = Counter()
+
+    def save_series(self, path, value):
+        if not value['bars']:
+            save_checked(path,value)
+            return
+        from market.prices import PriceStore, default_path
+        # A standalone backfill owns a local DB. A workbench runtime uses its
+        # own configuration, including when that workbench is a test fixture.
+        root = self.root.resolve()
+        runtime = next((p for p in (root,*root.parents) if p.name=='runtime'),None)
+        store = PriceStore(default_path(runtime.parent) if runtime else root/'ohlcv.sqlite3')
+        original_hash = hashlib.sha256(packed(value)).hexdigest()
+        with self.price_lock:
+            ref = store.observe_historical(value,source=str(path.resolve()),kind='archive',source_sha256=original_hash)
+        marker = {k:v for k,v in value.items() if k!='bars'}
+        marker.update(bars_ref=ref,ohlcv_path=str(store.path),data_sha256=original_hash)
+        save_checked(path,marker)
 
     def observe(self, event):
         event = {k:v for k,v in event.items() if k != 'payload'}
@@ -202,7 +234,7 @@ class Collector:
         except (ValueError,KeyError,TypeError,OverflowError) as exc:
             result.update(state='failed',error=str(exc) if isinstance(exc,MarketReadError) else type(exc).__name__+':'+str(exc)[:120])
         result.update(bars=[bars[d] for d in sorted(bars)],responses=sources,first=min(bars) if bars else None,last=max(bars) if bars else None)
-        save_checked(saved,result)
+        self.save_series(saved,result)
         return result
 
     def collect_summary(self, item, end, retry=False):

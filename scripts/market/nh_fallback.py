@@ -1,4 +1,5 @@
 """Qualified NH whole-series fallback for unavailable or unusable Toss observations."""
+from contextlib import closing
 import hashlib
 import json
 import math
@@ -10,7 +11,7 @@ from invest_agent.trading.universe_gate import evaluate as gate
 
 from market.collect import audit
 from atomic_io import write_json, sha, load_bom
-from market.price_files import available
+from market.price_files import PriceFiles, available
 from market.quality import adr_cap_unavailable, is_depositary_receipt
 from market.providers.nh_auth import NHMarketError
 from market.providers.nh_client import MarketClient, PERIOD, KR_PERIOD, CURRENT, us_period_inputs, kr_period_inputs
@@ -204,12 +205,37 @@ def completed_cap(listing, bar, payload, exchange):
             'market_cap_price_basis':'nh_dated_regular_session_close'}
 
 
+def pin_replayed_series(snapshot, recovered):
+    """Preserve newly recovered historical values without changing active price rows."""
+    if not recovered or 'ohlcv_store' not in snapshot:
+        return
+    from market.prices import PriceStore, identity
+    from market.retire_history import HistoricalFiles
+    store = PriceStore(snapshot['ohlcv_store']['path'])
+    with closing(store.connect(write=True)) as db, db:
+        db.execute('BEGIN IMMEDIATE')
+        for row in recovered:
+            history = HistoricalFiles(store,db,only_identity=identity(row))
+            ref = history.reference(row)
+            store.read(ref,connection=db)
+            row['bars_ref'] = ref
+
+
 def recover(source, output, config, *, evidence_root=None, prior_source=None, only_keys=None, allow_auto_exclusions=True):
     source, output = Path(source).resolve(), Path(output).resolve()
     if output.exists():
         raise ValueError('nh_fallback_output_already_exists')
+    path = source/'snapshot.json'
+    manifest = source/'manifest.json'
+    if manifest.exists():
+        source_hash = load_bom(manifest)['snapshot.json']
+    elif path.is_file():
+        # Standalone legacy captures predate manifests. Pin their physical bytes.
+        source_hash = sha(path)
+    else:
+        raise FileNotFoundError(manifest)
+    original = PriceFiles().market_snapshot(path,source_hash)
     output.mkdir(parents=True)
-    original = load_bom(source/'snapshot.json')
     import market.scope as market_scope
     policy = market_scope.load()
     write_json(output/'input-scope-policy.json',policy)
@@ -351,6 +377,7 @@ def recover(source, output, config, *, evidence_root=None, prior_source=None, on
         results.append(report)
         write_json(output/'progress.json',{'targets':len(targets),'completed':len(results),
                                            'adopted':len(recovered)+len(metadata_recovered),'results':results})
+    pin_replayed_series(original,recovered)
     adopted = {(r['market'],r['symbol']) for r in recovered}
     original['series'] = sorted([r for r in original['series'] if (r['market'],r['symbol']) not in adopted]
                                 +recovered,key=lambda r:(r['market'],r['symbol']))
@@ -381,7 +408,7 @@ def recover(source, output, config, *, evidence_root=None, prior_source=None, on
         frozen.update(path=str(output/'scope-policy.json'),sha256=sha(output/'scope-policy.json'))
         original = market_scope.apply_snapshot(original,frozen)
     original['collected_until'] = datetime.now(timezone.utc).isoformat()
-    summary = {**audit(original),'schema':1,'original_source':str(source),'original_snapshot_sha256':sha(source/'snapshot.json'),
+    summary = {**audit(original),'schema':1,'original_source':str(source),'original_snapshot_sha256':source_hash,
                'nh_evidence_root':str(evidence_root) if evidence_root else str(output),
                'completed_at':original['collected_until'],'attempted':len(targets),
                'adopted':len(recovered)+len(metadata_recovered),'unrecovered':len(targets)-len(recovered)-len(metadata_recovered)-len(new_exclusions),'results':results,'automatic_exclusions':new_exclusions,'metadata_recovered':len(metadata_recovered)}

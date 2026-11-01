@@ -76,7 +76,7 @@ class MarketOnlyTests(base_tests.TossMarketPipelineTests):
             config = root / 'input.json'
             config.write_text(json.dumps(self.config))
             with patch.object(m, 'completed_sessions', return_value=self.days), \
-                    patch.object(m, 'default_path', return_value=root/'ohlcv.sqlite3'), \
+                    patch.object(m, 'default_path', return_value=self.root/'ohlcv.sqlite3'), \
                     patch.object(m, 'TossMarketClient') as client, \
                     patch.object(m, 'collect', return_value=snapshot) as collector:
                 first = m.run(root, config)

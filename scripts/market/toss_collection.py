@@ -185,6 +185,18 @@ def _collect(config, account, root, get, now, refresh, prior_series, prior_sourc
             raise ValueError('approved_market_exclusion')
         if market not in sessions:
             raise ValueError('completed_sessions_unavailable')
+        currency = 'KRW' if market == 'KR' else 'USD'
+        expected_code = provider_symbol or (
+            'KOSPI' if symbol == '^KS11' else 'KOSDAQ' if symbol == '^KQ11' else
+            'SPY' if symbol == '^GSPC' else symbol.split('.')[0] if market == 'KR' else symbol)
+        expected_basis = ('toss_index_points_observation_only' if symbol in ('^KS11', '^KQ11')
+                          else 'toss_raw_ohlc_no_order_authority' if raw else 'toss_adjusted_ohlc_no_order_authority')
+        def matches_instrument(row):
+            return (row.get('market') == market and row.get('symbol') == symbol
+                    and row.get('provider') == 'Toss OpenAPI candles' and row.get('provider_symbol') == expected_code
+                    and row.get('currency') == currency and row.get('benchmark') == benchmark
+                    and row.get('price_basis') == expected_basis and (listing is None or all(
+                        row.get(field) == listing.get(field) for field in ('isin_code','listing_exchange_family'))))
         identity = {
             'market': market, 'symbol': symbol, 'provider_symbol': provider_symbol,
             'benchmark': benchmark, 'sessions': sessions[market],
@@ -199,64 +211,86 @@ def _collect(config, account, root, get, now, refresh, prior_series, prior_sourc
                 if (cached['key'] == key and digest(cached['payload']) == cached['hash']
                         and 0 <= (now - observed).total_seconds() <= 86400):
                     payload = cached['payload']
+                    if listing is not None and any(payload.get(field) != listing.get(field)
+                                                   for field in ('isin_code','listing_exchange_family')):
+                        raise ValueError('checkpoint_instrument_changed')
                     if 'bars_ref' in payload:
                         payload = {**payload, 'bars': PriceStore(cached['ohlcv_path']).read(payload['bars_ref'])}
                     usable_tail(payload['bars'], sessions[market])
                     return payload, 'cache'
             except (OSError, ValueError, KeyError, TypeError):
                 pass
+        price_store = PriceStore(config.get('ohlcv_path') or root/'ohlcv.sqlite3')
         previous = prior_series.pop((market, symbol), None) if not raw and not refresh else None
+        seed_source = prior_source
+        if not refresh and previous is None:
+            previous = price_store.daily_seed({**(listing or {}),'market':market,'symbol':symbol,
+                'currency':currency,'provider':'Toss OpenAPI candles',
+                'price_basis':expected_basis}, sessions[market][-1],config.get('seed_revision'))
+            if previous:
+                seed_source = {'series_id':previous['bars_ref']['series_id'],'revision':previous['bars_ref']['revision']}
         previous_bars = previous.get('bars', []) if isinstance(previous, dict) else []
         if isinstance(previous_bars, list):
             previous_bars = [bar for bar in previous_bars if bar.get('date') in sessions[market]]
         prior_dates = [bar.get('date') for bar in previous_bars] if isinstance(previous_bars, list) else []
-        expected_basis = ('toss_index_points_observation_only' if symbol in ('^KS11', '^KQ11')
-                          else 'toss_adjusted_ohlc_no_order_authority')
-        identity_ok = (previous and previous.get('provider') == 'Toss OpenAPI candles'
-                       and previous.get('market') == market and previous.get('symbol') == symbol
-                       and previous.get('benchmark') == benchmark
-                       and previous.get('provider_symbol') == (provider_symbol or
-                           ('KOSPI' if symbol == '^KS11' else 'KOSDAQ' if symbol == '^KQ11' else
-                            'SPY' if symbol == '^GSPC' else symbol.split('.')[0] if market == 'KR' else symbol))
-                       and previous.get('price_basis') == expected_basis
-                       and previous.get('currency') == ('KRW' if market == 'KR' else 'USD')
-                       and (listing is None or all(previous.get(field) == listing.get(field)
-                           for field in ('isin_code', 'listing_exchange_family')))
-                       and prior_dates and prior_dates == sorted(set(prior_dates))
-                       and prior_dates[-1] in sessions[market]
-                       and all(day in sessions[market] for day in prior_dates))
+        identity_ok = previous and matches_instrument(previous) and prior_dates
         if identity_ok:
             try:
                 check_bars(previous_bars, [day for day in sessions[market] if day <= prior_dates[-1]])
-                full_at = datetime.fromisoformat(previous.get('collection', {}).get(
-                    'full_history_collected_at') or previous['collected_at'])
-                identity_ok = 0 <= (now - full_at).total_seconds() < 30 * 86400
+                history = previous.get('collection', {})
+                full_at = datetime.fromisoformat(history.get('full_history_collected_at') or previous['collected_at'])
+                full_start = history.get('full_history_requested_from') or history.get('first_requested_session')
+                # A young listing can have fewer bars than the calendar. A
+                # previous request that never covered the required prefix cannot establish that.
+                prefix_known = not full_start or min(prior_dates[0], full_start) <= sessions[market][0]
+                identity_ok = prefix_known and (now - full_at).total_seconds() >= 0
             except (ValueError, KeyError, TypeError):
                 identity_ok = False
         mode = 'full'
+        refresh_reason = None
         if identity_ok:
             boundary = prior_dates[-1]
-            gap = len([day for day in sessions[market] if day > boundary])
-            recent = daily_series(get, symbol, market, sessions[market], benchmark=benchmark,
-                                  provider_symbol=provider_symbol, adjusted=True,
-                                  stop_on_or_before=boundary, page_size=min(200, max(32, gap + 32)))
+            recent_sessions = [day for day in sessions[market] if day >= boundary]
+            recent = daily_series(get, symbol, market, recent_sessions, benchmark=benchmark,
+                                  provider_symbol=provider_symbol, adjusted=not raw,
+                                  stop_on_or_before=boundary, page_size=min(200, len(recent_sessions)))
             recent_by_date = {bar['date']: bar for bar in recent['bars']}
             old_by_date = {bar['date']: bar for bar in previous_bars}
             overlap = set(recent_by_date) & set(old_by_date)
-            if boundary in overlap and len(overlap) >= min(5, len(old_by_date)) and all(
-                    old_by_date[day] == recent_by_date[day] for day in overlap):
+            if boundary not in overlap:
+                raise ValueError('market_boundary_missing')
+            if not set(recent_sessions) <= recent_by_date.keys():
+                raise ValueError('market_completed_session_missing')
+            if old_by_date[boundary] == recent_by_date[boundary]:
                 merged = {**old_by_date, **recent_by_date}
                 value = {**recent, 'bars': [merged[day] for day in sorted(merged)]}
                 value.setdefault('collection', {}).update(mode='incremental', overlap_bars=len(overlap),
-                    prior_source=prior_source, full_history_collected_at=full_at.isoformat(),
+                    prior_source=seed_source, full_history_collected_at=full_at.isoformat(),
+                    full_history_requested_from=full_start or prior_dates[0],
                     new_bars=sum(day not in old_by_date for day in recent_by_date))
                 mode = 'incremental'
             else:
                 mode = 'overlap_refresh'
+                refresh_reason = 'boundary_price_or_volume_changed'
         if mode != 'incremental':
             value = daily_series(get, symbol, market, sessions[market], benchmark=benchmark,
                                  provider_symbol=provider_symbol, adjusted=not raw)
-            value.setdefault('collection', {}).update(mode=mode, full_history_collected_at=now.isoformat())
+            value.setdefault('collection', {}).update(mode=mode, full_history_collected_at=now.isoformat(),
+                                                      full_history_requested_from=sessions[market][0])
+            if refresh_reason:
+                # A correction must re-observe the previous range and the new
+                # sessions under the same basis before replacing the old view.
+                observed = {b['date'] for b in value['bars']}
+                if not set(prior_dates).union(recent_sessions) <= observed:
+                    raise ValueError('market_corrected_history_incomplete')
+                try:
+                    check_bars(value['bars'], sessions[market])
+                except (ValueError, KeyError, TypeError) as exc:
+                    raise ValueError('market_corrected_history_invalid') from exc
+                refetched = {b['date']:b for b in value['bars']}
+                if any(refetched[day] != recent_by_date[day] for day in recent_sessions):
+                    raise ValueError('market_correction_responses_disagree')
+                value['collection'].update(refresh_reason=refresh_reason,boundary=boundary)
         if benchmark is not None and value.get('instrument_type') != 'EQUITY':
             raise ValueError('not_equity')
         value['benchmark'] = benchmark
@@ -265,7 +299,6 @@ def _collect(config, account, root, get, now, refresh, prior_series, prior_sourc
         usable_tail(value['bars'], sessions[market])
         value['collected_at'] = now.isoformat()
         # The resume checkpoint keeps a reference; the DB owns the actual bars.
-        price_store = PriceStore(config.get('ohlcv_path') or root/'ohlcv.sqlite3')
         stored = freeze_series(price_store, {**value, **{k:listing[k] for k in
                                ('isin_code','listing_exchange_family') if listing and k in listing}},
                                source=str(path), kind='checkpoint')
@@ -273,7 +306,7 @@ def _collect(config, account, root, get, now, refresh, prior_series, prior_sourc
             'key': key, 'observed_at': now.isoformat(), 'payload': stored, 'hash': digest(stored),
             'ohlcv_path': str(price_store.path),
         }))
-        return value, mode
+        return {**value,'bars_ref':stored['bars_ref']}, mode
 
     benchmarks = {}
     benchmark_markets = {}
