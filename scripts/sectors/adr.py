@@ -35,7 +35,8 @@ def sha(path):
 
 
 def read(path):
-    return json.loads(Path(path).read_text(encoding='utf-8'))
+    from atomic_io import load
+    return load(path)
 
 
 def write(path, value):
@@ -258,11 +259,11 @@ def apply_groups(groups, snapshot, inputs, applied=None):
 
 def derive(source, output, reference):
     from market.collect import audit
-    from atomic_io import write_json
+    from atomic_io import write_json, load
     from market.daily import source_check
     source, output = Path(source).resolve(), Path(output).resolve()
     source_check(source)
-    snapshot = apply_market(read(source/'snapshot.json'), reference)
+    snapshot = apply_market(load(source/'snapshot.json'), reference)
     output.mkdir(parents=True, exist_ok=False)
     write_json(output/'snapshot.json', snapshot)
     write_json(output/'summary.json', audit(snapshot))

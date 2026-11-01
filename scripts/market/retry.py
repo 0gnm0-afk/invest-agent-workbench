@@ -15,6 +15,7 @@ from market.providers.toss_candles import daily_series
 from market.providers.toss_client import TossMarketClient
 from market.providers.toss_universe import _number
 from market.toss_collection import failure_code
+from market.prices import digest
 import market.exclusions as review
 
 
@@ -32,6 +33,7 @@ def toss_retry(snapshot, issues, get):
     outcomes=[]
     for issue in issues:
         k=key(issue);row=listings[k];sessions=result['sessions'][row['market']]
+        reports.setdefault(k, {'market':k[0],'symbol':k[1]})
         code=row.get('provider_symbol') or row['symbol'];at=review.now()
         outcome={'market':k[0],'symbol':k[1],'provider':'toss','state':'unavailable'}
         try:
@@ -73,7 +75,7 @@ def toss_retry(snapshot, issues, get):
     for issue in issues:
         k=key(issue)
         if k in remaining and reports[k].get('toss_error_code')!=remaining[k]['error_code']:
-            reports[k].update(toss_error_code=remaining[k]['error_code'],state='unavailable',reason='manual_retry_pending',nh_requested=True)
+            reports[k].update(toss_error_code=remaining[k]['error_code'],state='unavailable',reason='manual_retry_pending',nh_requested=False)
     result.setdefault('nh_fallback',{})['results']=list(reports.values())
     result['collected_until']=review.now()
     result['collection_stats'].update(requested=len(result['universe']),received=len(result['series']),failed=len(result['errors']))
@@ -94,6 +96,7 @@ def apply_retry(root, registry_path, job_id):
     with instance_lock(root/'runtime/dashboard-daily'),instance_lock(root/'runtime'):
         value,_=review.registry(registry_path);job=value['jobs'][-1]
         if job['id']!=job_id: raise review.ReviewConflict('exclusion_job_changed')
+        if job.get('provider') != 'toss': raise ValueError('single_provider_toss')
         if job.get('result_run'): return
         current,_,_=review.latest(root)
         if str(current)!=job['source_run']:
@@ -119,7 +122,9 @@ def apply_retry(root, registry_path, job_id):
                 counter=0
                 def observer(row):
                     nonlocal counter
-                    counter+=1;write_json(source/'retry-evidence'/f'{counter:06}.json',row)
+                    receipt={k:v for k,v in row.items() if k != 'payload'}
+                    if 'payload' in row: receipt['payload_sha256']=digest(row['payload'])
+                    counter+=1;write_json(source/'retry-evidence'/f'{counter:06}.json',receipt)
                 get=TossMarketClient(observer=observer)
                 snapshot,outcomes=toss_retry(snapshot,job['issues'],get)
                 write_json(source/'retry-results.json',outcomes)

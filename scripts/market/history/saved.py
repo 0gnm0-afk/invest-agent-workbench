@@ -54,15 +54,19 @@ def with_daily(packet, stock, listing):
     overlap = [b for b in current if b['date'] in prior]
     if not reason and (not overlap or (historical and historical[-1]['date'] not in dates)):
         reason = 'history_overlap_unavailable'
-    if not reason and any(not math.isclose(b[k], prior[b['date']][k], rel_tol=1e-8, abs_tol=1e-8)
+    verified = set(info.get('verified_correction_dates', []))
+    if not reason and any(b['date'] not in verified and not math.isclose(b[k], prior[b['date']][k], rel_tol=1e-8, abs_tol=1e-8)
                           for b in overlap for k in ('open', 'high', 'low', 'close', 'volume')):
         reason = 'history_overlap_changed'
     combined = current if reason else [b for b in historical if b['date'] < dates[0]] + current
-    return {'series': {**stock, 'bars': combined}, 'history': {
+    combined_series={k:v for k,v in stock.items() if k != 'bars_ref'}
+    if stock.get('bars_ref'):
+        combined_series['daily_bars_ref']=stock['bars_ref']
+    return {'series': {**combined_series, 'bars': combined}, 'history': {
         **info, 'state': 'partial' if reason or info['state'] == 'partial' else 'complete',
         'reason': reason or info.get('reason'),
         'archive_requested_end': info.get('requested_end'), 'requested_end': dates[-1],
-        'daily_as_of': dates[-1], 'daily_update_mode': 'daily_only' if reason else 'merged',
+        'daily_as_of': dates[-1], 'daily_update_mode': 'daily_only' if reason else 'merged_with_corrections' if verified else 'merged',
         'daily_update_reason': reason, 'overlap_count': len(overlap),
         'screening_newer_than_history': False,
         'screening_price_difference': reason in ('price_basis_changed', 'history_overlap_changed'),
@@ -187,8 +191,14 @@ class SavedUSHistory(SavedHistory):
 
 class SavedMarketHistories:
     def __init__(self, root):
-        self.markets = {m: SavedHistory(Path(root) / (m.lower() + '-history/active.json'), m)
-                        for m in ('US', 'KR')}
+        from market.prices import PriceStore, default_path
+        root = Path(root)
+        path = default_path(root.parent) if (root.parent/'config.json').exists() else root/'ohlcv.sqlite3'
+        store = PriceStore(path)
+        # No partial migration may silently replace the verified legacy archive.
+        ready = store.meta('archive_import_complete', False)
+        self.markets = {m: DBHistory(store, m) if ready else
+                        SavedHistory(root / (m.lower() + '-history/active.json'), m) for m in ('US', 'KR')}
         from market.scope import load, match
         policy = load()
         self.stocks = {k: v for history in self.markets.values() for k, v in history.stocks.items()
@@ -197,3 +207,49 @@ class SavedMarketHistories:
     def packet(self, stock):
         history = self.markets.get(stock.get('market'))
         return history.packet(stock) if history else None
+
+
+class DBHistory(SavedHistory):
+    """Use the same audit/quality rules, with every archive bar resolved by DB reference."""
+    def __init__(self, store, market):
+        self.store, self.market = store, market
+        self.currency = {'KR':'KRW', 'US':'USD'}[market]
+        catalog = store.meta('archive_'+market)
+        self.enabled, self.error = bool(catalog), False
+        self.stocks = {}
+        if not catalog:
+            return
+        self.root = Path(catalog['source'])
+        self.config, self.listings, self.coverage = (catalog[k] for k in ('config','listings','coverage'))
+        self.references = catalog['references']
+        self.stocks = {market+':'+s: dict(market=market,symbol=s,name=x.get('name') or s,
+                       currency=self.currency,bars=[],provider='Toss OpenAPI candles') for s,x in self.listings.items()}
+
+    def read(self, name, wrapped=False):
+        if not name.startswith('series/'):
+            raise ValueError('db_history_series_only')
+        ref, metadata = self.references[name]
+        return {**metadata, 'bars': self.store.read(ref)}
+
+    def packet(self, stock):
+        result=super().packet(stock)
+        ref=stock.get('bars_ref')
+        if not result or result['history'].get('daily_update_reason') != 'history_overlap_changed' or not ref:
+            return result
+        from market.prices import identity, normalized
+        try:
+            if ref['identity'] != identity(stock) or normalized(self.store.read(ref)) != normalized(stock['bars']):
+                return result
+            archive=super().packet({**stock,'bars':[]})
+            prior={b['date']:b for b in archive['series']['bars']}
+            changes=[b['date'] for b in stock['bars'] if b['date'] in prior and any(
+                     not math.isclose(b[k],prior[b['date']][k],rel_tol=1e-8,abs_tol=1e-8)
+                     for k in ('open','high','low','close','volume'))]
+            # A verified isolated bar correction can be replaced directly. A
+            # multi-date adjustment may also affect older, unrefetched history.
+            if len(changes) != 1:
+                return result
+            archive['history'].update(verified_correction_dates=changes,correction_reference=ref)
+            return with_daily(archive,stock,self.listings[stock['symbol']])
+        except (ValueError,KeyError,TypeError,OSError):
+            return result

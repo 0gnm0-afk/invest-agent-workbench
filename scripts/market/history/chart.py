@@ -9,7 +9,8 @@ import sqlite3
 import threading
 from zoneinfo import ZoneInfo
 
-from market.history.saved import SavedMarketHistories
+from market.history.saved import SavedMarketHistories, with_daily
+from market.prices import PriceStore, default_path, freeze_series
 from market.providers.toss_candles import daily_series
 from market.providers.toss_client import TossMarketClient, MarketReadError
 
@@ -69,6 +70,9 @@ class HistoryStore:
         self.client_factory = client_factory
         self.client = None
         self.saved = SavedMarketHistories(self.path.parent)
+        parent = self.path.parent
+        self.prices = PriceStore(default_path(parent.parent) if (parent.parent/'config.json').exists()
+                                 else parent/'ohlcv.sqlite3')
 
     def connect(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -77,11 +81,42 @@ class HistoryStore:
         return db
 
     def identity(self, stock):
-        return hashlib.sha256(json.dumps(stock, sort_keys=True, allow_nan=False).encode()).hexdigest()
+        fields=('market','symbol','currency','provider','price_basis','isin_code','listing_exchange_family')
+        return hashlib.sha256(json.dumps({k:stock.get(k) for k in fields},sort_keys=True,allow_nan=False).encode()).hexdigest()
+
+    def legacy_identity(self, stock):
+        value={k:v for k,v in stock.items() if k != 'bars_ref'}
+        return hashlib.sha256(json.dumps(value,sort_keys=True,allow_nan=False).encode()).hexdigest()
 
     def cached(self, stock):
+        if self.prices.path.exists():
+            failed = self.prices.meta('selected:'+self.identity(stock))
+            if failed:
+                return failed
+            sid = self.prices.find(stock)
+            obs = self.prices.observation(sid, 'selected') if sid is not None else None
+            if not obs:
+                legacy_key=self.legacy_identity(stock)
+                failed=self.prices.meta('legacy-selected:'+legacy_key)
+                if failed: return failed
+                obs=self.prices.source_observation(str(self.path.resolve())+':'+legacy_key,'selected')
+            if obs:
+                ref, meta, _ = obs
+                bars = self.prices.read(ref)
+                prior = {b['date']:b for b in stock.get('bars', [])}
+                differs = any(b['date'] in prior and any(not math.isclose(b[k],prior[b['date']][k],rel_tol=1e-8,abs_tol=1e-8)
+                              for k in ('open','high','low','close')) for b in bars)
+                packet={'series':{**meta, 'bars':bars},'history':{
+                        'requested_end':bars[-1]['date'] if bars else '',
+                        **meta['selected_history'],'screening_price_difference':differs}}
+                listing={'isinCode':meta.get('isin_code'),'listing_exchange':meta.get('listing_exchange_family')}
+                return with_daily(packet,stock,listing)
+            if self.prices.meta('archive_import_complete',False):
+                return None
+        if not self.path.exists():
+            return None
         with closing(self.connect()) as db, db:
-            row = db.execute('SELECT payload,sha256 FROM history WHERE identity=?', (self.identity(stock),)).fetchone()
+            row = db.execute('SELECT payload,sha256 FROM history WHERE identity=?', (self.legacy_identity(stock),)).fetchone()
         if not row:
             return None
         if hashlib.sha256(row[0].encode()).hexdigest() != row[1]:
@@ -154,9 +189,14 @@ class HistoryStore:
                     known = {'saved_cutoff_missing','saved_cutoff_not_received','invalid_history_ohlc','invalid_history_value','invalid_history_dates','history_outside_bounds'}
                     reason = str(exc) if str(exc) in known or isinstance(exc, MarketReadError) else 'history_collection_failed'
                     packet = {'history':{'state':'failed','reason':reason, 'attempted_at':datetime.now(timezone.utc).isoformat()}}
-                body = json.dumps(packet, ensure_ascii=False, allow_nan=False)
-                with closing(self.connect()) as db, db:
-                    db.execute('INSERT OR REPLACE INTO history VALUES (?,?,?)', (self.identity(stock),body,hashlib.sha256(body.encode()).hexdigest()))
+                if 'series' in packet:
+                    freeze_series(self.prices, {**stock, **packet['series'], 'selected_history':packet['history']},
+                                  source='selected:'+self.identity(stock), kind='selected')
+                    self.prices.set_meta('selected:'+self.identity(stock), None)
+                else:
+                    self.prices.set_meta('selected:'+self.identity(stock), packet)
+                    self.prices.failure('selected_history', packet['history']['reason'],
+                                        market=stock['market'], symbol=stock['symbol'])
                 return self.view(stock)
         except BusyError:
             value = self.view(stock)

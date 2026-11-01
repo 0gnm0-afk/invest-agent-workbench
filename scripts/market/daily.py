@@ -1,4 +1,4 @@
-"""One private market cycle: Toss collection, qualified NH failure fallback, analysis."""
+"""One private market cycle: Toss collection, shared price references and analysis."""
 
 if not __package__:
     import sys
@@ -297,7 +297,12 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
                 run['incremental_seed'] = str(previous)
             source = Path(artifact_io.load(collection_root/'latest.json')['attempt'])
             update(stage, 'completed')
-        if mode not in ('replay','review'):
+        if mode not in ('replay','review') and config.get('ohlcv',{}).get('provider') == 'toss' and not nh_evidence:
+            run['toss_source'] = str(source)
+            run['nh_fallback'] = {'attempted':0, 'adopted':0, 'unrecovered':0,
+                                  'reason':'single_provider_toss'}
+            update('nh_fallback', 'not_requested_single_provider')
+        elif mode not in ('replay','review'):
             original_source = source
             run['toss_source'] = str(original_source)
             source_check(original_source)

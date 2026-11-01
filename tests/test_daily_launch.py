@@ -150,9 +150,10 @@ class Launch(unittest.TestCase):
         refresh.assert_called_once_with(self.root,new['output'],self.targets)
         self.gate.accounts=True
         order=[]
-        with patch('accounts.refresh_account_snapshot',side_effect=lambda root: (order.append('account') or {'query_state':'received'})) as account, patch('alerts.trailing.refresh_saved',side_effect=lambda *a:order.append('risk')), patch('alerts.delivery.dispatch',side_effect=lambda *a,**kw: (order.append('telegram') or {'state':'ready'})) as delivery:
+        with patch('accounts.refresh_account_snapshot',side_effect=lambda root, **kw: (order.append('account') or {'query_state':'received'})) as account, patch('alerts.trailing.refresh_saved',side_effect=lambda *a:order.append('risk')), patch('alerts.delivery.dispatch',side_effect=lambda *a,**kw: (order.append('telegram') or {'state':'ready'})) as delivery:
             got=self.gate.execute({**self.plan(NOW),'prior_run':old['output']},lambda _:None)
-        self.assertEqual(order,['account','risk','telegram']);account.assert_called_once_with(self.root)
+            self.assertEqual(order,['account','risk','telegram']);self.assertEqual(account.call_args.args,(self.root,))
+            self.assertEqual(account.call_args.kwargs['request_id'],'daily:'+got['output'])
         delivery.assert_called_once_with(self.root,self.targets,include_trailing=True,include_scenarios=False)
         self.assertEqual(got['telegram_state'],'ready')
         self.assertEqual(got['account_state'],'received')

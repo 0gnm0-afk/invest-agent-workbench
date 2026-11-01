@@ -16,6 +16,7 @@ from launch.daily import capped_sessions
 from market.providers.toss_universe import discover
 from market.quality import complete_cap, error_disposition
 import market.scope as market_scope
+from market.prices import PriceStore, freeze_series, default_path
 
 COLLECTOR_ID = 'toss_openapi_kr_us_v1'
 
@@ -48,6 +49,7 @@ def collector_version():
         'market/scope.py',
         'market/policies/exclusions.json',
         'atomic_io.py',
+        'market/prices.py',
         'workbench_paths.py',
     )])
 
@@ -70,6 +72,7 @@ def make_collector(root):
             raise CollectorUnavailableError('Yahoo-era US seed reuse is not valid for the Toss-only collector')
         if client is None:
             client = TossMarketClient()
+        request={**request,'ohlcv_path':str(default_path(root))}
         return collect(request, {}, Path(root) / 'market-cache', client, now=evaluated_at,
                        refresh=request.get('refresh_market', False))
 
@@ -193,8 +196,11 @@ def _collect(config, account, root, get, now, refresh, prior_series, prior_sourc
                 observed = datetime.fromisoformat(cached['observed_at'])
                 if (cached['key'] == key and digest(cached['payload']) == cached['hash']
                         and 0 <= (now - observed).total_seconds() <= 86400):
-                    usable_tail(cached['payload']['bars'], sessions[market])
-                    return cached['payload'], 'cache'
+                    payload = cached['payload']
+                    if 'bars_ref' in payload:
+                        payload = {**payload, 'bars': PriceStore(cached['ohlcv_path']).read(payload['bars_ref'])}
+                    usable_tail(payload['bars'], sessions[market])
+                    return payload, 'cache'
             except (OSError, ValueError, KeyError, TypeError):
                 pass
         previous = prior_series.pop((market, symbol), None) if not raw and not refresh else None
@@ -256,8 +262,14 @@ def _collect(config, account, root, get, now, refresh, prior_series, prior_sourc
             raise ValueError('no_completed_session_bars')
         usable_tail(value['bars'], sessions[market])
         value['collected_at'] = now.isoformat()
+        # The resume checkpoint keeps a reference; the DB owns the actual bars.
+        price_store = PriceStore(config.get('ohlcv_path') or root/'ohlcv.sqlite3')
+        stored = freeze_series(price_store, {**value, **{k:listing[k] for k in
+                               ('isin_code','listing_exchange_family') if listing and k in listing}},
+                               source=str(path), kind='checkpoint')
         atomic_write(path, json.dumps({
-            'key': key, 'observed_at': now.isoformat(), 'payload': value, 'hash': digest(value),
+            'key': key, 'observed_at': now.isoformat(), 'payload': stored, 'hash': digest(stored),
+            'ohlcv_path': str(price_store.path),
         }))
         return value, mode
 
@@ -356,6 +368,7 @@ def _collect(config, account, root, get, now, refresh, prior_series, prior_sourc
         'classification_refresh': config.get('classification_refresh'),
         'user_classification': config.get('user_classification'),
         'schema_version': 1,
+        'price_collection_provider': 'toss',
         'source': 'live_public',
         'fetched_at': now.isoformat(),
         'collected_until': datetime.now(timezone.utc).isoformat(),
@@ -375,7 +388,6 @@ def _collect(config, account, root, get, now, refresh, prior_series, prior_sourc
             'listings': listings,
             'scope_errors': scope_errors,
             'market_wide': bool(listings and not scope_errors and not errors
-                                and not any(str(r.get('market_cap_quality', '')).startswith('unavailable') for r in universe)
                                 and len(series) == len(universe)
                                 and config.get('limit_per_exchange') is None),
         },

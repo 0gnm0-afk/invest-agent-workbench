@@ -90,7 +90,7 @@ class TossMarketPipelineTests(unittest.TestCase):
         self.run_collect()
         path = next((self.root / 'series').glob('*.json'))
         payload = json.loads(path.read_text())
-        payload['payload']['bars'][0]['close'] = 999
+        payload['payload']['bars_ref']['sha256'] = 'tampered'
         path.write_text(json.dumps(payload))
         self.run_collect()
         self.assertEqual(self.candles.call_count, 5)

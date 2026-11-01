@@ -73,13 +73,21 @@ class History(unittest.TestCase):
         def short(path,params):
             packet=self.client(path,params);packet['result']['candles']=packet['result']['candles'][:1];return packet
         s=HistoryStore(self.path,lambda:short);self.assertEqual(s.ensure(self.stock)['history']['state'],'partial')
+    def test_selected_history_uses_daily_extension_without_another_download(self):
+        store=HistoryStore(self.path,lambda:self.client);first=store.ensure(self.stock)
+        daily={**self.stock,'price_basis':first['price_basis'],'provider':first['provider'],
+               'bars':[bar('2026-09-24'),bar('2026-09-25')]}
+        extended=store.ensure(daily)
+        self.assertEqual(extended['bars'][-1]['date'],'2026-09-25')
+        self.assertEqual(extended['history']['daily_update_mode'],'merged')
+        self.assertEqual(len(self.calls),1)
     def test_cutoff_not_silently_advanced(self):
         def wrong(path,params):
             packet=self.client(path,params);packet['result']['candles']=packet['result']['candles'][1:];return packet
         s=HistoryStore(self.path,lambda:wrong);r=s.ensure(self.stock);self.assertEqual(r['history']['state'],'failed');self.assertEqual(r['history']['last'],'2026-09-24')
     def test_cache_tampering_and_input_validation(self):
         s=HistoryStore(self.path,lambda:self.client);s.ensure(self.stock)
-        with closing(sqlite3.connect(self.path)) as db, db:db.execute("UPDATE history SET payload='{}'")
+        with closing(sqlite3.connect(s.prices.path)) as db, db:db.execute('UPDATE prices SET close=999')
         self.assertEqual(s.view(self.stock)['history']['state'],'failed')
         with self.assertRaises(ValueError):validate_bars([bar('2026-10-01')],'2026-09-24')
         with self.assertRaises(ValueError):validate_bars([dict(bar('2026-09-24'),low=100)],'2026-09-24')

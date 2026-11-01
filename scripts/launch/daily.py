@@ -257,7 +257,7 @@ class DailyLaunch:
             result['account_attempted'] = True
             try:
                 from accounts import refresh_account_snapshot
-                account = refresh_account_snapshot(self.root)
+                account = refresh_account_snapshot(self.root, request_id='daily:'+result['output'])
                 result['account_state'] = account['query_state']
                 result['account_error'] = account.get('reason')
             except Exception:

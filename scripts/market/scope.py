@@ -145,7 +145,8 @@ def refresh_coverage(snapshot):
     active = snapshot['universe']
     complete = (bool(cov.get('listings')) and all(m.get('state')=='available' and m.get('limit') is None for m in cov['listings'].values())
                 and not cov['scope_errors'] and not snapshot['errors'] and len(active)==len(snapshot['series'])
-                and not any(str(r.get('market_cap_quality','')).startswith('unavailable') for r in active))
+                and (snapshot.get('price_collection_provider') == 'toss' or
+                     not any(str(r.get('market_cap_quality','')).startswith('unavailable') for r in active)))
     cov['active_scope_complete'] = bool(complete)
     cov['market_wide'] = False if snapshot.get('scope_exclusions') else cov['market_wide']
 

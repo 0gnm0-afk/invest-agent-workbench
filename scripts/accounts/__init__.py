@@ -5,6 +5,8 @@ from pathlib import Path
 import sys
 from atomic_io import load_bom as load, sha, write_new_json as write, checked_saved as checked, utc_now as now
 from workbench_paths import ROOT
+from accounts.store import AccountStore
+import uuid
 
 
 def collect_balances(reader, pages, error_type):
@@ -50,7 +52,8 @@ def collect_balances(reader, pages, error_type):
             'accounts': accounts, 'endpoint_calls': calls}
 
 
-def account_view(config, output, refresh=True, saved_dashboard_root=None):
+def account_view(config, output, refresh=True, saved_dashboard_root=None, request_id=None):
+    store = AccountStore(Path(saved_dashboard_root or output.parent).parent/'accounts.sqlite3')
     mother = Path(config['mother'])
     # Reuse account-only adapters without shadowing current market/chart modules.
     mother_scripts = str(mother / 'scripts')
@@ -65,6 +68,11 @@ def account_view(config, output, refresh=True, saved_dashboard_root=None):
     previous = None
     previous_meta = None
     previous_score = None
+    latest_record = store.latest('nh')
+    if latest_record:
+        previous = store.read(latest_record['snapshot_ref'])
+        previous_meta = store.latest_attempt('nh') or latest_record
+        previous_score = (previous['as_of'], previous_meta.get('attempted_at',''))
     for path in previous_paths:
         try:
             candidate = load(path)
@@ -83,10 +91,20 @@ def account_view(config, output, refresh=True, saved_dashboard_root=None):
               'accounts': [], 'as_of': None, 'source_mode': 'missing', 'risk': None,
               'endpoint_calls': [], 'limitations': [], 'snapshot_sha256': None}
     snapshot = None
+    observation_ref = None
+    lease = store.begin('nh', request_id or ('manual-'+uuid.uuid4().hex), 'api') if refresh else None
+    if lease and not lease['execute']:
+        refresh = False
+        result.update(query_state=lease['state'], reason='shared_account_query',
+                      request_id=lease['request_id'])
+        if lease.get('result'):
+            result.update({k:v for k,v in lease['result'].items() if k not in ('snapshot_ref','raw_ref')})
+            if lease['result'].get('snapshot_ref'):
+                snapshot = store.read(lease['result']['snapshot_ref'])
+                result['source_mode'] = 'shared_saved'
     if refresh:
         try:
             raw = collect_balances(read, pages, NHError)
-            write(output / 'account-observation.private.json', raw)
             result['endpoint_calls'] = raw['endpoint_calls']
             listings = {}
             # Reuse the verified official saved listing master; no new market fetch.
@@ -107,18 +125,25 @@ def account_view(config, output, refresh=True, saved_dashboard_root=None):
                         value['reason'] = 'broker_response_or_shape_unconfirmed'
             result['query_state'] = ('received' if all(a['holdings_complete'] for a in snapshot['accounts']) else 'partial')
             result['source_mode'] = 'live_read_only'
+            receipt = store.complete('nh',lease['request_id'],lease['lease'],metadata=result,snapshot=snapshot,raw=raw)
+            result.update(snapshot_ref=receipt['snapshot_ref'], request_id=lease['request_id'])
+            observation_ref = receipt['raw_ref']
         except (NHError, OSError, ValueError, KeyError, TypeError) as exc:
             snapshot = None
             result.update(query_state='failed', reason=str(exc) if isinstance(exc, NHError) else type(exc).__name__)
+            store.complete('nh',lease['request_id'],lease['lease'],metadata=result)
+    if observation_ref:
+        write(output / 'account-observation.private.json', {'account_store_ref':observation_ref})
     if snapshot is None and previous:
         snapshot = previous
         result['source_mode'] = 'historical_saved'
-        if not refresh and previous_meta:
+        if not refresh and previous_meta and not lease:
             result.update({k:previous_meta.get(k) for k in ('query_state','reason','attempted_at')})
     if snapshot is None:
         return result
     normalized_path = output / 'account-snapshot.private.json'
-    write(normalized_path, snapshot)
+    result['snapshot_ref'] = store.save(snapshot)
+    write(normalized_path, {'account_store_ref':result['snapshot_ref']})
     result.update(accounts=snapshot['accounts'], as_of=snapshot['as_of'],
                   snapshot_sha256=sha(normalized_path), limitations=result['limitations'] + snapshot.get('limitations', []))
     result['stale'] = (datetime.now(timezone.utc) - datetime.fromisoformat(snapshot['as_of'])).total_seconds() > 86400
@@ -129,17 +154,19 @@ def account_view(config, output, refresh=True, saved_dashboard_root=None):
 
 def publish_receipt(output, accounts, *, view=None, **metadata):
     """Publish the same account receipt for a headless refresh or a dashboard build."""
-    write(output/'account-view.json', accounts)
+    receipt = {'account_view_ref':{'metadata':{k:v for k,v in accounts.items() if k != 'accounts'},
+                                   'snapshot_ref':accounts['snapshot_ref']}} if accounts.get('snapshot_ref') else accounts
+    write(output/'account-view.json', receipt)
     if view is not None:
         write(output/'dashboard.json', view)
     write(output/'manifest.json', {'files': {p.name: sha(p) for p in output.iterdir() if p.is_file()},
                                   'authority': 'read_only_no_orders', **metadata})
 
 
-def refresh_account_snapshot(root=ROOT):
+def refresh_account_snapshot(root=ROOT, request_id=None):
     """One balance-only refresh; immutable receipt is reusable by scheduled and UI paths."""
     output = root/'runtime/dashboard'/('account-'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'))
     output.mkdir(parents=True)
-    accounts = account_view(load(root/'config.json'), output, refresh=True)
+    accounts = account_view(load(root/'config.json'), output, refresh=True, request_id=request_id)
     publish_receipt(output, accounts)
     return accounts

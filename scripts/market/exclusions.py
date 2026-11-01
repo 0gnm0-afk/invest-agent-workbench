@@ -44,7 +44,8 @@ def read_bytes(path):
 
 
 def load(path):
-    return json.loads(read_bytes(path))
+    from atomic_io import _hydrate
+    return _hydrate(json.loads(read_bytes(path)))
 
 
 def save(path, value):
@@ -91,7 +92,7 @@ def explanation(code):
     """Only curated messages reach the browser; raw provider errors stay private."""
     code = str(code or '')
     messages = {
-        'manual_retry_pending':'새로 확인된 결측입니다. NH 재수집이 필요합니다.',
+        'manual_retry_pending':'새로 확인된 결측입니다. Toss 재수집이 필요합니다.',
         'toss_retry_identity_mismatch':'Toss 종목 식별자·거래소·통화가 일치하지 않습니다.',
         'toss_retry_identity_unverified':'Toss 종목 식별 정보를 확인하지 못했습니다.',
         'toss_retry_market_cap_unavailable':'Toss 시가총액 자료를 확보하지 못했습니다.',
@@ -142,6 +143,26 @@ def inventory(snapshot, quality, reports=None):
     errors = {(r['market'],r['symbol']) for r in snapshot.get('errors',[])}
     checks = {(r['market'],r['symbol']):r for r in quality.get('quality',[])}
     issues = {}
+    if snapshot.get('price_collection_provider') == 'toss':
+        error_rows = {(r['market'],r['symbol']):r for r in snapshot.get('errors',[])}
+        for key,row in listings.items():
+            check=checks.get(key,{})
+            price_missing=(key in errors or key not in series or any(check.get(k) for k in
+                           ('missing_sessions','invalid_sessions','non_sessions'))
+                           or check.get('last') != snapshot['sessions'][key[0]][-1])
+            cap_missing=str(row.get('market_cap_quality','')).startswith('unavailable')
+            if not price_missing and not cap_missing: continue
+            code=(error_rows.get(key,{}).get('error_code') or 'historical_price_gaps') if price_missing else 'unavailable_market_cap'
+            item={k:row.get(k) for k in ('market','symbol','name','isin_code','provider_symbol')}
+            item.update(exchange=row.get('listing_exchange_family'), field='가격 이력' if price_missing else '시가총액',
+                        toss_code=code,toss_reason=explanation(code),nh_code=None,nh_reason='Toss 단일 수집',nh_attempted=False)
+            item['id']=digest([identity(item),code,None])
+            item['exclude_allowed']=bool(all(identity(item)))
+            item['block_reason']='' if item['exclude_allowed'] else '종목 식별자가 없어 제외를 저장할 수 없습니다.'
+            issues[key]=item
+        return {'schema':1,'universe_count':len(listings),'sessions':{k:v[-1] for k,v in snapshot['sessions'].items()},
+                'identities':[{k:r.get(k) for k in ('market','symbol','isin_code','listing_exchange_family')} for r in listings.values()],
+                'issues':list(issues.values())}
     for report in reports if reports is not None else snapshot.get('nh_fallback',{}).get('results',[]):
         key = report.get('market'),report.get('symbol')
         if (key not in listings or report.get('state') not in ('unavailable','observed_not_adopted')
@@ -178,9 +199,9 @@ def retry_permissions(row, sessions, jobs):
     attempted = {j.get('provider') for j in jobs if j.get('kind')=='recollect'
                  and key in j.get('retry_keys',[]) and j.get('collection_started_at')
                  and j['state'] in ('completed','failed')}
-    return {'toss': 'toss' not in attempted,
-            'nh': 'toss' in attempted and 'nh' not in attempted,
-            'exclude': {'toss','nh'} <= attempted,
+    return {'toss': True,
+            'nh': False,
+            'exclude': 'toss' in attempted,
             'attempted': sorted(attempted)}
 
 
@@ -315,7 +336,7 @@ class ExclusionReview:
             return {k:review[k] for k in ('review_id','run_id','sessions')} | {
                 'issues':[{**{k:r.get(k) for k in fields}, 'retry':retry_permissions(r,review['sessions'],value['jobs']),
                     'exclude_allowed':r['exclude_allowed'] and retry_permissions(r,review['sessions'],value['jobs'])['exclude'],
-                    'block_reason':r['block_reason'] or ('' if retry_permissions(r,review['sessions'],value['jobs'])['exclude'] else 'Toss와 NH 재수집 후에도 남은 종목만 제외할 수 있습니다.')} for r in review['issues']],
+                    'block_reason':r['block_reason'] or ('' if retry_permissions(r,review['sessions'],value['jobs'])['exclude'] else 'Toss 재수집 후에도 남은 종목만 제외할 수 있습니다.')} for r in review['issues']],
                 'job':public,'busy':active,'view_ready':not active}
 
     def approve(self, review_id, issue_ids):
@@ -354,6 +375,8 @@ class ExclusionReview:
             return self.status()
 
     def recollect(self, review_id, issue_ids, provider):
+        if provider != 'toss':
+            raise ReviewConflict('single_provider_toss')
         if (provider not in ('toss','nh') or not isinstance(review_id,str) or not isinstance(issue_ids,list)
                 or not 0<len(issue_ids)<=500 or any(not isinstance(i,str) for i in issue_ids) or len(set(issue_ids))!=len(issue_ids)):
             raise ValueError('invalid_exclusion_request')

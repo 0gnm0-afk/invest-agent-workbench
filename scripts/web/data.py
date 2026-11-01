@@ -55,7 +55,7 @@ def saved_market(root=ROOT, run_dir=None):
     for s in snapshot['series']:
         result['stocks'][s['market'] + ':' + s['symbol']] = {
             k: s.get(k) for k in ('market', 'symbol', 'name', 'currency', 'provider', 'price_basis',
-                                  'collected_at', 'bars', *SEARCH_METADATA_FIELDS)}
+                                  'collected_at', 'bars', 'bars_ref', *SEARCH_METADATA_FIELDS)}
     from sectors.focus import cached, screen_groups
     from invest_agent.trading.store import BusyError
     try:

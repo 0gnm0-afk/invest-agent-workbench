@@ -74,6 +74,16 @@ class AnalysisService:
         if not row: raise ValueError('snapshot_not_found_for_analysis')
         value=json.loads(row[0])
         if digest(value)!=row[1]: raise ValueError('snapshot_integrity_failed')
+        if 'chart_price_ref' in value:
+            from market.prices import PriceStore
+            from market.history.chart import aggregate
+            ref=value.pop('chart_price_ref')
+            value['chart']['bars']=aggregate(PriceStore(ref['path']).read(ref['reference']),ref['frame'])
+            if digest(value['chart']) != value['component_hashes']['chart']:
+                raise ValueError('snapshot_chart_integrity_failed')
+        if set(value.get('accounts',{})) == {'account_store_ref'}:
+            from accounts.store import hydrate
+            value['accounts']=hydrate(value['accounts'])
         return value
 
     def links(self, case, origin):
@@ -123,6 +133,21 @@ class AnalysisService:
         chart=self.histories.view(stocks[k],ctx['timeframe'])
         workspace=self.store.shared(k,ctx['timeframe']); financial=self.financials.read(k)
         daily=chart if ctx['timeframe']=='1d' else self.histories.view(stocks[k],'1d')
+        price_ref=None
+        if all(daily.get(f) for f in ('market','symbol','currency','price_basis')):
+            from market.prices import PriceStore
+            from market.history.chart import aggregate
+            prices=getattr(self.histories,'prices',None) or PriceStore(self.root/'runtime/ohlcv.sqlite3')
+            if prices.path.exists():
+                try:
+                    price_ref=prices.pin(daily)
+                    chart={**chart,'bars':aggregate(prices.read(price_ref),ctx['timeframe'])}
+                    price_ref={'path':str(prices.path),'reference':price_ref,'frame':ctx['timeframe']}
+                except ValueError as exc:
+                    if str(exc) != 'ohlcv_view_reference_unavailable': raise
+                    # Legacy/custom historical views retain their exact immutable input.
+                    # Viewing one must never overwrite newer provider corrections.
+                    price_ref=None
         events=price_events(daily,financial)
         value={'id':ident('sn_'),'case_id':case['id'],'captured_at':now(),'stock_key':k,'context':ctx,
                'instrument':{field:stocks[k].get(field) for field in ('name','symbol','market','currency','isin_code','isin','exchange') if stocks[k].get(field) is not None},
@@ -130,8 +155,14 @@ class AnalysisService:
                'market':{k:v for k,v in data['market'].items() if k in ('state','session_dates','source','errors')},
                'geometry':geometry(workspace,chart,ctx),'authority':'saved_input_not_trade_confirmation',
                'component_hashes':{'price_events':digest(events),'chart':digest(chart),'workspace':digest(workspace),'financials':digest(financial),'accounts':digest(data['accounts'])}}
+        stored=dict(value)
+        if price_ref:
+            stored.update(chart={k:v for k,v in chart.items() if k != 'bars'},chart_price_ref=price_ref)
+        from accounts.store import AccountStore
+        account_store=AccountStore(self.root/'runtime/accounts.sqlite3')
+        stored['accounts']={'account_store_ref':account_store.save(value['accounts'])}
         with closing(self.store.connect()) as db,db:
-            db.execute('INSERT INTO analysis_snapshots VALUES (?,?,?,?)',(value['id'],case['id'],packed(value),digest(value)))
+            db.execute('INSERT INTO analysis_snapshots VALUES (?,?,?,?)',(value['id'],case['id'],packed(stored),digest(stored)))
         return value
 
     def snapshot_summaries(self, case_id):

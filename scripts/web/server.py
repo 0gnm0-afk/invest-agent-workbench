@@ -336,7 +336,7 @@ def main():
     # receipt may require another full build of the same market.
     baseline_record = (DailyLaunch(ROOT).read(plan_for(datetime.now(timezone.utc))['day'])
                        if not daily and not args.offline else None)
-    output, data, stocks = build(refresh=not args.saved_accounts and not daily, market_run=base_run, daily_update=saved_notice, persist_view=args.build_only)
+    output, data, stocks = build(refresh=False, market_run=base_run, daily_update=saved_notice, persist_view=args.build_only)
     views = {'view':(data, stocks)}
     controller = (DashboardDaily(daily or DailyLaunch(ROOT), views, build, base_run,
                                  saved_accounts=args.saved_accounts, observe_only=not daily, baseline_record=baseline_record)

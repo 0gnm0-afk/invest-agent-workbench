@@ -9,13 +9,13 @@ window.WorkbenchExclusions={mount(host,onResult){
   host.replaceChildren();const items=latest?.issues||[],job=latest?.job;
   const activeJob=job&&!['completed','superseded'].includes(job.state);
   host.hidden=!items.length&&!activeJob&&!note&&!readError;if(host.hidden)return;
-  const heading=el('h2',(items.length?'NH 보완 실패':'자료 재처리 상태')+(items.length?' · '+items.length+'종목':''));host.append(heading);
+  const heading=el('h2',(items.length?'수집 확인 필요':'자료 재처리 상태')+(items.length?' · '+items.length+'종목':''));host.append(heading);
   if(items.length){
    const sessions=Object.entries(latest.sessions||{}).map(([market,date])=>market+' '+date).join(' · ');
    if(sessions)host.append(el('p','기준 완료일 · '+sessions));
-   host.append(el('p','실패 종목을 선택해 Toss → NH 순서로 각각 한 번 재수집하세요. 둘 다 시도한 뒤에도 남은 종목은 제외 승인할 수 있습니다. 같은 기준일·종목의 재수집 이력은 저장됩니다.'));
+   host.append(el('p','확인이 필요한 종목을 선택해 Toss로 재수집하세요. 재수집 뒤에도 남은 종목은 제외 승인할 수 있습니다. 같은 기준일·종목의 재수집 이력은 저장됩니다.'));
    const wrap=el('div',undefined,'scope-table-wrap'),table=el('table'),head=el('tr');
-   for(const label of ['선택','종목','실패한 자료','Toss 상태','NH 보완 결과'])head.append(el('th',label));
+   for(const label of ['선택','종목','실패한 자료','Toss 상태','수집 근거·과거 기록'])head.append(el('th',label));
    const thead=el('thead');thead.append(head);table.append(thead);const body=el('tbody');
    for(const item of items){
     const tr=el('tr'),cell=el('td'),box=el('input');box.type='checkbox';box.checked=selected.has(item.id);
@@ -31,7 +31,7 @@ window.WorkbenchExclusions={mount(host,onResult){
    button(actions,'scope-select-all','전체 선택',()=>{selected=new Set(items.filter(r=>r.exclude_allowed||r.retry?.toss||r.retry?.nh).map(r=>r.id));render();},busy());
    const chosen=items.filter(r=>selected.has(r.id)),excludable=chosen.filter(r=>r.exclude_allowed);
    const applyingSaved=job?.kind==='recollect'&&job.retry_available;
-   for(const provider of ['toss','nh']){const eligible=chosen.filter(r=>r.retry?.[provider]);button(actions,'scope-recollect-'+provider,(provider==='toss'?'Toss':'NH')+' 재수집 ('+eligible.length+')',()=>post({action:'recollect',provider,review_id:latest.review_id,issue_ids:eligible.map(r=>r.id)}),busy()||applyingSaved||!eligible.length||eligible.length>500);}
+   for(const provider of ['toss']){const eligible=chosen.filter(r=>r.retry?.[provider]);button(actions,'scope-recollect-'+provider,'Toss 재수집 ('+eligible.length+')',()=>post({action:'recollect',provider,review_id:latest.review_id,issue_ids:eligible.map(r=>r.id)}),busy()||applyingSaved||!eligible.length||eligible.length>500);}
    button(actions,'scope-approve',submitting?'요청 저장 중…':'선택 '+excludable.length+'종목 제외 승인',()=>post({action:'approve',review_id:latest.review_id,issue_ids:excludable.map(r=>r.id)}),busy()||applyingSaved||!excludable.length||excludable.length>500);
    if(selected.size>500)actions.append(el('span','한 번에 500종목까지 선택할 수 있습니다.'));host.append(actions);
   }
@@ -57,7 +57,7 @@ window.WorkbenchExclusions={mount(host,onResult){
  async function refresh(){
   if(stopped)return;if(checking)return checking;
   checking=(async()=>{try{const r=await fetch('/api/market-exclusions');if(!r.ok)throw Error();const value=await r.json();readError='';await accept(value);}
-   catch{readError='NH 실패 목록을 확인하지 못했습니다. 현재 자료는 유지됩니다.';render();}})();
+   catch{readError='수집 확인 목록을 불러오지 못했습니다. 현재 자료는 유지됩니다.';render();}})();
   try{await checking;}finally{checking=null;schedule();}
  }
  async function post(body){

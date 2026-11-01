@@ -30,20 +30,20 @@ class RetryFlow(unittest.TestCase):
         if s.thread and s.thread.is_alive():s.thread.join(5);v=s.status()
         s.recollect(v['review_id'],[v['issues'][0]['id']],provider)
         s.thread.join(5);self.assertFalse(s.thread.is_alive());return s.status()
-    def test_toss_then_nh_once_then_exclude_persists_across_restart(self):
+    def test_toss_retry_then_explicit_exclusion_persists_across_restart(self):
         s=self.service();v=s.status();ids=[v['issues'][0]['id']]
         self.assertFalse(v['issues'][0]['exclude_allowed']);self.assertTrue(v['issues'][0]['retry']['toss'])
         for action in (lambda:s.approve(v['review_id'],ids),lambda:s.recollect(v['review_id'],ids,'nh')):
             with self.assertRaises(m.ReviewConflict):action()
-        v=self.collect(s,'toss');self.assertTrue(v['issues'][0]['retry']['nh']);self.assertFalse(v['issues'][0]['retry']['toss'])
-        s=self.service();v=self.collect(s,'nh');self.assertTrue(v['issues'][0]['exclude_allowed'])
-        for provider in ('toss','nh'):
+        v=self.collect(s,'toss');self.assertFalse(v['issues'][0]['retry']['nh']);self.assertTrue(v['issues'][0]['retry']['toss'])
+        s=self.service();v=s.status();self.join();v=s.status();self.assertTrue(v['issues'][0]['exclude_allowed'])
+        for provider in ('nh',):
             with self.assertRaises(m.ReviewConflict):s.recollect(v['review_id'],[v['issues'][0]['id']],provider)
         with patch.object(s,'_start'):s.approve(v['review_id'],[v['issues'][0]['id']])
         self.assertEqual(len(m.registry(self.path)[0]['records']),1)
-        self.assertEqual(self.calls,['toss','nh'])
+        self.assertEqual(self.calls,['toss'])
     def test_new_identity_or_completed_session_does_not_inherit_retry(self):
-        s=self.service();self.collect(s,'toss');self.collect(s,'nh')
+        s=self.service();self.collect(s,'toss')
         snap,q=fixture();snap['universe'][0]['isin_code']='NEW';saved(self.root,'new-identity',snap,q)
         self.assertEqual(s.status()['issues'][0]['retry']['attempted'],[])
         snap,q=fixture();snap['sessions']['US']=['2026-10-05'];saved(self.root,'new-session',snap,q)
@@ -64,14 +64,14 @@ class RetryFlow(unittest.TestCase):
     def test_failed_provider_still_unlocks_next_but_publication_failure_reuses_result(self):
         def fail(id):m.update_job(self.path,id,collection_started_at=m.now());raise ValueError('private auth failure')
         s=self.service(fail);v=self.collect(s,'toss')
-        self.assertTrue(v['issues'][0]['retry']['nh']);self.assertFalse(v['job']['retry_available'])
+        self.assertFalse(v['issues'][0]['retry']['nh']);self.assertTrue(v['issues'][0]['retry']['toss']);self.assertFalse(v['job']['retry_available'])
         self.assertNotIn('private auth failure',json.dumps(v))
         s.worker=self.worker;s.publish=lambda p:(_ for _ in ()).throw(ValueError('publish'))
-        v=self.collect(s,'nh')
+        v=self.collect(s,'toss')
         # A completed source can be re-published without another remote request.
         job=m.registry(self.path)[0]['jobs'][-1];m.update_job(self.path,job['id'],result_source=job['source_run'])
         s.publish=lambda p:None;s.retry(job['id']);s.thread.join(5)
-        self.assertEqual(s.status()['job']['state'],'completed');self.assertEqual(self.calls,['nh'])
+        self.assertEqual(s.status()['job']['state'],'completed');self.assertEqual(self.calls,['toss'])
     def test_newer_daily_result_supersedes_failed_cached_retry(self):
         s=self.service();v=self.collect(s,'toss');job=m.registry(self.path)[0]['jobs'][-1]
         m.update_job(self.path,job['id'],state='failed',result_source='cached')
@@ -165,8 +165,9 @@ class RetryHTTP(unittest.TestCase):
                 self.assertEqual(request('POST','/api/market-exclusions',{**body,'provider':'all'})[0],400)
                 self.assertEqual(request('POST','/api/market-exclusions',{**body,'provider':'nh'})[0],409)
                 self.assertEqual(request('POST','/api/market-exclusions',body)[0],202);service.thread.join(5)
-                self.assertEqual(request('POST','/api/market-exclusions',body)[0],409)
-                self.assertEqual(len(calls),1)
+                self.assertEqual(request('POST','/api/market-exclusions',body)[0],202)
+                service.thread.join(5)
+                self.assertEqual(len(calls),2)
             finally:
                 if service.thread:service.thread.join(5)
                 server.shutdown();server.server_close();thread.join(5)

@@ -76,6 +76,7 @@ class MarketOnlyTests(base_tests.TossMarketPipelineTests):
             config = root / 'input.json'
             config.write_text(json.dumps(self.config))
             with patch.object(m, 'completed_sessions', return_value=self.days), \
+                    patch.object(m, 'default_path', return_value=root/'ohlcv.sqlite3'), \
                     patch.object(m, 'TossMarketClient') as client, \
                     patch.object(m, 'collect', return_value=snapshot) as collector:
                 first = m.run(root, config)
@@ -110,18 +111,19 @@ class MarketOnlyTests(base_tests.TossMarketPipelineTests):
             self.assertIsNone(result['series'][1]['quote_timestamp'])
             self.assertEqual(m.audit(result)['market_cap_completed_close_estimates'], 1)
 
-    def test_fallback_transport_failure_remains_partial_not_handled_success(self):
+    def test_cap_transport_failure_does_not_fail_ohlcv_completion(self):
         rows, meta = self.full_config()
         rows[1].update(quote_time_state='not_provided', shares_outstanding=100)
         with patch('market.toss_collection.discover', return_value=(rows, meta)), \
                 patch('market.toss_collection.complete_cap', side_effect=ValueError('market_http_500')):
             result = self.run_collect()
         self.assertEqual(len(result['series']), 2)
-        self.assertFalse(result['coverage']['market_wide'])
+        self.assertTrue(result['coverage']['market_wide'])
         quality = m.audit(result)
-        self.assertEqual(quality['state'], 'partial')
-        self.assertEqual(quality['processing_state'], 'failed')
-        self.assertEqual(quality['unexpected_failures'], 1)
+        self.assertEqual(quality['state'], 'succeeded')
+        self.assertEqual(quality['processing_state'], 'completed_with_exceptions')
+        self.assertEqual(quality['unexpected_failures'], 0)
+        self.assertFalse(quality['metadata_complete'])
 
 
 if __name__ == '__main__':

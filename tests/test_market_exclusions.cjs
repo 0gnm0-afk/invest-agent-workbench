@@ -59,12 +59,10 @@ function setup(hash='#stock/US/KEEP'){
  }
  // Selection can retry before it can approve exclusion. Each provider has its own gate.
  const f=setup();await f.api.refresh();f.status={...initial,issues:[{...issue,exclude_allowed:false,retry:{toss:true,nh:false,attempted:[]}}]};await f.api.refresh();await f.select();
- assert.equal(f.find('scope-recollect-toss').disabled,false);assert.equal(f.find('scope-recollect-nh').disabled,true);assert.equal(f.find('scope-approve').disabled,true);
- f.postReply=()=>{f.status={...f.status,issues:[{...issue,exclude_allowed:false,retry:{toss:false,nh:true,attempted:['toss']}}],job:{id:'toss',kind:'recollect',provider:'toss',state:'completed',count:1}};return {ok:true,status:202,json:async()=>clone(f.status)}};
+ assert.equal(f.find('scope-recollect-toss').disabled,false);assert.equal(f.find('scope-recollect-nh'),undefined);assert.equal(f.find('scope-approve').disabled,true);
+ f.postReply=()=>{f.status={...f.status,issues:[{...issue,exclude_allowed:true,retry:{toss:true,nh:false,attempted:['toss']}}],job:{id:'toss',kind:'recollect',provider:'toss',state:'completed',count:1}};return {ok:true,status:202,json:async()=>clone(f.status)}};
  await f.find('scope-recollect-toss').onclick();assert.deepEqual(JSON.parse(f.posts()[0].options.body),{action:'recollect',provider:'toss',review_id:'review-a',issue_ids:['issue-a']});
- assert.equal(f.find('scope-recollect-toss').disabled,true);assert.equal(f.find('scope-recollect-nh').disabled,false);assert.equal(f.find('scope-approve').disabled,true);
- f.postReply=()=>{f.status={...f.status,issues:[{...issue,retry:{toss:false,nh:false,attempted:['toss','nh']}}],job:{id:'nh',kind:'recollect',provider:'nh',state:'completed',count:1}};return {ok:true,status:202,json:async()=>clone(f.status)}};
- await f.find('scope-recollect-nh').onclick();assert.equal(f.find('scope-approve').disabled,false);assert.equal(JSON.parse(f.posts()[1].options.body).provider,'nh');
+ assert.equal(f.find('scope-recollect-toss').disabled,false);assert.equal(f.find('scope-recollect-nh'),undefined);assert.equal(f.find('scope-approve').disabled,false);
  f.status={...f.status,issues:[]};await f.api.refresh();assert.equal(f.host.hidden,true);f.api.stop();
  console.log('NH exclusion UI: selection, safe text, double click, stale review, retry, navigation and polling passed');
 })().catch(e=>{console.error(e);process.exitCode=1;});

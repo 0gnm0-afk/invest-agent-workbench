@@ -33,7 +33,17 @@ def atomic_write(path, text):
 
 
 def load(path):
-    return json.loads(Path(path).read_text(encoding='utf-8'))
+    return _hydrate(json.loads(Path(path).read_text(encoding='utf-8')))
+
+
+def _hydrate(value):
+    if isinstance(value, dict) and ('account_store_ref' in value or 'account_view_ref' in value):
+        from accounts.store import hydrate
+        return hydrate(value)
+    if isinstance(value, dict) and 'ohlcv_store' in value:
+        from market.prices import hydrate_snapshot
+        return hydrate_snapshot(value)
+    return value
 
 def sha(path):
     with Path(path).open('rb') as stream:
@@ -52,12 +62,15 @@ def checked(path, expected, inputs):
 
 
 def write_json(path, value):
+    if isinstance(value, dict) and 'ohlcv_store' in value:
+        from market.prices import thin_snapshot
+        value = thin_snapshot(value, path)
     atomic_write(path, json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2))
 
 
 def load_bom(path):
     """Read existing dashboard/account receipts, including UTF-8 BOM files."""
-    return json.loads(Path(path).read_text(encoding='utf-8-sig'))
+    return _hydrate(json.loads(Path(path).read_text(encoding='utf-8-sig')))
 
 
 def checked_saved(path, expected):

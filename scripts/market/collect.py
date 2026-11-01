@@ -22,6 +22,8 @@ from invest_agent.trading.contracts import digest
 from invest_agent.trading.market import check_bars, usable_tail
 from invest_agent.trading.market_provider import completed_sessions
 from atomic_io import atomic_write, write_json
+from atomic_io import load
+from market.prices import PriceStore, freeze_snapshot, default_path
 from invest_agent.trading.store import instance_lock
 from market.providers.toss_client import TossMarketClient
 from market.quality import error_disposition, history_usability
@@ -60,7 +62,6 @@ def audit(snapshot):
                         'usability': history_usability(bars, sessions, snapshot['profile'][row['market']]),
                         'short_history': len(bars) < len(sessions)})
     quality_issues = sum(bool(r['missing_sessions'] or r['invalid_sessions'] or r['non_sessions']) for r in quality)
-    complete = snapshot['coverage'].get('active_scope_complete', snapshot['coverage']['market_wide']) and not quality_issues
     dispositions = [{**r, 'disposition': error_disposition(r, universe[(r['market'], r['symbol'])],
                      snapshot['sessions'][r['market']][-1])} for r in snapshot['errors']]
     cap_issues = [{'market': r['market'], 'symbol': r['symbol'],
@@ -68,13 +69,17 @@ def audit(snapshot):
                   for r in snapshot['series'] if str(r.get('market_cap_quality', '')).startswith('unavailable')]
     unexpected = (len(snapshot['coverage']['scope_errors'])
                   + sum(r['disposition']['state'] == 'collection_failure' for r in dispositions)
-                  + sum(bool(r['invalid_sessions'] or r['non_sessions']) for r in quality)
-                  + sum(bool(r['error']) for r in cap_issues))
-    complete = complete and not cap_issues
+                  + sum(bool(r['invalid_sessions'] or r['non_sessions']) for r in quality))
+    # OHLCV completion and optional capitalization/classification are separate.
+    listing_scope = snapshot['coverage'].get('listings') or {}
+    scope_complete = bool(listing_scope) and all(r.get('state') == 'available' and r.get('limit') is None
+                                               for r in listing_scope.values())
+    complete = scope_complete and not snapshot['coverage']['scope_errors'] and not failed and not quality_issues
     exceptions = bool(dispositions or quality_issues or cap_issues or any(r['short_history'] for r in quality))
     return {'state': 'succeeded' if complete else 'partial', 'exchanges': exchanges,
             'processing_state': 'failed' if unexpected else 'completed_with_exceptions' if exceptions else 'completed',
             'data_complete': complete,
+            'metadata_complete': not cap_issues,
             'scope_basis': 'user_approved_active_market_scope' if snapshot.get('scope_exclusions') else (
                 'toss_provided_active_common_stock_and_us_depositary_receipts'
                 if any('DEPOSITARY_RECEIPT' in m.get('listing_types', {})
@@ -102,7 +107,10 @@ class Evidence:
 
     def __call__(self, event):
         with self.lock:
-            self.handle.write(json.dumps(event, ensure_ascii=False) + '\n')
+            receipt = {k: v for k, v in event.items() if k != 'payload'}
+            if 'payload' in event:
+                receipt['payload_sha256'] = digest(event['payload'])
+            self.handle.write(json.dumps(receipt, ensure_ascii=False) + '\n')
             self.handle.flush()
             self.counts[(event['path'], str(event['status']))] += 1
             self.limits.setdefault(event['path'], set()).add(json.dumps(event['headers'], sort_keys=True))
@@ -143,6 +151,7 @@ def run(root, config_path=None, prior_source=None, *, session_cutoff=None, evalu
             config = {'profile': source['profile'], 'markets': ['KR', 'US'],
                       'scope': 'market_only_toss_provided_universe', 'universe_mode': 'exchange_listings',
                       'limit_per_exchange': None}
+            config['ohlcv_path'] = str(default_path())
             if source.get('user_classification'):
                 config['user_classification'] = source['user_classification']
             if source.get('classification_refresh'):
@@ -182,7 +191,7 @@ def run(root, config_path=None, prior_source=None, *, session_cutoff=None, evalu
                     actual_hash = hashlib.file_digest(stream, 'sha256').hexdigest()
                 if actual_hash != frozen['prior_snapshot_sha256']:
                     raise ValueError('Prior snapshot changed after freeze')
-                previous = json.loads(prior_path.read_text(encoding='utf-8'))
+                previous = load(prior_path)
                 if previous.get('profile') == frozen['config']['profile']:
                     prior_rows = {(row['market'], row['symbol']): row for row in
                                   previous.get('series', []) + list(previous.get('benchmarks', {}).values())
@@ -194,10 +203,12 @@ def run(root, config_path=None, prior_source=None, *, session_cutoff=None, evalu
                                prior_source={'path': frozen['prior_source'],
                                              'sha256': frozen['prior_snapshot_sha256']}
                                if prior_rows else None)
-            write_json(attempt / 'snapshot.json', snapshot)
-            reloaded = json.loads((attempt / 'snapshot.json').read_text(encoding='utf-8'))
-            if digest(reloaded) != digest(snapshot):
-                raise ValueError('snapshot_roundtrip_failure')
+            store = PriceStore(frozen['config']['ohlcv_path'])
+            write_json(attempt / 'snapshot.json', freeze_snapshot(snapshot, attempt/'snapshot.json', store))
+            reloaded = load(attempt / 'snapshot.json')  # Each referenced series verifies identity/count/hash.
+            for error in snapshot['errors']:
+                store.failure('collection', error.get('error_code') or error['reason'],
+                              market=error['market'], symbol=error['symbol'], details=error)
             summary.update(audit(reloaded))
         except Exception as exc:
             summary['error_type'] = type(exc).__name__

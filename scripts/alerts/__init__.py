@@ -63,6 +63,20 @@ def holding_series(path, expected_hash, keys):
     with path.open('rb') as stream:
         if not expected_hash or hashlib.file_digest(stream, 'sha256').hexdigest() != expected_hash:
             raise ValueError('saved_artifact_hash_mismatch')
+    # New metadata snapshots are small and hydrate only the requested holdings.
+    with path.open(encoding='utf-8-sig') as stream:
+        for line in stream:
+            if line.rstrip() == '  "ohlcv_store": {':
+                from market.prices import PriceStore
+                value = json.loads(path.read_text(encoding='utf-8-sig'))
+                store = PriceStore(value['ohlcv_store']['path'])
+                rows = [s for s in value['series'] if s['market']+':'+s['symbol'] in keys]
+                result = {s['market']+':'+s['symbol']: {**s, 'bars': store.read(s['bars_ref'])} for s in rows}
+                if len(result) != len(rows):
+                    raise ValueError('duplicate_market_series')
+                return result
+            if line.rstrip() == '  "series": [':
+                break
     found, ended, item, result = False, False, [], {}
     with path.open(encoding='utf-8-sig') as stream:
         for line in stream:
