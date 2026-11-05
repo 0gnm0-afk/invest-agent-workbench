@@ -37,12 +37,24 @@ def load(path):
 
 
 def read_bytes(path):
-    """A retired price JSON is recovered byte-for-byte; other missing files fail."""
+    """Read verified record references; recover migrated records/prices exactly."""
     try:
-        return Path(path).read_bytes()
+        raw = Path(path).read_bytes()
     except FileNotFoundError:
+        from records.files import resolve
+        raw = resolve(path)
+        if raw is not None:
+            return raw
         from market.price_files import recover_bytes
         return recover_bytes(path)
+    from records.files import resolve
+    return resolve(path, raw)
+
+
+def available(path):
+    """Availability of ordinary/record artifacts (price readers own their cache)."""
+    from records.files import available as record_available
+    return record_available(path)
 
 
 def _hydrate(value):
@@ -57,6 +69,10 @@ def _hydrate(value):
 def sha(path):
     try:
         with Path(path).open('rb') as stream:
+            header = stream.read(256)
+            if b'"record_artifact_ref"' in header:
+                return hashlib.sha256(read_bytes(path)).hexdigest()
+            stream.seek(0)
             return hashlib.file_digest(stream, 'sha256').hexdigest()
     except FileNotFoundError:
         return hashlib.sha256(read_bytes(path)).hexdigest()

@@ -97,7 +97,7 @@ def inline_links(text):
 
 
 def render(run, output, screening=None, observation=None):
-    if (output/'priority-review.json').is_file() and artifact_io.load(output/'priority-review.json').get('schema')==4:
+    if artifact_io.available(output/'priority-review.json') and artifact_io.load(output/'priority-review.json').get('schema')==4:
         import screening.watch as watch_review
         return watch_review.render(run,output,screening,observation)
     review = None
@@ -122,14 +122,14 @@ def render(run, output, screening=None, observation=None):
             lines.insert(lines.index('## 후보와 섹터 맥락')-1,
                 f"NH 표적 보완: 시도 {fb['attempted']} · 채택 {fb['adopted']} · 양쪽 자료 부재 제외 {fb.get('excluded',0)} · 미해결 {fb['unrecovered']}. "
                 '원 Toss 실패는 원본에 보존; NH 거래량 정밀도는 종목별 표시하고 동일 공급자 섹터 집계에서 제외합니다.')
-        if (output/'priority-review.json').is_file():
+        if artifact_io.available(output/'priority-review.json'):
             review = artifact_io.load(output/'priority-review.json')
             if review.get('taver_state') == 'disabled':
                 lines = [line.replace('공통 유니버스 뒤 두 후보 경로는 독립입니다. ', '')
                          .replace('테이버 위치', '장기 이평 위치') for line in lines]
             missing_count = sum(g['selected_count'] for g in review['markets'].values())
             review_lines = priority.report_lines(review,
-                artifact_io.load(output/'priority-charts.json') if (output/'priority-charts.json').is_file()
+                artifact_io.load(output/'priority-charts.json') if artifact_io.available(output/'priority-charts.json')
                 else {'requested':missing_count,'available':0,'failed':missing_count,'rows':[]})
             at = lines.index('## 후보와 섹터 맥락')
             lines[at:at] = review_lines
@@ -194,7 +194,7 @@ def render(run, output, screening=None, observation=None):
     if table:
         body.append('</table></div>')
     sector_panel = ''
-    if (output/'sectors/signals.json').is_file():
+    if artifact_io.available(output/'sectors/signals.json'):
         states = artifact_io.load(output/'sectors/signals.json')
         sector_panel = '<style>'+sector_signals.CSS+'</style><h1>섹터 변화 먼저 보기</h1><p>완료 일봉 기준 · 현재 분류로 재생한 관찰 · 추정 거래 비중은 순유입 아님</p>'+sector_signals.cards(states,'sectors/',4)+'<p><a href="sectors/observation.html">전체 섹터 상태·필터·추이 →</a></p>'
     page = '<!doctype html><html lang="ko"><meta charset="utf-8"><title>일일 시장 관찰</title><style>body{font-family:system-ui;margin:24px;line-height:1.5}table{border-collapse:collapse;font-size:14px}td{border:1px solid #ccc;padding:8px;min-width:85px}tr:first-child{font-weight:bold;background:#edf2f7}p{overflow-wrap:anywhere}</style><body><nav><a href="sectors/observation.html">섹터 관찰표</a> · <a href="candidates.csv">후보 CSV</a> · <a href="screen.json">후보/제외/결측 상세</a> · <a href="quality.json">품질 상세</a></nav>' + sector_panel + ''.join(body) + '</body></html>'
@@ -281,7 +281,7 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
             latest = ROOT/'runtime/latest.json'
             if latest.is_file():
                 prior_run = Path(artifact_io.load(latest)['output'])/'run.json'
-                if prior_run.is_file():
+                if artifact_io.available(prior_run):
                     previous = artifact_io.load(prior_run).get('market_source')
             if prior_result:
                 from launch.daily import DailyLaunch
@@ -318,7 +318,7 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
             latest = ROOT/'runtime/latest.json'
             if latest.is_file():
                 prior_run = Path(artifact_io.load(latest)['output'])/'run.json'
-                if prior_run.is_file():
+                if artifact_io.available(prior_run):
                     previous = artifact_io.load(prior_run).get('market_source')
             if prior_result:
                 from launch.daily import DailyLaunch
@@ -454,6 +454,13 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
         write_json(output/'manifest.json', {'schema':1, 'code_hashes':hashes, 'input_hashes':inputs,
                    'output_hashes':{str(p.relative_to(output)):artifact_io.sha(p) for p in output.rglob('*')
                                     if p.is_file() and 'cache' not in p.relative_to(output).parts}})
+        # A run is visible as latest only after its immutable records are durable.
+        # Existing migrated runs retain their original files; only this new run
+        # replaces freshly generated structured outputs with pinned references.
+        from records.store import publish_run
+        from records.files import publish_thin
+        publish_run(output, root=ROOT)
+        publish_thin(output, root=ROOT)
         write_json(ROOT/'runtime/latest.json', {'output':str(output), 'state':run['state'], 'mode':mode})
     return run
 
@@ -489,7 +496,7 @@ def verify(output):
         raise ValueError('candidate_replay_mismatch')
     priority_counts = {}
     active_candidate_count = base['candidate_count']
-    if (output/'priority-review.json').is_file():
+    if artifact_io.available(output/'priority-review.json'):
         review = priority.build(saved, snapshot, config.get('priority_review'))
         if review != artifact_io.load(output/'priority-review.json'):
             raise ValueError('priority_replay_mismatch')
@@ -533,9 +540,9 @@ def verify(output):
                     if sum(group['phase_counts'].values())!=group['candidate_count']:
                         raise ValueError('candidate_phase_count_mismatch')
     sector_state_counts = {}
-    if run['stages'].get('sector_states') == 'completed_with_limitations' and not (output/'sectors/signals.json').is_file():
+    if run['stages'].get('sector_states') == 'completed_with_limitations' and not artifact_io.available(output/'sectors/signals.json'):
         raise ValueError('sector_states_output_missing')
-    if (output/'sectors/signals.json').is_file():
+    if artifact_io.available(output/'sectors/signals.json'):
         states = sector_signals.build(snapshot, groups, report, config.get('sector_states'))
         sector_signals.attach_candidates(states, review, groups, chart_result)
         sector_state_counts = sector_signals.verify_saved(output/'sectors',states)

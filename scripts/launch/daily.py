@@ -8,6 +8,7 @@ import sys
 import time
 from zoneinfo import ZoneInfo
 from uuid import uuid4
+from atomic_io import load_json_bytes, read_bytes, available
 
 from invest_agent.trading.market_provider import completed_sessions
 from atomic_io import atomic_write
@@ -71,11 +72,11 @@ class DailyLaunch:
         path = Path(value).resolve()
         if not path.is_relative_to(self.root / 'runtime'):
             raise ValueError('run_outside_runtime')
-        manifest = json.loads((path/'manifest.json').read_text(encoding='utf-8'))
+        manifest = load_json_bytes(path/'manifest.json')
         run_path = path/'run.json'
-        if hashlib.sha256(run_path.read_bytes()).hexdigest() != manifest['output_hashes'].get('run.json'):
+        if hashlib.sha256(read_bytes(run_path)).hexdigest() != manifest['output_hashes'].get('run.json'):
             raise ValueError('run_hash_mismatch')
-        return json.loads(run_path.read_text(encoding='utf-8'))
+        return load_json_bytes(run_path)
 
     def usable_run(self, value):
         try:
@@ -83,9 +84,9 @@ class DailyLaunch:
             if not run or not run.get('market_source'):
                 return None
             path = Path(value)
-            manifest = json.loads((path/'manifest.json').read_text(encoding='utf-8'))
+            manifest = load_json_bytes(path/'manifest.json')
             review = path/'priority-review.json'
-            if not review.is_file() or hashlib.sha256(review.read_bytes()).hexdigest() != manifest['output_hashes'].get('priority-review.json'):
+            if not available(review) or hashlib.sha256(read_bytes(review)).hexdigest() != manifest['output_hashes'].get('priority-review.json'):
                 return None
             return str(path.resolve())
         except (OSError, ValueError, KeyError, TypeError):
@@ -117,7 +118,7 @@ class DailyLaunch:
         if not run_path:
             return False
         run = self.checked_run(run_path)
-        review = json.loads((Path(run_path)/'priority-review.json').read_text(encoding='utf-8'))
+        review = load_json_bytes(Path(run_path)/'priority-review.json')
         return run.get('state') == 'succeeded' and review.get('session_dates') == plan['targets']
 
     def once(self, now=None, retry=False, expected_attempt=None, *, scheduled=False):
@@ -180,7 +181,7 @@ class DailyLaunch:
                     display = self.usable_run(run.get('output'))
                     if display:
                         record['display_run'] = display
-                        review = json.loads((Path(display)/'priority-review.json').read_text(encoding='utf-8'))
+                        review = load_json_bytes(Path(display)/'priority-review.json')
                         if review.get('session_dates') != plan['targets']:
                             record.update(state='failed',error='target_sessions_not_reached')
                     if run['state'] == 'failed' and not record['error']:

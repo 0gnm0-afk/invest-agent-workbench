@@ -9,6 +9,7 @@ from invest_agent.trading.market import usable_tail
 from display_format import stock_label
 from screening.momentum import ordered_structure
 from display_format import money, currency_for, display_analysis
+from atomic_io import load_json_bytes, available
 
 def signal_key(s):return base.rank(s) if s['route']=='base_watch' else watch.key(s)
 def rs_label(rs):return f'{rs:.1f}' if rs is not None else '미산출'
@@ -113,7 +114,7 @@ def table(entries,refs,phase=None):
     return text+'</tbody></table></div>'
 
 def render(run,output,screening=None,observation=None):
-    review=json.loads((output/'priority-review.json').read_text(encoding='utf-8'));charts=json.loads((output/'priority-charts.json').read_text(encoding='utf-8')) if (output/'priority-charts.json').is_file() else {'rows':[],'available':0,'requested':sum(g['selected_count'] for g in review['markets'].values()),'failed':sum(g['selected_count'] for g in review['markets'].values())}
+    review=load_json_bytes(output/'priority-review.json');charts=load_json_bytes(output/'priority-charts.json') if available(output/'priority-charts.json') else {'rows':[],'available':0,'requested':sum(g['selected_count'] for g in review['markets'].values()),'failed':sum(g['selected_count'] for g in review['markets'].values())}
     refs={(r['market'],r['symbol']):r for r in charts['rows']}
     body='<h1>스크리너 — 관찰할 종목부터 진입 조건까지</h1><p>'+review['policy']+'</p>'
     body+='<p class="muted">가격 완료 세션: 한국 '+esc(review['session_dates']['KR'])+' · 미국 '+esc(review['session_dates']['US'])+' · 저장 자료 검토</p>'
