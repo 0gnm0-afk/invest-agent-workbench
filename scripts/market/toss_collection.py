@@ -280,13 +280,27 @@ def _collect(config, account, root, get, now, refresh, prior_series, prior_sourc
             if refresh_reason:
                 # A correction must re-observe the previous range and the new
                 # sessions under the same basis before replacing the old view.
+                required = set(prior_dates).union(recent_sessions)
                 observed = {b['date'] for b in value['bars']}
-                if not set(prior_dates).union(recent_sessions) <= observed:
+                if not required <= observed:
                     raise ValueError('market_corrected_history_incomplete')
                 try:
                     check_bars(value['bars'], sessions[market])
                 except (ValueError, KeyError, TypeError) as exc:
-                    raise ValueError('market_corrected_history_invalid') from exc
+                    if str(exc) != 'invalid_ohlc':
+                        raise ValueError('market_corrected_history_invalid') from exc
+                    # Some listings return a malformed first candle before the
+                    # verified seed starts. Keep only the verified contiguous tail.
+                    try:
+                        tail = usable_tail(value['bars'], sessions[market])
+                    except (ValueError, KeyError, TypeError):
+                        raise ValueError('market_corrected_history_invalid') from exc
+                    if not required <= {bar['date'] for bar in tail}:
+                        raise ValueError('market_corrected_history_invalid') from exc
+                    value['collection']['unusable_prefix_dates'] = [
+                        bar['date'] for bar in value['bars'][:-len(tail)]
+                    ]
+                    value['bars'] = tail
                 refetched = {b['date']:b for b in value['bars']}
                 if any(refetched[day] != recent_by_date[day] for day in recent_sessions):
                     raise ValueError('market_correction_responses_disagree')

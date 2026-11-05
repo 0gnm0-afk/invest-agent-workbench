@@ -167,6 +167,36 @@ class IncrementalMarketTests(unittest.TestCase):
         self.assertEqual(result['errors'][0]['error_code'], 'market_corrected_history_incomplete')
         self.assertEqual(store.read(ref), seed['bars'])
 
+    def test_refresh_quarantines_invalid_prefix_only_outside_verified_dates(self):
+        self.changed = True
+        original = self.fetch
+
+        def invalid_listing_bar(get, symbol, region, sessions, **options):
+            result = original(get, symbol, region, sessions, **options)
+            if symbol == '005930.KS' and not options.get('stop_on_or_before'):
+                result['bars'][0].update(open=0., high=0., low=0., close=0.)
+            return result
+
+        for required in (False, True):
+            with self.subTest(required=required), tempfile.TemporaryDirectory() as folder, \
+                    patch.object(market, 'completed_sessions', return_value=self.days), \
+                    patch.object(market, 'daily_series', side_effect=invalid_listing_bar):
+                seed = self.prior()
+                if not required:
+                    seed['bars'] = seed['bars'][1:]
+                result = market.collect(
+                    self.config, {}, Path(folder), lambda *args: None,
+                    now=datetime(2026, 9, 11, tzinfo=timezone.utc),
+                    prior_series={('KR', '005930.KS'): seed})
+                if required:
+                    self.assertFalse(result['series'])
+                    self.assertEqual(result['errors'][0]['error_code'], 'market_corrected_history_invalid')
+                else:
+                    row = result['series'][0]
+                    self.assertEqual(row['collection']['mode'], 'overlap_refresh')
+                    self.assertEqual(row['collection']['unusable_prefix_dates'], self.days[:1])
+                    self.assertEqual([bar['date'] for bar in row['bars']], self.days[1:])
+
     def test_correction_must_match_the_second_provider_response(self):
         original = self.fetch
         self.changed = True
