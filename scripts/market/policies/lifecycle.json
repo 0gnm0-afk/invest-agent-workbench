@@ -3,6 +3,96 @@
   "records": [
     {
       "market": "US",
+      "symbol": "DYNC",
+      "isin_code": "KYG2949D1043",
+      "state": "confirmed_trading_ended",
+      "last_trading_session": "2026-10-29",
+      "effective_session": "2026-10-30",
+      "verified_on": "2026-11-05",
+      "source_url": "https://www.nasdaqtrader.com/TraderNews.aspx?id=ECA2026-778"
+    },
+    {
+      "market": "US",
+      "symbol": "NATH",
+      "isin_code": "US6323471002",
+      "state": "confirmed_trading_ended",
+      "last_trading_session": "2026-10-23",
+      "effective_session": "2026-10-26",
+      "verified_on": "2026-11-05",
+      "source_url": "https://www.nasdaqtrader.com/TraderNews.aspx?id=ECA2026-738"
+    },
+    {
+      "market": "US",
+      "symbol": "ACA",
+      "isin_code": "US0396531008",
+      "state": "confirmed_trading_ended",
+      "last_trading_session": null,
+      "effective_session": "2026-10-23",
+      "verified_on": "2026-11-05",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1739445/000114036126040596/ef20084131_8k.htm"
+    },
+    {
+      "market": "US",
+      "symbol": "ACVA",
+      "isin_code": "US00091G1040",
+      "state": "confirmed_trading_ended",
+      "last_trading_session": null,
+      "effective_session": "2026-10-16",
+      "verified_on": "2026-11-05",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1637873/000087666126000841/ruleprovisionnotice.htm"
+    },
+    {
+      "market": "US",
+      "symbol": "ATKR",
+      "isin_code": "US0476491081",
+      "state": "confirmed_trading_ended",
+      "last_trading_session": null,
+      "effective_session": "2026-10-19",
+      "verified_on": "2026-11-05",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/876661/000087666126000843/ruleprovisionnotice.htm"
+    },
+    {
+      "market": "US",
+      "symbol": "BZH",
+      "isin_code": "US07556Q8814",
+      "state": "confirmed_trading_ended",
+      "last_trading_session": null,
+      "effective_session": "2026-10-20",
+      "verified_on": "2026-11-05",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/915840/000110465926117198/tm2622398d20_8k.htm"
+    },
+    {
+      "market": "US",
+      "symbol": "PERF",
+      "isin_code": "KYG7006A1094",
+      "state": "confirmed_trading_ended",
+      "last_trading_session": null,
+      "effective_session": "2026-10-23",
+      "verified_on": "2026-11-05",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1899830/000110465926118301/tm2627441d2_ex99-1.htm"
+    },
+    {
+      "market": "US",
+      "symbol": "WEAV",
+      "isin_code": "US94724R1086",
+      "state": "confirmed_trading_ended",
+      "last_trading_session": null,
+      "effective_session": "2026-10-26",
+      "verified_on": "2026-11-05",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1609151/000087666126000860/ruleprovisionnotice.htm"
+    },
+    {
+      "market": "US",
+      "symbol": "SUPN",
+      "isin_code": "US8684591089",
+      "state": "confirmed_trading_ended",
+      "last_trading_session": "2026-10-30",
+      "effective_session": "2026-11-02",
+      "verified_on": "2026-11-05",
+      "source_url": "https://www.nasdaqtrader.com/TraderNews.aspx?id=ECA2026-742"
+    },
+    {
+      "market": "US",
       "symbol": "AFBI",
       "isin_code": "US00832E1038",
       "state": "confirmed_trading_ended",
