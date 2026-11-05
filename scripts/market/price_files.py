@@ -17,6 +17,7 @@ import re
 from pathlib import Path
 import zlib
 from market.price_receipts import packed_record, packed_exists, save_one
+from runtime_paths import runtime_lookup_paths
 
 from market.prices import PriceStore, default_path, digest, identity, normalized, FIELDS
 
@@ -214,8 +215,12 @@ class PriceFiles:
         with closing(self.connect()) as db:
             if not db.execute("SELECT 1 FROM sqlite_master WHERE name='price_files'").fetchone():
                 return None
-            return db.execute('SELECT source_sha256,original_bytes,recipe_sha256,recipe FROM price_files WHERE path=?',
-                              (file_key(path),)).fetchone()
+            for candidate in runtime_lookup_paths(path):
+                row = db.execute('SELECT source_sha256,original_bytes,recipe_sha256,recipe FROM price_files WHERE path=?',
+                                 (file_key(candidate),)).fetchone()
+                if row is not None:
+                    return row
+            return None
 
     def recover(self, path):
         row = self._record(path)
@@ -238,7 +243,8 @@ class PriceFiles:
         with closing(self.connect()) as db:
             if not db.execute("SELECT 1 FROM sqlite_master WHERE name='price_files'").fetchone():
                 return False
-            return bool(db.execute('SELECT 1 FROM price_files WHERE path=?', (file_key(path),)).fetchone())
+            return any(db.execute('SELECT 1 FROM price_files WHERE path=?', (file_key(candidate),)).fetchone()
+                       for candidate in runtime_lookup_paths(path))
 
 
 def recover_bytes(path):

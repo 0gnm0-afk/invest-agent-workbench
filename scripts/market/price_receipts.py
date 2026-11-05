@@ -9,8 +9,10 @@ import tempfile
 import zipfile
 import zlib
 
+from runtime_paths import local_runtime_path, runtime_lookup_paths
 
-def address(runtime, path):
+
+def address(runtime, path, *, original_path=None):
     path = Path(path).resolve()
     from workbench_paths import ROOT
     if path.is_relative_to(ROOT/'runtime'):
@@ -22,7 +24,8 @@ def address(runtime, path):
     depth = 3 if (len(relative.parts)>=3 and relative.parts[0] in ('kr-history','us-history')
                   and relative.parts[2]=='pre-local-date-normalization') else 2
     group = '/'.join(relative.parts[:depth])
-    name = hashlib.sha256(os.path.normcase(str(path)).encode()).hexdigest()
+    key = Path(original_path).resolve() if original_path is not None else path
+    name = hashlib.sha256(os.path.normcase(str(key)).encode()).hexdigest()
     return runtime/'price-run-receipts'/(hashlib.sha256(group.encode()).hexdigest()+'.zip'), name
 
 
@@ -32,20 +35,28 @@ def _entries(path, timestamp, size):
         return z.NameToInfo.copy()
 
 
+def _entry(runtime, source):
+    physical = local_runtime_path(Path(source).resolve())
+    for original in runtime_lookup_paths(source):
+        path, name = address(runtime, physical, original_path=original)
+        if path is None or not path.is_file():
+            continue
+        stat = path.stat()
+        info = _entries(path, stat.st_mtime_ns, stat.st_size).get(name)
+        if info is not None:
+            return path, info
+    return None
+
+
 def packed_exists(runtime, source):
-    path, name = address(runtime, source)
-    if path is None or not path.is_file():
-        return False
-    stat = path.stat()
-    return name in _entries(path, stat.st_mtime_ns, stat.st_size)
+    return _entry(runtime, source) is not None
 
 
 def packed_record(runtime, source):
-    path, name = address(runtime, source)
-    if path is None or not packed_exists(runtime, source):
+    entry = _entry(runtime, source)
+    if entry is None:
         return None
-    stat = path.stat()
-    info = _entries(path,stat.st_mtime_ns,stat.st_size)[name]
+    path, info = entry
     with path.open('rb') as stream:
         stream.seek(info.header_offset)
         local = stream.read(30)

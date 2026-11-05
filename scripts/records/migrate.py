@@ -13,7 +13,7 @@ import re
 import socket
 from unittest.mock import patch
 
-from atomic_io import atomic_write
+from atomic_io import atomic_write, read_bytes
 from workbench_paths import ROOT
 from records.store import RecordStore, default_path, TERMINAL_STATES
 from records.paths import local_runtime_path
@@ -35,7 +35,7 @@ def discover(root):
             if not manifest.is_file():
                 continue
             try:
-                run = json.loads(path.read_bytes())
+                run = json.loads(read_bytes(path))
                 raw = manifest.read_bytes()
                 value = json.loads(raw)
                 if not isinstance(value.get('output_hashes'), dict):

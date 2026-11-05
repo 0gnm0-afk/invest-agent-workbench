@@ -1,10 +1,13 @@
 import hashlib
+import json
 from pathlib import Path
 import sys
+import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from market.price_receipts import address
+from market.price_receipts import address, packed_exists, packed_record, save_one
 
 
 class ReceiptAddresses(unittest.TestCase):
@@ -19,6 +22,27 @@ class ReceiptAddresses(unittest.TestCase):
                     self.assertEqual(existing.name,hashlib.sha256((market+'/'+collection).encode()).hexdigest()+'.zip')
                     self.assertEqual(historical.name,hashlib.sha256((market+'/'+collection+'/pre-local-date-normalization').encode()).hexdigest()+'.zip')
                     self.assertNotEqual(existing,historical)
+
+    def test_moved_pack_uses_current_folder_and_original_entry_key(self):
+        with tempfile.TemporaryDirectory() as folder:
+            old = Path(folder) / 'old'
+            current = Path(folder) / 'usb'
+            relative = Path('financials/KR-A/run/saved-price.json')
+            source = old / 'runtime' / relative
+            local = current / 'runtime' / relative
+            save_one(old / 'runtime', source, 'source-sha', 10, 'recipe-sha', b'packed-body')
+            original_pack, _ = address(old / 'runtime', source)
+            current_pack, _ = address(current / 'runtime', local)
+            current_pack.parent.mkdir(parents=True)
+            original_pack.replace(current_pack)
+            (current / 'config.json').write_text(
+                json.dumps({'records': {'previous_root': str(old)}}), encoding='utf-8')
+            with patch('runtime_paths.ROOT', current):
+                for path in (source, local):
+                    self.assertTrue(packed_exists(current / 'runtime', path))
+                    self.assertEqual(packed_record(current / 'runtime', path),
+                                     ('source-sha', 10, 'recipe-sha', b'packed-body'))
+                self.assertIsNone(packed_record(current / 'runtime', local.with_name('unknown.json')))
 
     def test_other_run_subfolders_keep_the_same_two_component_group(self):
         runtime=Path(Path.cwd().anchor)/'synthetic-prices-runtime'

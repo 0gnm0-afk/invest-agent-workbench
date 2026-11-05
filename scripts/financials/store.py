@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 import threading
 import time
 import uuid
@@ -13,6 +14,7 @@ from financials.normalize import dart_normalize, sec_normalize
 from financials.calculate import VERSION, summarize
 from market.financial_price_receipts import pack_price_input, price_input_bytes, read_price_input
 from market.prices import PriceStore, default_path
+from records.financial import ARTIFACTS, publish_snapshot, read_artifact
 
 from workbench_paths import ROOT
 
@@ -100,13 +102,14 @@ class FinancialStore:
             pointer=json.loads((folder/'latest.json').read_bytes());sid=pointer['snapshot']
             if not re.fullmatch('[a-f0-9]{32}',sid):raise ValueError('invalid_snapshot')
             base=folder/'snapshots'/sid
-            manifest=json.loads((base/'manifest.json').read_bytes())
-            if hashlib.sha256((base/'manifest.json').read_bytes()).hexdigest()!=pointer['manifest_sha256']:raise ValueError('manifest_hash_mismatch')
-            raw=(base/'result.json').read_bytes()
+            manifest_raw=read_artifact(base/'manifest.json')
+            if hashlib.sha256(manifest_raw).hexdigest()!=pointer['manifest_sha256']:raise ValueError('manifest_hash_mismatch')
+            manifest=json.loads(manifest_raw)
+            raw=read_artifact(base/'result.json')
             if hashlib.sha256(raw).hexdigest()!=manifest['files']['result.json']:raise ValueError('result_hash_mismatch')
             result=json.loads(raw)
         except FileNotFoundError: pass
-        except (OSError,ValueError,KeyError):status=dict(state='failed',error='cached_snapshot_integrity_failed')
+        except (OSError,ValueError,KeyError,sqlite3.Error):status=dict(state='failed',error='cached_snapshot_integrity_failed')
         if status.get('state')=='running':
             lease=lock_file(folder/'request.lock')
             if lease:
@@ -142,8 +145,10 @@ class FinancialStore:
                 import shutil
                 seed=Path(seed);shutil.copytree(seed/'raw',base/'raw',dirs_exist_ok=True)
                 source=json.loads((seed/'source.json').read_bytes())
-                if (seed/'result.json').exists():
-                    inherited=json.loads((seed/'result.json').read_bytes())
+                try:
+                    inherited=json.loads(read_artifact(seed/'result.json'))
+                except FileNotFoundError:
+                    pass
                 sources=json.loads((seed/'sources.json').read_bytes()) if (seed/'sources.json').exists() else inherited['sources']
                 if supplement and source.get('provider')=='DART':
                     from financials.providers.dart_supplement import collect_annual_supplements
@@ -198,7 +203,10 @@ class FinancialStore:
             }
             save(base/'manifest.json',dict(schema=1,key=key,version=VERSION,files=files,
                                           code={label:hashlib.sha256((ROOT/'scripts'/path).read_bytes()).hexdigest() for label,path in code_paths.items()}))
-            save(folder/'latest.json',dict(snapshot=sid,manifest_sha256=hashlib.sha256((base/'manifest.json').read_bytes()).hexdigest()),atomic=True)
+            manifest_sha=hashlib.sha256((base/'manifest.json').read_bytes()).hexdigest()
+            if self.root.name=='financials' and self.root.parent.name=='runtime':
+                publish_snapshot(base,root=self.root.parent.parent,manifest_sha=manifest_sha)
+            save(folder/'latest.json',dict(snapshot=sid,manifest_sha256=manifest_sha),atomic=True)
             state='unsupported' if result.get('eligibility',{}).get('status')=='unsupported' else 'complete'
             save(folder/'attempt.json',dict(state=state,quality=result.get('data_quality',{}).get('state'),started_at=started,finished_at=now(),snapshot=sid,stage='저장 완료'),atomic=True)
         except Exception as exc:
@@ -227,7 +235,7 @@ class FinancialStore:
             sid=pointer['snapshot']
             if not re.fullmatch('[a-f0-9]{32}',sid):raise ValueError('invalid_snapshot')
             seed=folder/'snapshots'/sid
-            manifest_raw=(seed/'manifest.json').read_bytes()
+            manifest_raw=read_artifact(seed/'manifest.json')
             if hashlib.sha256(manifest_raw).hexdigest()!=pointer['manifest_sha256']:
                 raise ValueError('manifest_hash_mismatch')
             manifest=json.loads(manifest_raw)
@@ -240,10 +248,11 @@ class FinancialStore:
                     price_raw=price_input_bytes(path,self.price_store)
                     actual=hashlib.sha256(price_raw).hexdigest()
                 else:
-                    actual=hashlib.sha256(path.read_bytes()).hexdigest()
+                    raw=read_artifact(path) if name in ARTIFACTS else path.read_bytes()
+                    actual=hashlib.sha256(raw).hexdigest()
                 if actual!=digest:
                     raise ValueError('saved_input_hash_mismatch')
-            prior=json.loads((seed/'result.json').read_bytes())
+            prior=json.loads(read_artifact(seed/'result.json'))
             if prior.get('key')!=key or prior.get('snapshot_id')!=sid:
                 raise ValueError('saved_identity_mismatch')
             saved_stock=read_price_input(price_raw,seed/'saved-price.json',self.price_store)

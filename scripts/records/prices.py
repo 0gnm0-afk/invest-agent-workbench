@@ -60,12 +60,13 @@ def _source(run_dir, root, needed=None):
     run_dir, root = Path(run_dir).resolve(), Path(root).resolve()
     run = json.loads((run_dir / 'run.json').read_bytes())
     source = (Path(run['market_source']) / 'snapshot.json').resolve()
+    physical_source = local_runtime_path(source, root=root)
     approved_roots = [root / 'runtime']
     config_path = root / 'config.json'
     config = json.loads(config_path.read_bytes()) if config_path.is_file() else {}
     if config.get('mother'):
         approved_roots.append(Path(config['mother']).resolve() / 'runtime')
-    if not any(source.is_relative_to(parent) for parent in approved_roots):
+    if not any(physical_source.is_relative_to(parent) for parent in approved_roots):
         raise ValueError('record_price_source_outside_runtime')
     manifest = json.loads((run_dir / 'manifest.json').read_bytes())
     expected = manifest.get('input_hashes', {}).get(str(source))
@@ -74,6 +75,8 @@ def _source(run_dir, root, needed=None):
     price_store = PriceStore(default_path(root))
     files = PriceFiles(price_store)
     packed = files._record(source)
+    if packed is None and physical_source != source:
+        packed = files._record(physical_source)
     refs = {}
     if packed:
         source_sha, _, recipe_sha, compressed = packed
@@ -90,12 +93,12 @@ def _source(run_dir, root, needed=None):
                     raise ValueError('record_price_source_identity_ambiguous')
                 refs[key] = patch['reference']
     else:
-        raw = source.read_bytes()
+        raw = physical_source.read_bytes()
         if hashlib.sha256(raw).hexdigest() != expected:
             raise ValueError('record_price_source_integrity_failed')
         value = json.loads(raw)
         source_db = (value.get('ohlcv_store') or {}).get('path')
-        if source_db and Path(source_db).resolve() != price_store.path:
+        if source_db and local_runtime_path(source_db, root=root).resolve() != price_store.path:
             raise ValueError('record_price_source_database_mismatch')
         for series in value.get('series', []):
             key = (series['market'], series['symbol'])
