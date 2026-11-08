@@ -23,6 +23,7 @@ from market.providers.toss_universe import listing_requests, validate_listing_ro
 from invest_agent.trading.market_provider import completed_sessions
 from invest_agent.trading.store import instance_lock
 from atomic_io import read_bytes
+from records.files import available as record_available
 from market.price_files import available
 
 
@@ -143,8 +144,8 @@ class Collector:
     def get(self, path, params):
         key = hashlib.sha256(packed([path,params])).hexdigest()
         saved = self.root/'responses'/(key+'.json.gz')
-        if saved.exists():
-            packet = json.loads(gzip.decompress(saved.read_bytes()))
+        if record_available(saved):
+            packet = json.loads(gzip.decompress(read_bytes(saved)))
             if packet['request'] != [path,params] or hashlib.sha256(packed(packet['payload'])).hexdigest() != packet['sha256']:
                 raise ValueError('response_cache_hash_mismatch')
             return packet['payload'], key
@@ -153,9 +154,13 @@ class Collector:
                 self.client = TossMarketClient(observer=self.observe, min_interval=.1)
         payload = self.client(path,params)
         packet = dict(request=[path,params],payload=payload,sha256=hashlib.sha256(packed(payload)).hexdigest(),fetched_at=datetime.now(timezone.utc).isoformat())
+        from records.history import save_response
+        raw = gzip.compress(packed(packet))
+        if save_response(self.root, saved, raw):
+            return payload, key
         saved.parent.mkdir(parents=True,exist_ok=True)
         temp = saved.with_suffix('.tmp')
-        temp.write_bytes(gzip.compress(packed(packet)))
+        temp.write_bytes(raw)
         temp.replace(saved)
         return payload,key
 

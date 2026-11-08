@@ -1,4 +1,4 @@
-"""Offline migration and verified lookup of operational market records. No deletion."""
+"""Offline records migration and explicit verified compaction of published runs."""
 if not __package__:
     import sys
     from pathlib import Path
@@ -75,6 +75,35 @@ def migrate(root, folder, runs=None):
     return result if plan['runs'] else {'published': 0, 'errors': [], 'original_files_removed': 0}
 
 
+def compact(root, folder, runs=None, *, apply=False):
+    """Plan by default; --apply replaces only DB-verified duplicate JSON bodies."""
+    from records.files import compact_run
+    root, folder = Path(root).resolve(), Path(folder).resolve()
+    store = RecordStore(default_path(root))
+    selected = runs if runs is not None else [run['run_path'] for run in store.runs()]
+    selected = sorted({local_runtime_path(path, root=root).resolve() for path in selected})
+    receipts, errors = [], []
+    result = {'database': str(store.path), 'apply': apply, 'planned_runs': len(selected),
+              'receipts': receipts, 'errors': errors, 'database_written': False,
+              'original_files_removed': 0, 'replaced_files': 0, 'reclaimed_bytes': 0}
+    for run in selected:
+        try:
+            receipt = compact_run(run, root=root, store=store, apply=apply)
+            receipts.append(receipt)
+            result['replaced_files'] += receipt['replaced_files']
+            result['reclaimed_bytes'] += receipt['reclaimed_bytes'] if apply else 0
+            print(json.dumps({'run': run.name, 'state': receipt['state'],
+                              'eligible_files': len(receipt['files']),
+                              'replaced_files': receipt['replaced_files']}), flush=True)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            errors.append({'run': str(run), 'type': type(exc).__name__, 'reason': str(exc)})
+            print(json.dumps({'run': run.name, 'error': str(exc)}), flush=True)
+        save(folder / ('compaction.json' if apply else 'compaction-plan.json'), result)
+    if not selected:
+        save(folder / ('compaction.json' if apply else 'compaction-plan.json'), result)
+    return result
+
+
 def verify(store, *, forbid_original_reads=False):
     runs = store.runs()
     references = [reference for run in runs for reference in store.artifacts(run['run_path'])]
@@ -123,7 +152,14 @@ def main():
     parser.add_argument('--sha256')
     parser.add_argument('--output', type=Path)
     parser.add_argument('--forbid-original-reads', action='store_true')
+    parser.add_argument('--compact', action='store_true',
+                        help='Verify/plan compaction of already published --all or --run records; no DB writes')
+    parser.add_argument('--apply', action='store_true', help='Apply the verified --compact plan; otherwise read-only')
     args = parser.parse_args()
+    if args.compact and not (args.all or args.run):
+        parser.error('--compact requires --all or --run')
+    if args.apply and not args.compact:
+        parser.error('--apply requires --compact')
     root = args.root.resolve()
     store = RecordStore(default_path(root))
     with patch.object(socket.socket, 'connect', side_effect=AssertionError('records_network_forbidden')):
@@ -140,7 +176,10 @@ def main():
         else:
             if not args.output:
                 parser.error('--output is required for migration evidence')
-            result = migrate(root, args.output.resolve(), None if args.all else args.run)
+            if args.compact:
+                result = compact(root, args.output, None if args.all else args.run, apply=args.apply)
+            else:
+                result = migrate(root, args.output.resolve(), None if args.all else args.run)
         if args.output and args.verify:
             save(args.output, result)
         print(json.dumps(result, ensure_ascii=False), flush=True)

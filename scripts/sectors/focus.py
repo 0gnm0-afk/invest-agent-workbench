@@ -9,8 +9,7 @@ from pathlib import Path
 
 from sectors.signals import prepare, cohort, divide, change
 from sectors.observation import equal_weight_index
-from invest_agent.trading.store import instance_lock
-from invest_agent.trading.runner import atomic_write
+from derived_cache import publish, read_lock
 
 DEFAULTS = dict(window=5, baseline=20, history=40, min_members=5,
                 min_coverage=.8, min_change=.10, min_acceleration=.05,
@@ -196,16 +195,16 @@ def cached(root, run, snapshot, groups, sectors, source_hash, overrides=None):
                   settings=settings(overrides),code={n:hashlib.sha256((SCRIPTS/path).read_bytes()).hexdigest() for n,path in dependencies.items()})
     key=hashlib.sha256(json.dumps(key_data,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
     folder=Path(root)/'runtime/sector-focus'/key; file=folder/'focus.json'
-    with instance_lock(folder):
-        if file.exists():
+    with read_lock(folder) as readable:
+        if readable and file.exists():
             raw=file.read_bytes(); meta=json.loads((folder/'manifest.json').read_text(encoding='utf-8'))
             if hashlib.sha256(raw).hexdigest()!=meta['sha256']:raise ValueError('focus_cache_hash_mismatch')
             return json.loads(raw)
-        result=build(snapshot,groups,sectors,overrides)
-        raw=json.dumps(result,ensure_ascii=False,allow_nan=False).encode()
-        atomic_write(file,raw.decode())
-        atomic_write(folder/'manifest.json',json.dumps(dict(sha256=hashlib.sha256(raw).hexdigest(),run=str(run),key=key)))
-        return result
+    result=build(snapshot,groups,sectors,overrides)
+    raw=json.dumps(result,ensure_ascii=False,allow_nan=False).encode()
+    publish(root, 'sector-focus', key, {'focus.json':raw.decode(),
+        'manifest.json':json.dumps(dict(sha256=hashlib.sha256(raw).hexdigest(),run=str(run),key=key))})
+    return result
 
 
 def screen_groups(entries, universe):

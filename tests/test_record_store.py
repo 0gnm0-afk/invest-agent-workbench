@@ -167,6 +167,38 @@ class RecordStoreTests(unittest.TestCase):
         self.assertEqual(self.store.subjects('US', 'aaa'), [])
         self.assertEqual(self.store.subjects('US', 'AAA', kind='quality.json'), [])
 
+    def test_subject_reindex_preserves_binary_originals_and_indexes_json(self):
+        import gzip
+        raw = gzip.compress(b'{"provider_response":"original bytes"}', mtime=0)
+        reference = self.store.put(self.runtime / 'response.json.gz', raw,
+                                   kind='history_response', root=self.root)
+        self.publish()
+        with closing(self.store.connect(write=True)) as db, db:
+            db.execute('DELETE FROM record_subjects')
+        self.assertEqual(self.store.reindex_subjects(), 1)
+        self.assertEqual(self.store.read(reference), raw)
+        self.assertEqual(len(self.store.subjects('US', 'AAPL')), 1)
+        self.assertEqual(self.store.reindex_subjects(), 0)
+
+    def test_subject_reindex_does_not_decode_collection_checkpoints(self):
+        raw = b'{"key":"US:AAA","payload":{"bars_ref":{"id":1}},"hash":"fixture"}'
+        reference = self.store.put(self.runtime / 'checkpoint.json', raw,
+                                   kind='collection_checkpoint', root=self.root)
+        self.publish()
+        with closing(self.store.connect(write=True)) as db, db:
+            db.execute('DELETE FROM record_subjects')
+        loads = json.loads
+
+        def guarded(value, *args, **kwargs):
+            if value == raw:
+                raise AssertionError('checkpoint_subject_scan_forbidden')
+            return loads(value, *args, **kwargs)
+
+        with patch('records.store.json.loads', side_effect=guarded):
+            self.assertEqual(self.store.reindex_subjects(), 1)
+        self.assertEqual(self.store.read(reference), raw)
+        self.assertEqual(len(self.store.subjects('US', 'AAPL')), 1)
+
     def test_malformed_output_hash_and_missing_file_roll_back_whole_run(self):
         self.outputs['screen.json'] = '0' * 64
         self.manifest()

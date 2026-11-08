@@ -17,7 +17,9 @@ from market.providers.toss_universe import discover
 from market.quality import complete_cap, error_disposition
 import market.scope as market_scope
 from market.prices import PriceStore, freeze_series, default_path
-from market.price_files import available
+from market.price_files import available as price_file_available
+from records.files import available as record_available
+from records.checkpoints import save_checkpoint
 from atomic_io import read_bytes
 
 COLLECTOR_ID = 'toss_openapi_kr_us_v1'
@@ -52,6 +54,7 @@ def collector_version():
         'market/policies/exclusions.json',
         'atomic_io.py',
         'market/prices.py',
+        'records/checkpoints.py',
         'workbench_paths.py',
     )])
 
@@ -204,7 +207,7 @@ def _collect(config, account, root, get, now, refresh, prior_series, prior_sourc
         }
         key = digest({'version': version, **identity})
         path = root / 'series' / (key + '.json')
-        if not refresh and available(path):
+        if not refresh and (record_available(path) or price_file_available(path)):
             try:
                 cached = json.loads(read_bytes(path))
                 observed = datetime.fromisoformat(cached['observed_at'])
@@ -316,10 +319,12 @@ def _collect(config, account, root, get, now, refresh, prior_series, prior_sourc
         stored = freeze_series(price_store, {**value, **{k:listing[k] for k in
                                ('isin_code','listing_exchange_family') if listing and k in listing}},
                                source=str(path), kind='checkpoint')
-        atomic_write(path, json.dumps({
+        checkpoint = json.dumps({
             'key': key, 'observed_at': now.isoformat(), 'payload': stored, 'hash': digest(stored),
             'ohlcv_path': str(price_store.path),
-        }))
+        })
+        if not save_checkpoint(path, checkpoint.encode('utf-8')):
+            atomic_write(path, checkpoint)
         return {**value,'bars_ref':stored['bars_ref']}, mode
 
     benchmarks = {}
@@ -348,7 +353,7 @@ def _collect(config, account, root, get, now, refresh, prior_series, prior_sourc
                               'version': cap_version})
             cap_path = root / 'cap-prices' / (cap_key + '.json')
             try:
-                cached = json.loads(cap_path.read_text(encoding='utf-8')) if not refresh else {}
+                cached = json.loads(read_bytes(cap_path)) if not refresh else {}
                 if (cached.get('key') != cap_key or digest(cached['payload']) != cached['hash']
                         or not 0 <= (now - datetime.fromisoformat(cached['observed_at'])).total_seconds() <= 86400):
                     raise ValueError('invalid_cap_cache')
@@ -357,8 +362,10 @@ def _collect(config, account, root, get, now, refresh, prior_series, prior_sourc
                 try:
                     cap_fields = complete_cap(get, row, sessions[row['market']])
                     if cap_fields.get('market_cap_quality') == 'completed_close_estimate':
-                        atomic_write(cap_path, json.dumps({'key': cap_key, 'observed_at': now.isoformat(),
-                                                          'payload': cap_fields, 'hash': digest(cap_fields)}))
+                        checkpoint = json.dumps({'key': cap_key, 'observed_at': now.isoformat(),
+                                                 'payload': cap_fields, 'hash': digest(cap_fields)})
+                        if not save_checkpoint(cap_path, checkpoint.encode('utf-8')):
+                            atomic_write(cap_path, checkpoint)
                 except (Exception, SystemExit) as exc:
                     cap_fields = {'market_cap': None, 'market_cap_as_of': None,
                                   'market_cap_quality': 'unavailable_completed_close',

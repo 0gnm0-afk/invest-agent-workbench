@@ -223,17 +223,48 @@ class RecordStore:
             raise ValueError('record_source_integrity_failed')
         return raw
 
-    def _put(self, db, source, raw, *, kind, root, metadata=None, encoded=None):
+    def _put(self, db, source, raw, *, kind, root, metadata=None, encoded=None, immutable_keys=None):
         source = _inside(source, root)
-        return self._insert_version(db, source, raw, kind=kind, root=root, metadata=metadata, encoded=encoded)
+        return self._insert_version(db, source, raw, kind=kind, root=root, metadata=metadata,
+                                    encoded=encoded, immutable_keys=immutable_keys)
 
-    def _insert_version(self, db, source, raw, *, kind, root, metadata=None, encoded=None):
+    def _insert_version(self, db, source, raw, *, kind, root, metadata=None, encoded=None,
+                        immutable_keys=None, validated_address=None):
         """Insert into a caller-owned transaction after source authority validation."""
         if not isinstance(raw, bytes):
             raise ValueError('record_source_bytes_required')
+        if validated_address is None:
+            source_key, root_path = _key(source), str(Path(root).resolve())
+        else:
+            # A bounded importer has checked the physical ancestry under its
+            # writer lock. Reuse that address without thousands of filesystem
+            # resolve/stat calls; do not accept a different lexical authority.
+            source_key, root_path = validated_address
+            if (not Path(source).is_absolute() or not Path(root_path).is_absolute()
+                    or source_key != os.path.normcase(os.path.abspath(source))
+                    or str(root) != root_path or not Path(source).is_relative_to(Path(root_path) / 'runtime')):
+                raise ValueError('record_source_outside_runtime')
         sha = _sha(raw)
+        history_path = False
+        if kind != 'history_response':
+            runtime = Path(root_path) / 'runtime'
+            relative = Path(source).relative_to(runtime) if Path(source).is_relative_to(runtime) else None
+            history_path = (relative is not None and len(relative.parts) == 4
+                            and relative.parts[0] in ('kr-history', 'us-history')
+                            and relative.parts[2] == 'responses')
+        if kind == 'history_response' or history_path:
+            # Bulk import supplies keys from its frozen collection aliases;
+            # ordinary publishers resolve aliases once for this rare write.
+            keys = immutable_keys or [_key(p) for p in runtime_lookup_paths(source, root=root)]
+            prior = db.execute('SELECT id,sha256,kind FROM record_versions WHERE source_key IN (' +
+                               ','.join('?' for _ in keys) + ')', keys).fetchall()
+            if kind == 'history_response' or any(row[2] == 'history_response' for row in prior):
+                if any(row[1:] != (sha, 'history_response') for row in prior) or kind != 'history_response':
+                    raise ValueError('history_response_immutable_conflict')
+                if prior:
+                    return prior[0][0]
         existing = db.execute('SELECT id FROM record_versions WHERE source_key=? AND sha256=?',
-                              (_key(source), sha)).fetchone()
+                              (source_key, sha)).fetchone()
         if existing:
             return existing[0]
         if encoded is None:
@@ -249,7 +280,7 @@ class RecordStore:
             db.execute('INSERT INTO record_blobs VALUES (?,?,?)', (blob_sha, len(payload), zlib.compress(payload, 6)))
         version = db.execute('''INSERT INTO record_versions(
             source_path,source_key,root_path,sha256,raw_size,blob_sha256,encoding,kind,metadata,created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?)''', (str(source), _key(source), str(Path(root).resolve()), sha, len(raw),
+            VALUES (?,?,?,?,?,?,?,?,?,?)''', (str(source), source_key, root_path, sha, len(raw),
             blob_sha, encoding, kind, _json(metadata or {}), datetime.now(timezone.utc).isoformat())).lastrowid
         # Subject keys index original rows, including rows whose prices live only
         # in a verified recipe. Never materialize prices merely to build an index.
@@ -271,8 +302,10 @@ class RecordStore:
     def put(self, source, raw, *, kind='artifact', root=ROOT, metadata=None, encoded=None):
         with closing(self.connect(write=True)) as db, db:
             db.execute('BEGIN IMMEDIATE')
-            self._put(db, source, raw, kind=kind, root=root, metadata=metadata, encoded=encoded)
-        return self.lookup(source, _sha(raw))
+            version = self._put(db, source, raw, kind=kind, root=root, metadata=metadata, encoded=encoded)
+            row = db.execute('''SELECT source_path,sha256,raw_size,blob_sha256,encoding,kind,id
+                                FROM record_versions WHERE id=?''', (version,)).fetchone()
+        return self._reference(row)
 
     def runs(self):
         if not self.path.is_file():
@@ -335,13 +368,19 @@ class RecordStore:
             versions = db.execute('''SELECT v.id,v.encoding,v.blob_sha256,b.payload
                 FROM record_versions v JOIN record_blobs b ON b.sha256=v.blob_sha256
                 WHERE v.encoding IN ('raw','screen_prices_v1')
+                AND v.kind NOT IN ('history_response','collection_checkpoint')
                 AND NOT EXISTS(SELECT 1 FROM record_subjects s WHERE s.version_id=v.id)''').fetchall()
         added = 0
         for version, encoding, expected, compressed in versions:
             payload = zlib.decompress(compressed)
             if _sha(payload) != expected:
                 raise ValueError('record_blob_hash_mismatch')
-            parsed = json.loads(payload)
+            try:
+                parsed = json.loads(payload)
+            except (ValueError, UnicodeError):
+                if encoding == 'raw':
+                    continue
+                raise
             if encoding == 'screen_prices_v1':
                 parsed = parsed['value']
             rows = parsed.get('rows') if isinstance(parsed, dict) else parsed

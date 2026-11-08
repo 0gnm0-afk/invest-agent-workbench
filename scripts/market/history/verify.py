@@ -74,7 +74,7 @@ def verify(root, require_finished=False):
             for params in listing_requests(exchange, include_adr=include_adr):
                 request_meta=metadata[params['securityType']]
                 key=request_meta['response'];p=root/'responses'/(key+'.json.gz')
-                raw=p.read_bytes();packet=json.loads(gzip.decompress(raw))
+                raw=read_bytes(p);packet=json.loads(gzip.decompress(raw))
                 request=['/api/v1/stocks/all',params]
                 assert packet['request']==request and hashlib.sha256(packed(request)).hexdigest()==key, 'listing_request_mismatch'
                 assert hashlib.sha256(packed(packet['payload'])).hexdigest()==packet['sha256'], 'listing_payload_mismatch'
@@ -94,7 +94,7 @@ def verify(root, require_finished=False):
         merged={};last_cursor=None
         for n,key in enumerate(d['responses']):
             p=root/'responses'/(key+'.json.gz')
-            raw=p.read_bytes();packet=json.loads(gzip.decompress(raw))
+            raw=read_bytes(p);packet=json.loads(gzip.decompress(raw))
             path,params=packet['request']
             assert hashlib.sha256(packed(packet['request'])).hexdigest()==key, 'request_hash_mismatch'
             assert hashlib.sha256(packed(packet['payload'])).hexdigest()==packet['sha256'], 'payload_hash_mismatch'

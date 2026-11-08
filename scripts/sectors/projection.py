@@ -6,8 +6,7 @@ import json
 from pathlib import Path
 import sectors.observation as so
 import sectors.signals as sector_signals
-from invest_agent.trading.store import instance_lock
-from invest_agent.trading.runner import atomic_write
+from derived_cache import publish, read_lock
 
 
 def cached(root, run, config, source, original_observation, review, *, snapshot=None):
@@ -60,23 +59,23 @@ def cached(root, run, config, source, original_observation, review, *, snapshot=
     key = hashlib.sha256(json.dumps(key_data,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
     folder = Path(root)/'runtime/sector-projection'/key
     output = folder/'view.json'
-    with instance_lock(folder):
-        if output.exists():
+    with read_lock(folder) as readable:
+        if readable and output.exists():
             meta = artifact_io.load(folder/'manifest.json')
             artifact_io.checked(output, meta['sha256'], {})
             return artifact_io.load(output)
-        observation, groups, verified = so.build(Path(source), *[Path(p) for p in seed['roots'][1:]],
-                                                applied, allow_universe_changes=True, basis_rechecks=basis_rechecks, snapshot=snapshot)
-        # Every dependency read during replay must agree with pinned evidence.
-        for path, expected in verified.items():
-            if path not in inputs or inputs[path] != expected:
-                raise ValueError('projection_unpinned_input:'+path)
-        signals = sector_signals.build(snapshot, groups, observation, config.get('sector_states'))
-        sector_signals.attach_candidates(signals, review, groups, {'rows':[]})
-        result = dict(observation=observation, groups=groups, signals=signals,
-                      policy='last_verified_classification_refresh_due_after_7_days', source_run=str(run))
-        raw = json.dumps(result,ensure_ascii=False,allow_nan=False)
-        atomic_write(output,raw)
-        atomic_write(folder/'manifest.json',json.dumps(dict(sha256=hashlib.sha256(raw.encode()).hexdigest(),
-                     key=key, input_hashes=inputs, network_calls=0)))
-        return result
+    observation, groups, verified = so.build(Path(source), *[Path(p) for p in seed['roots'][1:]],
+                                            applied, allow_universe_changes=True, basis_rechecks=basis_rechecks, snapshot=snapshot)
+    # Every dependency read during replay must agree with pinned evidence.
+    for path, expected in verified.items():
+        if path not in inputs or inputs[path] != expected:
+            raise ValueError('projection_unpinned_input:'+path)
+    signals = sector_signals.build(snapshot, groups, observation, config.get('sector_states'))
+    sector_signals.attach_candidates(signals, review, groups, {'rows':[]})
+    result = dict(observation=observation, groups=groups, signals=signals,
+                  policy='last_verified_classification_refresh_due_after_7_days', source_run=str(run))
+    raw = json.dumps(result,ensure_ascii=False,allow_nan=False)
+    publish(root, 'sector-projection', key, {'view.json':raw,
+        'manifest.json':json.dumps(dict(sha256=hashlib.sha256(raw.encode()).hexdigest(),
+            key=key, input_hashes=inputs, network_calls=0))})
+    return result

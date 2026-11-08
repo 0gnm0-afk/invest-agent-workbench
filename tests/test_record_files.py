@@ -13,7 +13,7 @@ import atomic_io
 import market.daily as daily
 from launch.daily import DailyLaunch
 from market.prices import PriceStore
-from records.files import MARKER, publish_thin
+from records.files import MARKER, publish_thin, compact_run
 from records.prices import completed_weeks_v1
 from records.store import RecordStore
 
@@ -211,6 +211,121 @@ class RecordFileIntegrationTests(unittest.TestCase):
         generated = [p for p in (self.root / 'runtime').glob('????-??-??/*/run.json') if p.parent != self.run]
         self.assertEqual(len(generated), 1)
         self.assertEqual(json.loads(generated[0].read_bytes())['state'], 'failed')
+
+    def test_old_run_compaction_plans_then_preserves_exact_bytes_without_db_writes(self):
+        self.publish()
+        databases = {p: p.read_bytes() for p in (self.store.path, self.prices.path)}
+        manifest = (self.run / 'manifest.json').read_bytes()
+        plan = compact_run(self.run, root=self.root, store=self.store)
+        self.assertEqual(plan['state'], 'verified_plan')
+        self.assertGreater(plan['reclaimed_bytes'], 0)
+        self.assertEqual(plan['replaced_files'], 0)
+        for role, raw in self.originals.items():
+            self.assertEqual((self.run / role).read_bytes(), raw)
+        self.assertIn(str(self.run / 'screen.json'), [row['path'] for row in plan['files']])
+        result = compact_run(self.run, root=self.root, store=self.store, apply=True)
+        self.assertEqual(result['replaced_files'], len(plan['files']))
+        self.assertEqual((self.run / 'manifest.json').read_bytes(), manifest)
+        for role, raw in self.originals.items():
+            self.assertEqual(atomic_io.read_bytes(self.run / role), raw)
+            self.assertEqual(atomic_io.sha(self.run / role), sha(raw))
+        for path, raw in databases.items():
+            self.assertEqual(path.read_bytes(), raw)
+        again = compact_run(self.run, root=self.root, store=self.store, apply=True)
+        self.assertEqual(again['replaced_files'], 0)
+        self.assertEqual(again['skipped']['already_reference'], len(plan['files']))
+
+    def test_compaction_rejects_changed_original_before_any_replacement(self):
+        self.publish()
+        (self.run / 'screen.json').write_bytes(b'{"changed": true}')
+        with patch.object(atomic_io, 'atomic_write') as writer:
+            with self.assertRaisesRegex(ValueError, 'source_changed_before_compaction'):
+                compact_run(self.run, root=self.root, store=self.store, apply=True)
+        writer.assert_not_called()
+        self.assertEqual((self.run / 'quality.json').read_bytes(), self.originals['quality.json'])
+
+    def test_compaction_rejects_broken_price_recipe_before_any_replacement(self):
+        self.publish()
+        with patch('records.prices.decode', side_effect=ValueError('record_price_recovery_hash_mismatch')), \
+             patch.object(atomic_io, 'atomic_write') as writer:
+            with self.assertRaisesRegex(ValueError, 'record_price_recovery_hash_mismatch'):
+                compact_run(self.run, root=self.root, store=self.store, apply=True)
+        writer.assert_not_called()
+        self.assertEqual((self.run / 'screen.json').read_bytes(), self.originals['screen.json'])
+
+    def test_compaction_detects_concurrent_edit_and_resumes_partial_replacement(self):
+        raw = json.dumps({'memo': 'preserved original ' * 300}).encode()
+        (self.run / 'quality.json').write_bytes(raw)
+        self.originals['quality.json'] = raw
+        self.manifest['output_hashes']['quality.json'] = sha(raw)
+        (self.run / 'manifest.json').write_text(json.dumps(self.manifest), encoding='utf-8')
+        self.publish()
+        versions = self.count_versions()
+        plan = compact_run(self.run, root=self.root, store=self.store)
+        self.assertGreaterEqual(len(plan['files']), 2)
+        changed = Path(plan['files'][1]['path'])
+        original = changed.read_bytes()
+        atomic_write = atomic_io.atomic_write
+        writes = []
+
+        def competing_edit(path, text):
+            atomic_write(path, text)
+            writes.append(path)
+            changed.write_bytes(b'concurrent edit must survive')
+
+        with patch.object(atomic_io, 'atomic_write', side_effect=competing_edit):
+            with self.assertRaisesRegex(ValueError, 'source_changed_before_compaction'):
+                compact_run(self.run, root=self.root, store=self.store, apply=True)
+        self.assertEqual(len(writes), 1)
+        self.assertEqual(changed.read_bytes(), b'concurrent edit must survive')
+        changed.write_bytes(original)
+        result = compact_run(self.run, root=self.root, store=self.store, apply=True)
+        self.assertEqual(result['skipped']['already_reference'], 1)
+        self.assertEqual(result['replaced_files'], len(plan['files']) - 1)
+        self.assertEqual(self.count_versions(), versions)
+        for role, raw in self.originals.items():
+            self.assertEqual(atomic_io.read_bytes(self.run / role), raw)
+
+    def test_compaction_requires_published_run_matching_manifest_and_safe_root(self):
+        with self.assertRaisesRegex(ValueError, 'run_not_published'):
+            compact_run(self.run, root=self.root, store=self.store, apply=True)
+        for path, reason in ((self.root / 'outside', 'outside_runtime'),
+                             (self.root / 'runtime/dashboard/old', 'protected_path')):
+            with self.subTest(path=path):
+                with self.assertRaisesRegex(ValueError, reason):
+                    compact_run(path, root=self.root, store=self.store, apply=True)
+        self.publish()
+        (self.run / 'manifest.json').write_bytes(b'{}')
+        with self.assertRaisesRegex(ValueError, 'manifest_changed'):
+            compact_run(self.run, root=self.root, store=self.store, apply=True)
+        self.assertEqual((self.run / 'screen.json').read_bytes(), self.originals['screen.json'])
+
+    def test_compaction_obeys_daily_pipeline_lock(self):
+        from invest_agent.trading.store import instance_lock, BusyError
+        self.publish()
+        with instance_lock(self.root / 'runtime'):
+            with self.assertRaises(BusyError):
+                compact_run(self.run, root=self.root, store=self.store, apply=True)
+        self.assertEqual((self.run / 'screen.json').read_bytes(), self.originals['screen.json'])
+
+    def test_compaction_cli_is_plan_only_until_apply(self):
+        from records.migrate import main
+        self.publish()
+        output = self.root / 'runtime/compaction-evidence'
+        args = ['records.migrate', '--root', str(self.root), '--all', '--compact', '--output', str(output)]
+        with patch.object(sys, 'argv', args):
+            self.assertEqual(main(), 0)
+        plan = json.loads((output / 'compaction-plan.json').read_bytes())
+        self.assertFalse(plan['apply'])
+        self.assertEqual(plan['planned_runs'], 1)
+        self.assertEqual((self.run / 'screen.json').read_bytes(), self.originals['screen.json'])
+        with patch.object(sys, 'argv', [*args, '--apply']):
+            self.assertEqual(main(), 0)
+        result = json.loads((output / 'compaction.json').read_bytes())
+        self.assertTrue(result['apply'])
+        self.assertGreater(result['replaced_files'], 0)
+        self.assertFalse(result['database_written'])
+        self.assertEqual(atomic_io.read_bytes(self.run / 'screen.json'), self.originals['screen.json'])
 
 
 if __name__ == '__main__':
