@@ -6,3 +6,7 @@ __pycache__/
 .env
 *.log
 secrets/
+
+# 검토한 일회성 브라우저 확인 세션: 원본은 로컬 보존
+/.tmp/accounts-ui-20261102/
+/.tmp/toss-home-ui-20261103/
