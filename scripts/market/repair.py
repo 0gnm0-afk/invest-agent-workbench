@@ -6,7 +6,7 @@ if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import atomic_io as artifact_io
-import argparse,json,shutil,socket
+import argparse,json,socket
 from datetime import datetime,timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -38,12 +38,12 @@ def derive(saved_run, config):
         receipt=Path(run['basis_rechecks']).resolve();raw=artifact_io.load(receipt)
         folder=output/'basis';folder.mkdir()
         artifact_io.checked(receipt,manifest['input_hashes'][str(receipt)],{})
-        shutil.copyfile(receipt,folder/'rechecks.json')
+        (folder/'rechecks.json').write_bytes(artifact_io.read_bytes(receipt))
         for document in raw['documents']:
             path=(receipt.parent/document['file']).resolve()
             if not path.is_relative_to(receipt.parent.resolve()):raise ValueError('basis_path_outside_root')
             artifact_io.checked(path,document['sha256'],{})
-            shutil.copyfile(path,folder/document['file'])
+            (folder/document['file']).write_bytes(artifact_io.read_bytes(path))
     summary=audit(snapshot)
     write_json(output/'snapshot.json',snapshot);write_json(output/'summary.json',summary)
     write_json(output/'derivation.json',{'source_run':str(saved),'source_manifest_sha256':artifact_io.sha(source/'manifest.json'),

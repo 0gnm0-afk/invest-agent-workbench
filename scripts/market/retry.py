@@ -99,12 +99,12 @@ def apply_retry(root, registry_path, job_id):
         if job.get('provider') != 'toss': raise ValueError('single_provider_toss')
         if job.get('result_run'): return
         current,_,_=review.latest(root)
-        if str(current)!=job['source_run']:
+        if not review.same_run(current,job['source_run'],root):
             raise review.ReviewConflict('retry_source_changed')
         config=review.load(root/'config.json')
         review.update_job(registry_path,job_id,state='applying',error=None)
         if job.get('result_source'):
-            source=Path(job['result_source'])
+            source=review.local_runtime_path(job['result_source'],root=root)
             daily_market.source_check(source)
         else:
             # If a worker died during collection, do not silently repeat requests.

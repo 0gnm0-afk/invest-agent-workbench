@@ -138,6 +138,12 @@ class Launch(unittest.TestCase):
         latest.unlink()
         self.assertEqual(self.gate.display_run(), run['output'])
         self.assertTrue(self.gate.target_complete(self.gate.read('2026-09-30'), self.plan(NOW)))
+        progress = self.root / 'runtime/saved/collection/cache/progress.json'
+        progress.parent.mkdir(parents=True)
+        progress.write_text(json.dumps({'requested': 2, 'completed': 1, 'received': 1, 'failed': 0}), encoding='utf-8')
+        public = self.gate.public({'state': 'running', 'run': old_run, 'display_run': run['output']})
+        self.assertFalse(public['display_stale'])
+        self.assertEqual(public['progress']['completed'], 1)
         self.assertEqual(self.calls, [])
         with self.assertRaisesRegex(ValueError, 'outside_runtime'):
             self.gate.checked_run(previous / 'runtime/../../outside')

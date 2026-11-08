@@ -20,6 +20,7 @@ from invest_agent.trading.runner import atomic_write
 from invest_agent.trading.store import instance_lock, BusyError
 
 from workbench_paths import ROOT
+from runtime_paths import local_runtime_path
 REGISTRY = ROOT/'runtime/market-scope-user/records.json'
 
 
@@ -206,10 +207,17 @@ def retry_permissions(row, sessions, jobs):
             'attempted': sorted(attempted)}
 
 
-def pending_job(job, current_run):
+def same_run(first, second, root=None):
+    if not first or not second:
+        return first == second
+    root = ROOT if root is None else root
+    return local_runtime_path(first, root=root).resolve() == local_runtime_path(second, root=root).resolve()
+
+
+def pending_job(job, current_run, root=None):
     return job['state'] in ('approved','applying','computed') or (
         job.get('kind')=='recollect' and job.get('result_source') and job['state']=='failed'
-        and current_run in (job.get('source_run'),job.get('result_run')))
+        and any(same_run(current_run, candidate, root) for candidate in (job.get('source_run'),job.get('result_run'))))
 
 
 def checked(path, expected):
@@ -220,7 +228,7 @@ def checked(path, expected):
 
 
 def latest(root):
-    path = Path(load(root/'runtime/latest.json')['output']).resolve()
+    path = local_runtime_path(load(root/'runtime/latest.json')['output'], root=root).resolve()
     if not path.is_relative_to((root/'runtime').resolve()):
         raise ValueError('run_outside_runtime')
     manifest = load(path/'manifest.json')
@@ -284,7 +292,7 @@ class ExclusionReview:
                 self.worker(job_id)
             value,_ = registry(self.path); job = value['jobs'][-1]
             if job['id']==job_id and job.get('result_run'):
-                result = Path(job['result_run'])
+                result = local_runtime_path(job['result_run'], root=self.root)
                 self.publish(result)
                 self.published = job_id
                 update_job(self.path,job_id,state='completed',finished_at=now(),error=None)
@@ -328,7 +336,7 @@ class ExclusionReview:
             public = None
             if job:
                 state = 'interrupted' if interrupted else 'applying' if active else job['state']
-                if job.get('kind')=='recollect' and state=='failed' and review['source_run'] not in (job.get('source_run'),job.get('result_run')):
+                if job.get('kind')=='recollect' and state=='failed' and not any(same_run(review['source_run'], candidate, self.root) for candidate in (job.get('source_run'),job.get('result_run'))):
                     state='superseded'
                 public = {k:job.get(k) for k in ('id','count','approved_at','finished_at')}
                 public.update(state=state,error=job.get('error'),kind=job.get('kind','exclude'),provider=job.get('provider'),
@@ -357,7 +365,7 @@ class ExclusionReview:
                     value,_ = registry(self.path)
                     if any(not retry_permissions(available[i],current['sessions'],value['jobs'])['exclude'] for i in issue_ids):
                         raise ReviewConflict('provider_retries_required')
-                    if value['jobs'] and pending_job(value['jobs'][-1],current['source_run']):
+                    if value['jobs'] and pending_job(value['jobs'][-1],current['source_run'],self.root):
                         raise ReviewConflict('exclusion_apply_running')
                     job_id = uuid4().hex; at = now()
                     for identifier in issue_ids:
@@ -391,7 +399,7 @@ class ExclusionReview:
                     available={r['id']:r for r in current['issues']}
                     if any(i not in available for i in issue_ids): raise ValueError('invalid_exclusion_selection')
                     value,_=registry(self.path)
-                    if value['jobs'] and pending_job(value['jobs'][-1],current['source_run']):
+                    if value['jobs'] and pending_job(value['jobs'][-1],current['source_run'],self.root):
                         raise ReviewConflict('market_update_running')
                     if any(not retry_permissions(available[i],current['sessions'],value['jobs'])[provider] for i in issue_ids):
                         raise ReviewConflict('provider_retry_consumed_or_out_of_order')
@@ -449,7 +457,7 @@ def apply_job(job_id):
             # Use the newest verified result if another update finished after approval.
             source_run,_,current = latest(ROOT)
             if not current.get('market_source'):
-                source_run = Path(job['source_run'])
+                source_run = local_runtime_path(job['source_run'], root=ROOT)
             config = load(ROOT/'config.json')
             derived = repair_market_scope.derive(source_run,config)
             before = load(ROOT/'runtime/latest.json')

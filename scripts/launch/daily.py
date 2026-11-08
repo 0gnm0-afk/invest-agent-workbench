@@ -308,7 +308,9 @@ class DailyLaunch:
         if 'trade_cycle_state' in record: result['trade_cycle_state'] = record['trade_cycle_state']
         result['attempt_id'] = attempt_id(record)
         result['display_updated'] = False
-        result['display_stale'] = bool(record.get('display_run') and record.get('display_run') != record.get('run'))
+        displayed, current = record.get('display_run'), record.get('run')
+        result['display_stale'] = bool(displayed and (not current or
+            local_runtime_path(displayed, root=self.root).resolve() != local_runtime_path(current, root=self.root).resolve()))
         if result['display_stale'] and record.get('finished_at'):
             try:
                 display = self.checked_run(record['display_run'])
@@ -317,7 +319,7 @@ class DailyLaunch:
                 pass
         if record.get('run') and record.get('state') == 'running':
             try:
-                path=Path(record['run']).resolve()
+                path=local_runtime_path(record['run'], root=self.root).resolve()
                 if not path.is_relative_to(self.root/'runtime'):
                     raise ValueError('outside_runtime')
                 progress=json.loads((path/'collection/cache/progress.json').read_text())

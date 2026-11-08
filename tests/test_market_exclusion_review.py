@@ -106,6 +106,52 @@ class ReviewFixture(unittest.TestCase):
 
 
 class StoredArtifactReview(ReviewFixture):
+    def test_moved_basis_recheck_is_copied_from_verified_local_bytes(self):
+        import market.repair as repair
+        from atomic_io import sha
+        previous = self.root/'previous-workspace'
+        m.save(self.root/'config.json', {'records': {'previous_roots': [str(previous)]}})
+        folder = self.root/'runtime/basis'
+        folder.mkdir()
+        document = folder/'source.html'
+        original = b'<html>saved evidence</html>'
+        document.write_bytes(original)
+        receipt = folder/'rechecks.json'
+        m.save(receipt, {'documents': [{'file': document.name, 'sha256': sha(document)}]})
+        old_receipt = previous/'runtime/basis/rechecks.json'
+        run = m.load(self.run/'run.json')
+        run['basis_rechecks'] = str(old_receipt)
+        m.save(self.run/'run.json', run)
+        manifest = m.load(self.run/'manifest.json')
+        manifest['output_hashes']['run.json'] = sha(self.run/'run.json')
+        manifest['input_hashes'][str(old_receipt)] = sha(receipt)
+        m.save(self.run/'manifest.json', manifest)
+        policy = market_scope.load(user_registry=self.path)
+        with patch('runtime_paths.ROOT', self.root), patch.object(repair, 'ROOT', self.root), \
+             patch('market.scope.load', return_value=policy), patch.object(repair, 'audit', return_value={'state': 'partial'}), \
+             patch.object(socket.socket, 'connect', side_effect=AssertionError('verification_network_forbidden')):
+            result = Path(repair.derive(self.run, {})['source'])
+        self.assertEqual((result/'basis/rechecks.json').read_bytes(), receipt.read_bytes())
+        self.assertEqual((result/'basis/source.html').read_bytes(), original)
+        self.assertEqual(document.read_bytes(), original)
+
+    def test_moved_latest_and_pending_job_retain_their_identity(self):
+        expected = self.service().status()['issues']
+        previous = self.root / 'previous-workspace'
+        m.save(self.root/'config.json', {'records': {'previous_roots': [str(previous)]}})
+        old_run = str(previous/'runtime/before')
+        m.save(self.root/'runtime/latest.json', {'output': old_run, 'state': 'partial'})
+        self.assertEqual(self.service().status()['issues'], expected)
+        job = {'id': 'moved', 'kind': 'recollect', 'provider': 'toss', 'state': 'failed',
+               'source_run': old_run, 'result_source': str(previous/'runtime/derived'), 'issues': [], 'retry_keys': []}
+        m.save(self.path, {'schema': 1, 'records': [], 'jobs': [job]})
+        self.assertEqual(self.service().status()['job']['state'], 'failed')
+        self.assertTrue(m.pending_job(job, str(self.run), self.root))
+        self.assertFalse(m.pending_job(job, str(self.root/'runtime/different'), self.root))
+        m.save(self.root/'runtime/latest.json', {'output': str(previous/'runtime/../../outside')})
+        with self.assertRaisesRegex(ValueError, 'outside_runtime'):
+            self.service().status()
+
     def test_thin_record_evidence_is_read_and_corruption_still_blocks(self):
         from atomic_io import sha
         from records.store import RecordStore

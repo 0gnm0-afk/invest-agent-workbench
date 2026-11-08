@@ -173,6 +173,25 @@ class RetryHTTP(unittest.TestCase):
                 server.shutdown();server.server_close();thread.join(5)
 
 class RetryWorker(RetryFlow):
+    def test_moved_cached_source_is_reused_without_new_collection(self):
+        import market.daily as daily_market
+        previous = self.root/'previous-workspace'
+        m.save(self.root/'config.json', {'records': {'previous_roots': [str(previous)]}})
+        old_run = previous/'runtime/before'
+        m.save(self.path, {'schema': 1, 'records': [], 'jobs': [{
+            'id': 'moved', 'kind': 'recollect', 'provider': 'toss', 'state': 'failed',
+            'source_run': str(old_run), 'result_source': str(old_run/'source'), 'issues': []}]})
+        source = self.root/'runtime/before/source'
+        def replay(config, source):
+            self.assertEqual(source, self.root/'runtime/before/source')
+            return {'output': str(self.root/'runtime/recovered'), 'stages': {'report': 'completed'}}
+        with patch.object(daily_market, 'source_check') as check, \
+             patch.object(daily_market, 'run', side_effect=replay), patch.object(retry, 'TossMarketClient') as collector:
+            retry.apply_retry(self.root, self.path, 'moved')
+        check.assert_called_once_with(source)
+        collector.assert_not_called()
+        self.assertEqual(m.registry(self.path)[0]['jobs'][-1]['state'], 'computed')
+
     def test_replay_failure_restores_pointer_and_reuses_collected_source(self):
         import market.daily as daily_market, market.repair as repair_market_scope
         s=self.service();v=s.status()
