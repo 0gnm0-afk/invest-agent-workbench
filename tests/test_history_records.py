@@ -9,6 +9,7 @@ from pathlib import Path
 import sqlite3
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock, patch
 
@@ -18,6 +19,7 @@ from invest_agent.trading.store import instance_lock, BusyError
 from market.history.collect import Collector, packed
 from records.history import migrate, compact, save_response, _source
 from records.store import RecordStore
+import records.history as history
 
 
 class HistoryRecordsTests(unittest.TestCase):
@@ -39,6 +41,18 @@ class HistoryRecordsTests(unittest.TestCase):
         self.path.write_bytes(self.raw)
         self.manifest = packed({'responses/' + self.name: hashlib.sha256(self.raw).hexdigest()})
         (self.collection / 'manifest.json').write_bytes(self.manifest)
+
+    def add_sources(self, count):
+        manifest = json.loads(self.manifest)
+        for index in range(count - 1):
+            request = [self.request[0], {**self.request[1], 'symbol': 'parallel-' + str(index)}]
+            name = hashlib.sha256(packed(request)).hexdigest() + '.json.gz'
+            raw = gzip.compress(packed(dict(request=request, payload=self.payload,
+                sha256=hashlib.sha256(packed(self.payload)).hexdigest(), fetched_at='2026-10-01T10:00:00+00:00')))
+            (self.collection / 'responses' / name).write_bytes(raw)
+            manifest['responses/' + name] = hashlib.sha256(raw).hexdigest()
+        (self.collection / 'manifest.json').write_bytes(packed(manifest))
+        migrate(self.collection, root=self.root)
 
     def test_roundtrip_resume_and_collector_does_not_download_again(self):
         first = migrate(self.collection, root=self.root)
@@ -282,6 +296,148 @@ class HistoryRecordsTests(unittest.TestCase):
         self.assertEqual((result['verified'], result['original_files_removed']), (1, 0))
         self.assertFalse(self.path.parent.exists())
         self.assertEqual(read_bytes(self.path), self.raw)
+
+    def test_compaction_closes_enumeration_before_retirement_and_dry_run_is_sequential(self):
+        self.add_sources(12)
+        original_responses, original_retire = history._responses, history._retire_response
+        enumerating = []
+
+        def listing(*args):
+            enumerating.append(True)
+            try:
+                yield from original_responses(*args)
+            finally:
+                enumerating.pop()
+
+        def retire(*args):
+            self.assertFalse(enumerating)
+            return original_retire(*args)
+
+        with patch.object(history, 'ThreadPoolExecutor', side_effect=AssertionError('dry_run_pool_forbidden')):
+            self.assertEqual(compact(self.collection, root=self.root)['original_files_removed'], 0)
+        with patch.object(history, '_responses', listing), patch.object(history, '_retire_response', retire):
+            self.assertEqual(compact(self.collection, root=self.root, apply=True)['original_files_removed'], 12)
+
+    def test_compaction_bounds_workers_pending_jobs_and_keeps_db_validation_on_parent(self):
+        from concurrent.futures import ThreadPoolExecutor
+        self.add_sources(20)
+        release, four_started, eight_submitted = threading.Event(), threading.Event(), threading.Event()
+        guard = threading.Lock()
+        active = peak = submitted = 0
+        results, errors, packet_threads, parent_threads, worker_limits = [], [], [], [], []
+        original_retire, original_packet = history._retire_response, history._packet
+
+        class TrackedPool(ThreadPoolExecutor):
+            def __init__(pool, **kwargs):
+                worker_limits.append(kwargs['max_workers'])
+                super().__init__(**kwargs)
+
+            def submit(pool, *args, **kwargs):
+                nonlocal submitted
+                submitted += 1
+                if not release.is_set() and submitted > 8:
+                    raise AssertionError('too_many_pending_jobs')
+                future = super().submit(*args, **kwargs)
+                if submitted == 8:
+                    eight_submitted.set()
+                return future
+
+        def retire(*args):
+            nonlocal active, peak
+            with guard:
+                active += 1
+                peak = max(peak, active)
+                if active == 4:
+                    four_started.set()
+            try:
+                if not release.wait(10):
+                    raise AssertionError('fixture_worker_timeout')
+                return original_retire(*args)
+            finally:
+                with guard:
+                    active -= 1
+
+        def packet(*args):
+            packet_threads.append(threading.get_ident())
+            return original_packet(*args)
+
+        def runner():
+            parent_threads.append(threading.get_ident())
+            try:
+                results.append(compact(self.collection, root=self.root, apply=True))
+            except BaseException as exc:
+                errors.append(exc)
+
+        with patch.object(history, 'ThreadPoolExecutor', TrackedPool), \
+             patch.object(history, '_retire_response', retire), patch.object(history, '_packet', packet):
+            thread = threading.Thread(target=runner)
+            thread.start()
+            try:
+                self.assertTrue(four_started.wait(5))
+                self.assertTrue(eight_submitted.wait(5))
+                self.assertEqual(submitted, 8)
+                with self.assertRaises(BusyError), instance_lock(self.collection / 'lock'):
+                    pass
+            finally:
+                release.set()
+                thread.join(10)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(worker_limits, [4])
+        self.assertEqual(peak, 4)
+        self.assertEqual(set(packet_threads), set(parent_threads))
+        self.assertEqual(results[0]['original_files_removed'], 20)
+
+    def test_worker_failure_holds_lock_until_running_jobs_finish_then_resumes(self):
+        self.add_sources(12)
+        four_started, failed, release = threading.Event(), threading.Event(), threading.Event()
+        guard = threading.Lock()
+        started = 0
+        errors = []
+        original_retire = history._retire_response
+
+        def retire(*args):
+            nonlocal started
+            with guard:
+                index = started
+                started += 1
+                if started == 4:
+                    four_started.set()
+            if not four_started.wait(5):
+                raise AssertionError('fixture_start_timeout')
+            if index == 0:
+                failed.set()
+                raise ValueError('fixture retirement failed')
+            if not release.wait(10):
+                raise AssertionError('fixture_worker_timeout')
+            return original_retire(*args)
+
+        def runner():
+            try:
+                compact(self.collection, root=self.root, apply=True)
+            except BaseException as exc:
+                errors.append(exc)
+
+        with patch.object(history, '_retire_response', retire):
+            thread = threading.Thread(target=runner)
+            thread.start()
+            try:
+                self.assertTrue(failed.wait(5))
+                self.assertTrue(thread.is_alive())
+                with self.assertRaises(BusyError), instance_lock(self.collection / 'lock'):
+                    pass
+            finally:
+                release.set()
+                thread.join(10)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertRegex(str(errors[0]), 'fixture retirement failed')
+        remaining = list((self.collection / 'responses').glob('*.json.gz'))
+        self.assertGreater(len(remaining), 0)
+        self.assertLess(len(remaining), 12)
+        result = compact(self.collection, root=self.root, apply=True)
+        self.assertEqual(result['original_files_removed'], len(remaining))
+        self.assertEqual(result['verified'], 12)
 
 
 if __name__ == '__main__':

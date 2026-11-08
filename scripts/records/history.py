@@ -10,6 +10,7 @@ if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from contextlib import closing
 from datetime import datetime
 import gzip
@@ -20,6 +21,7 @@ import os
 from pathlib import Path
 import re
 import stat as stat_types
+from threading import Event
 import zlib
 
 from invest_agent.trading.store import instance_lock
@@ -30,6 +32,8 @@ from workbench_paths import ROOT
 
 KIND = 'history_response'
 MAX_RAW = 8 * 1024 * 1024
+_COMPACT_WORKERS = 4
+_COMPACT_PENDING = 8
 
 
 def _sha(raw):
@@ -275,6 +279,19 @@ def _publish(db, store, batch, root, collection, manifest_sha, prefixes):
     return new, old
 
 
+def _retire_response(collection, name, path, initial, raw):
+    """Only file I/O runs in workers; the parent already verified the DB copy."""
+    if path.read_bytes() != raw or path.read_bytes() != raw:
+        raise ValueError('history_response_original_changed')
+    # Keep the non-follow stat/reparse check immediately before removal.
+    # The fixed enumeration metadata is not trusted as a final file check.
+    _, final = _source(collection, name)
+    if final is None or (final.st_mtime_ns, final.st_size) != (initial.st_mtime_ns, len(raw)):
+        raise ValueError('history_response_original_changed')
+    path.unlink()
+    return 1
+
+
 def compact(collection, *, root=ROOT, store=None, apply=False, progress=None):
     """Verify DB payloads independently, then remove only matching source files.
 
@@ -311,37 +328,69 @@ def compact(collection, *, root=ROOT, store=None, apply=False, progress=None):
         if set(pinned) != set(names):
             raise ValueError('history_response_migration_incomplete')
         del saved
-        for name, path, stat in _responses(collection, names):
-            expected, size = names[name], pinned[name]
-            blob = db.execute('SELECT raw_size,payload FROM record_blobs WHERE sha256=?', (expected,)).fetchone()
-            if blob is None:
-                raise ValueError('history_response_database_corrupt')
-            blob_size, payload = blob
-            raw = _blob(payload, blob_size, expected)
-            if len(raw) != size:
-                raise ValueError('history_response_database_corrupt')
-            _packet(raw, path.name, expected)
-            seen.add(path.name); checked += 1
-            if checked % 256 == 1 and _sha((collection / 'manifest.json').read_bytes()) != manifest_sha:
-                raise ValueError('history_response_manifest_changed')
-            if stat:
-                if path.read_bytes() != raw:
-                    raise ValueError('history_response_original_changed')
-                physical_bytes += size
-                if apply:
-                    # exFAT timestamps have coarser resolution than nanoseconds;
-                    # a same-size edit can otherwise pass the metadata check.
-                    if path.read_bytes() != raw:
+        # Close enumeration before deleting anything: removal must not change
+        # the directory iterator and silently omit a later physical file.
+        responses = list(_responses(collection, names))
+        pending = set()
+        stopped = Event()
+        pool = ThreadPoolExecutor(max_workers=_COMPACT_WORKERS) if apply else None
+
+        def retire(*args):
+            if stopped.is_set():
+                return 0
+            try:
+                return _retire_response(*args)
+            except BaseException:
+                stopped.set()
+                raise
+
+        def finish(block=False):
+            nonlocal removed
+            block = block or stopped.is_set()
+            done = wait(pending, return_when=FIRST_COMPLETED)[0] if block else {f for f in pending if f.done()}
+            for future in done:
+                pending.remove(future)
+                removed += future.result()
+            if stopped.is_set() and pending:
+                finish(block=True)
+
+        try:
+            for name, path, stat in responses:
+                # Observe worker errors before preparing or submitting more work.
+                finish()
+                while len(pending) >= _COMPACT_PENDING:
+                    finish(block=True)
+                expected, size = names[name], pinned[name]
+                blob = db.execute('SELECT raw_size,payload FROM record_blobs WHERE sha256=?', (expected,)).fetchone()
+                if blob is None:
+                    raise ValueError('history_response_database_corrupt')
+                blob_size, payload = blob
+                raw = _blob(payload, blob_size, expected)
+                if len(raw) != size:
+                    raise ValueError('history_response_database_corrupt')
+                _packet(raw, path.name, expected)
+                seen.add(path.name); checked += 1
+                if checked % 256 == 1 and _sha((collection / 'manifest.json').read_bytes()) != manifest_sha:
+                    raise ValueError('history_response_manifest_changed')
+                if stat:
+                    physical_bytes += size
+                    if apply:
+                        finish()
+                        pending.add(pool.submit(retire, collection, name, path, stat, raw))
+                    elif path.read_bytes() != raw:
                         raise ValueError('history_response_original_changed')
-                    # Keep the non-follow stat/reparse check immediately before
-                    # removal; only the earlier enumeration stat is cached.
-                    _, final_stat = _source(collection, name)
-                    if final_stat is None or (final_stat.st_mtime_ns, final_stat.st_size) != (stat.st_mtime_ns, size):
-                        raise ValueError('history_response_original_changed')
-                    path.unlink()
-                    removed += 1
-            if progress and checked % 5000 == 0:
-                progress({'verified': checked, 'removed': removed})
+                if progress and checked % 5000 == 0:
+                    while pending:
+                        finish(block=True)
+                    progress({'verified': checked, 'removed': removed})
+            while pending:
+                finish(block=True)
+        finally:
+            # Cancel jobs that have not started on any error/interrupt. Running
+            # jobs finish while the outer collector lock and DB reader stay held.
+            if pool is not None:
+                stopped.set()
+                pool.shutdown(wait=True, cancel_futures=True)
         if seen != set(names):
             raise ValueError('history_response_migration_incomplete')
         if _sha((collection / 'manifest.json').read_bytes()) != manifest_sha:
