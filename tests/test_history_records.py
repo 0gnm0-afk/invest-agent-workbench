@@ -193,7 +193,8 @@ class HistoryRecordsTests(unittest.TestCase):
                     os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
             return raw
 
-        with patch.object(Path, 'read_bytes', competing_edit):
+        with patch.object(Path, 'read_bytes', competing_edit), \
+             patch('records.windows_retire._WINDOWS', False):
             with self.assertRaisesRegex(ValueError, 'original_changed'):
                 compact(self.collection, root=self.root, apply=True)
         self.assertEqual(self.path.read_bytes(), changed)
@@ -269,7 +270,7 @@ class HistoryRecordsTests(unittest.TestCase):
                 calls.append(path)
             return original_lstat(path, *args, **kwargs)
 
-        with patch.object(Path, 'lstat', tracked):
+        with patch.object(Path, 'lstat', tracked), patch('records.windows_retire._WINDOWS', False):
             migrate(self.collection, root=self.root)
             self.assertEqual(calls, [])
             compact(self.collection, root=self.root)

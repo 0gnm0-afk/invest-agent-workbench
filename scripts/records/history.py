@@ -281,6 +281,10 @@ def _publish(db, store, batch, root, collection, manifest_sha, prefixes):
 
 def _retire_response(collection, name, path, initial, raw):
     """Only file I/O runs in workers; the parent already verified the DB copy."""
+    from records.windows_retire import retire_verified
+    native = retire_verified(collection, name, path, initial, raw)
+    if native is not None:
+        return native
     if path.read_bytes() != raw or path.read_bytes() != raw:
         raise ValueError('history_response_original_changed')
     # Keep the non-follow stat/reparse check immediately before removal.
