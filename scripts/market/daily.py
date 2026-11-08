@@ -45,6 +45,18 @@ def code_hashes(engine):
     return {str(p.resolve()):artifact_io.sha(p) for p in paths}
 
 
+def screen_code_hashes(entries, config):
+    """Compare only calculation code, retaining legacy manifest paths and hashes."""
+    from runtime_paths import previous_roots
+    roots = [Path(config['engine']).resolve()]
+    roots += previous_roots(config.get('records', {}), 'previous_engine_root', 'previous_engine_roots')
+    package_roots = [p / 'src' / 'invest_agent' for p in roots]
+    return {path: expected for path, expected in entries.items()
+            if any(Path(path).resolve().is_relative_to(source) for source in package_roots)
+            or Path(path).name == 'stock_screen.py'
+            or Path(path).resolve() == (ROOT / 'scripts/screening/engine.py').resolve()}
+
+
 def check_hashes(entries):
     for path, expected in entries.items():
         artifact_io.checked(Path(path), expected, {})
@@ -261,10 +273,7 @@ def run(config, source=None, recover_source=None, nh_evidence=None, saved_run=No
             check_hashes(prior_manifest['input_hashes'])
             check_hashes({str(saved_run/p):h for p,h in prior_manifest['output_hashes'].items()})
             # A saved screen may only be reused with the identical calculation engine.
-            engine_root = Path(config['engine']).resolve()
-            check_hashes({p:h for p,h in prior_manifest['code_hashes'].items()
-                          if Path(p).resolve().is_relative_to(engine_root) or Path(p).name=='stock_screen.py'
-                          or Path(p).resolve() == (ROOT/'scripts/screening/engine.py').resolve()})
+            check_hashes(screen_code_hashes(prior_manifest['code_hashes'], config))
             source = Path(artifact_io.load(saved_run/'run.json')['market_source'])
             run['base_screen_source'] = str(saved_run)
             for name in ('manifest.json','run.json','screen-base.json'):

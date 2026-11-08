@@ -1,4 +1,4 @@
-"""Resolve configured runtime/journal moves without changing saved path keys."""
+"""Resolve configured runtime, journal and package moves without changing saved keys."""
 import json
 from pathlib import Path
 
@@ -44,6 +44,8 @@ def _aliases(root):
             if not current or not Path(current).is_absolute():
                 raise ValueError('record_previous_root_not_absolute')
             yield Path(current) / 'runtime', Path(previous) / 'runtime'
+    for previous in previous_roots(records, 'previous_engine_root', 'previous_engine_roots'):
+        yield root / 'src' / 'invest_agent', previous / 'src' / 'invest_agent'
     for previous in previous_roots(records, 'previous_journal_folder', 'previous_journal_folders'):
         mother = settings.get('mother')
         if not mother or not Path(mother).is_absolute():

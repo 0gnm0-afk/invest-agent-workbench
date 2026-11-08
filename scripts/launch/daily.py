@@ -177,6 +177,8 @@ class DailyLaunch:
                     self.save(record)
                     run = self.runner({**plan,'prior_run':record['display_run']}, progress)
                     record.update(run=run.get('output'), state=run['state'], stage='finished', telegram_state=run.get('telegram_state'), trailing_state=run.get('trailing_state'), scenario_state=run.get('scenario_state'), account_attempted=run.get('account_attempted',False), account_state=run.get('account_state'), account_error=run.get('account_error'))
+                    if 'technical_state' in run:
+                        record['technical_state'] = run['technical_state']
                     if 'trade_cycle_state' in run:
                         record['trade_cycle_state'] = run['trade_cycle_state']
                     display = self.usable_run(run.get('output'))
@@ -291,7 +293,13 @@ class DailyLaunch:
                     result['trade_cycle_state'] = ('evaluated' if any(s['status'] == 'evaluated' for s in cycles['states']) else 'deferred')
             except Exception:
                 result['trade_cycle_state'] = 'unavailable'
-        if self.accounts and any(result.get(key) == 'evaluated' for key in ('trailing_state', 'scenario_state', 'trade_cycle_state')):
+        if result.get('state') in ('succeeded', 'partial'):
+            try:
+                from signals.store import evaluate_saved as evaluate_technical
+                result['technical_state'] = evaluate_technical(self.root, plan['targets'])['state']
+            except Exception:
+                result['technical_state'] = 'unavailable'
+        if self.accounts and any(result.get(key) == 'evaluated' for key in ('trailing_state', 'scenario_state', 'trade_cycle_state', 'technical_state')):
             try:
                 from alerts.delivery import dispatch
                 result['telegram_state'] = dispatch(self.root, plan['targets'],
@@ -305,6 +313,7 @@ class DailyLaunch:
 
     def public(self, record):
         result={k:record.get(k) for k in ('day','state','stage','targets','started_at','finished_at','error','reused','manual_retry','telegram_state','trailing_state','scenario_state','account_attempted','account_state','account_error')}
+        if 'technical_state' in record: result['technical_state'] = record['technical_state']
         if 'trade_cycle_state' in record: result['trade_cycle_state'] = record['trade_cycle_state']
         result['attempt_id'] = attempt_id(record)
         result['display_updated'] = False

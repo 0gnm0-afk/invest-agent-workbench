@@ -125,7 +125,23 @@ def cycle_message(event):
         '완료 종가 기준 · 실제 거래 기록 후 단계 변경 · 자동 주문 없음'])
 
 
+def technical_message(event):
+    purpose = '매수 검토' if event['purpose'] == 'buy' else '매도 검토'
+    combination = '복합 조건' if event['rule_id'] in ('macd_rsi60', 'cci_recovery') else '개별 조건'
+    lines = [f'🔔 투자에이전트 | {purpose} · {combination}',
+             f"종목: {event.get('name') or event['symbol']} ({event['symbol']} · {event['market']})",
+             f"기준: {event['date']} 최신 완료 거래일 종가",
+             '발생 조건: ' + event['label'],
+             '종가: ' + money(event['close'], event['currency']) + ' ' + event['currency'],
+             '개별 조건과 복합 조건을 각각 구분한 알림입니다. 자동 주문은 실행하지 않습니다.',
+             f"논의 재개: {event['stock_key']}의 저장 지식·판단·미해결 질문을 불러오고 이번 신호를 함께 검토해줘."]
+    if event.get('detail_url'):
+        lines.append('종목 차트: ' + event['detail_url'])
+    return '\n'.join(lines)
+
 def message(e):
+    if e['kind'] == 'technical':
+        return technical_message(e)
     if e['kind'] == 'trade_cycle':
         return cycle_message(e)
     body = base_message(e)
@@ -229,7 +245,7 @@ def scenario_message(e):
     return '\n'.join(lines)
 
 
-def dispatch(root=ROOT, targets=None, *, config=None, sender=None, include_trailing=True, include_scenarios=True, include_cycles=True):
+def dispatch(root=ROOT, targets=None, *, config=None, sender=None, include_trailing=True, include_scenarios=True, include_cycles=True, include_technical=True):
     root = Path(root)
     folder = root/'runtime/telegram-delivery'
     folder.mkdir(parents=True, exist_ok=True)
@@ -260,6 +276,13 @@ def dispatch(root=ROOT, targets=None, *, config=None, sender=None, include_trail
             except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
                 # A bad new cycle record must not suppress an existing price warning.
                 cycle_context_failed = True
+            technical_failed = False
+            if include_technical:
+                try:
+                    from signals.store import delivery_events as technical_events
+                    events.extend(technical_events(root, targets))
+                except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
+                    technical_failed = True
             events.sort(key=lambda e:e['created_at'], reverse=True)
             sender = sender or (lambda text: api(config, 'sendMessage', {'chat_id':config['chat'], 'text':text}))
             with closing(sqlite3.connect(folder/'delivery.sqlite3', timeout=30)) as db, db:
@@ -296,6 +319,7 @@ def dispatch(root=ROOT, targets=None, *, config=None, sender=None, include_trail
                 counts = dict(db.execute('SELECT state,count(*) FROM deliveries GROUP BY state'))
             result = dict(state='attention' if counts.get('failed') or counts.get('unknown') else 'ready', counts=counts, checked_at=utc())
             if cycle_context_failed: result['trade_cycle_state'] = 'unavailable'
+            if technical_failed: result['technical_state'] = 'unavailable'
             atomic_write(folder/'latest.json', json.dumps(result))
             return result
     except BusyError:

@@ -540,14 +540,16 @@ class TradeCycleStore:
             raise ValueError('cycle_saved_record_integrity_failed')
         return value
 
-    def _read(self, db, cycle_id):
+    @classmethod
+    def _read(cls, db, cycle_id):
+        """Reduce a caller-owned DB snapshot; no initialization or writes."""
         row = db.execute('SELECT stock_key,revision,draft_version,payload FROM trade_cycles WHERE id=?', (cycle_id,)).fetchone()
         if row is None:
             raise ValueError('cycle_not_found')
         head = json.loads(row[3])
-        drafts = [self._verified(r[0], r[1]) for r in db.execute(
+        drafts = [cls._verified(r[0], r[1]) for r in db.execute(
             'SELECT payload,sha256 FROM trade_cycle_drafts WHERE cycle_id=? ORDER BY version', (cycle_id,))]
-        events = [self._verified(r[0], r[1]) for r in db.execute(
+        events = [cls._verified(r[0], r[1]) for r in db.execute(
             'SELECT payload,sha256 FROM trade_cycle_events WHERE cycle_id=? ORDER BY sequence', (cycle_id,))]
         if not drafts or len(drafts) != row[2] or row[1] != len(drafts) + len(events):
             raise ValueError('cycle_saved_head_integrity_failed')

@@ -1,0 +1,1 @@
+"""Read-only previews of source-defined technical signals; never orders or alerts."""

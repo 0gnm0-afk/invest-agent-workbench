@@ -166,7 +166,7 @@ class Launch(unittest.TestCase):
         (folder/'daily.py').write_text(program)
         self.gate.folder.mkdir(parents=True,exist_ok=True)
         progress=[];got=self.gate.execute({**self.plan(NOW),'prior_run':old['output']},progress.append)
-        args=json.loads((self.root/'args.json').read_text());self.assertIn('--session-cutoff',args);self.assertIn('--evaluated-at',args);self.assertIn(old['output'],args);self.assertEqual(got,{**new,"trailing_state":"unavailable","scenario_state":"not_configured"});self.assertEqual(progress[0]['stage'],'collection')
+        args=json.loads((self.root/'args.json').read_text());self.assertIn('--session-cutoff',args);self.assertIn('--evaluated-at',args);self.assertIn(old['output'],args);self.assertEqual(got,{**new,"trailing_state":"unavailable","scenario_state":"not_configured","technical_state":"not_configured"});self.assertEqual(progress[0]['stage'],'collection')
         with patch('alerts.trailing.refresh_saved',return_value={'events':[]}) as refresh:
             got=self.gate.execute({**self.plan(NOW),'prior_run':old['output']},lambda _:None)
         self.assertEqual(got['trailing_state'],'evaluated')
