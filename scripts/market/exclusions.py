@@ -36,8 +36,9 @@ def digest(value):
 
 
 def read_bytes(path):
+    from atomic_io import read_bytes as artifact_bytes
     for attempt in range(20):
-        try: return Path(path).read_bytes()
+        try: return artifact_bytes(path)
         except PermissionError:
             if attempt==19: raise
             time.sleep(.05)

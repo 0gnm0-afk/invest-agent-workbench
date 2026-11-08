@@ -105,6 +105,27 @@ class ReviewFixture(unittest.TestCase):
         s.thread.join(5);self.assertFalse(s.thread.is_alive());return s.status()
 
 
+class StoredArtifactReview(ReviewFixture):
+    def test_thin_record_evidence_is_read_and_corruption_still_blocks(self):
+        from atomic_io import sha
+        from records.store import RecordStore
+        from records.files import publish_thin
+        run = m.load(self.run/'run.json')
+        run['finished_at'] = '2026-10-02T22:00:00+00:00'
+        m.save(self.run/'run.json', run)
+        manifest = m.load(self.run/'manifest.json')
+        manifest['output_hashes']['run.json'] = sha(self.run/'run.json')
+        m.save(self.run/'manifest.json', manifest)
+        expected = self.service().status()['issues']
+        store = RecordStore(self.root/'runtime/records.sqlite3')
+        store.publish_run(self.run, root=self.root)
+        publish_thin(self.run, root=self.root, store=store)
+        self.assertEqual(self.service().status()['issues'], expected)
+        (self.run/'market-failures.json').write_text('{}', encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'hash_mismatch'):
+            self.service().status()
+
+
 class Approval(ReviewFixture):
     def test_durable_consent_recalculation_and_next_collection(self):
         from atomic_io import sha

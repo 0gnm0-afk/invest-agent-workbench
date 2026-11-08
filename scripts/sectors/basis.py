@@ -23,6 +23,13 @@ REVIEWED_REVISIONS = frozenset({(
     CONTRACT, FAQ_URL,
     '0dd9ad07af2bdf4b333a8ba902ede5b727e5f87cf95d77d7b5786119159d216b',
     '24719bffec1c419af9dab1e16aba66e2d35103a1a417e28ce36bd84bd2b270ca',
+), (
+    # Full FAQ diff reviewed 2026-11-03 against the 2026-10-13 revision:
+    # quote timestamps, basePrice vs integrated KR close, conditional-order FAQ.
+    # Adjusted daily OHLCV/session semantics and local calculations are unchanged.
+    CONTRACT, FAQ_URL,
+    '0dd9ad07af2bdf4b333a8ba902ede5b727e5f87cf95d77d7b5786119159d216b',
+    '6ad4c02b8e785f7de1a067398736e69b546069f8d1e74d89e294a1a774c1a1da',
 )})
 
 
