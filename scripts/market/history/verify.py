@@ -19,6 +19,7 @@ from market.history.collect import read_checked, packed, parse_page, write
 from market.providers.toss_universe import listing_requests, validate_listing_rows
 from atomic_io import read_bytes
 from market.price_files import available
+from records.files import available as record_available
 
 
 def verify(root, require_finished=False):
@@ -44,7 +45,7 @@ def verify(root, require_finished=False):
     saved_files = set((root/'series').glob('*.json'))
     for symbol in targets:
         path = root/'series'/(hashlib.sha256(symbol.encode()).hexdigest()+'.json')
-        if available(path):
+        if record_available(path) or available(path):
             saved_files.add(path)
     for f in sorted(saved_files):
         d=read_checked(f)

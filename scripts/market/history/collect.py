@@ -119,7 +119,7 @@ class Collector:
 
     def save_series(self, path, value):
         if not value['bars']:
-            save_checked(path,value)
+            self.save_series_checkpoint(path, value)
             return
         from market.prices import PriceStore, default_path
         # A standalone backfill owns a local DB. A workbench runtime uses its
@@ -132,7 +132,13 @@ class Collector:
             ref = store.observe_historical(value,source=str(path.resolve()),kind='archive',source_sha256=original_hash)
         marker = {k:v for k,v in value.items() if k!='bars'}
         marker.update(bars_ref=ref,ohlcv_path=str(store.path),data_sha256=original_hash)
-        save_checked(path,marker)
+        self.save_series_checkpoint(path, marker)
+
+    def save_series_checkpoint(self, path, value):
+        from records.history_series import save_series_checkpoint
+        packet = {'sha256': hashlib.sha256(packed(value)).hexdigest(), 'data': value}
+        if not save_series_checkpoint(path, packed(packet)):
+            write(path, packet)
 
     def observe(self, event):
         event = {k:v for k,v in event.items() if k != 'payload'}
@@ -207,7 +213,7 @@ class Collector:
             return {'symbol':item['symbol'],'market':self.market,'state':'excluded','reason':exclusion['reason'],'bars':[]}
         symbol = item['symbol']
         saved = self.root/'series'/(hashlib.sha256(symbol.encode()).hexdigest()+'.json')
-        if available(saved):
+        if record_available(saved) or available(saved):
             old = read_checked(saved)
             if old['symbol'] != symbol or old['requested_end'] != end or old['market'] != self.market or old['listing'] != item:
                 raise ValueError('saved_identity_mismatch')
