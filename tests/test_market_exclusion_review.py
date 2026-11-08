@@ -362,5 +362,23 @@ class HTTP(ReviewFixture):
         self.assertEqual(self.request('GET','/api/market-exclusions?path=private')[0],400)
         self.assertFalse(self.path.exists())
 
+    def test_offline_blocks_collection_and_retry_before_service_entry(self):
+        body = self.body()
+        requests = [
+            {**body, 'action': 'recollect', 'provider': 'toss'},
+            {**body, 'action': 'recollect', 'provider': 'nh'},
+            {'action': 'retry', 'job_id': 'previous-recollect-job'},
+        ]
+        with patch.object(self.review, 'recollect') as recollect, patch.object(self.review, 'retry') as retry:
+            for request in requests:
+                with self.subTest(request=request):
+                    code, raw, _ = self.request('POST', '/api/market-exclusions', request)
+                    self.assertEqual(code, 403)
+                    self.assertEqual(json.loads(raw), {'error': 'offline_collection_disabled'})
+            recollect.assert_not_called()
+            retry.assert_not_called()
+        self.assertEqual(self.calls, [])
+        self.assertFalse(self.path.exists())
+
 
 if __name__=='__main__':unittest.main()

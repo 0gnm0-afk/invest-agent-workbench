@@ -231,7 +231,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                     action = body.get('action')
                     if not (action == 'approve' and set(body)=={'action','review_id','issue_ids'} or action == 'retry' and set(body)=={'action','job_id'} and isinstance(body['job_id'],str) or action == 'recollect' and set(body)=={'action','review_id','issue_ids','provider'} and body['provider'] in ('toss','nh')):
                         return self.send(b'{"error":"invalid_exclusion_request"}', status=400)
-                    if action=='recollect' and offline:
+                    if offline and action in ('recollect', 'retry'):
                         return self.send(b'{"error":"offline_collection_disabled"}', status=403)
                     if not exclusion_review:
                         return self.send(b'{"error":"exclusion_review_unavailable"}', status=503)
