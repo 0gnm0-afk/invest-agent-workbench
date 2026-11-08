@@ -26,7 +26,8 @@ class ReceiptAddresses(unittest.TestCase):
     def test_moved_pack_uses_current_folder_and_original_entry_key(self):
         with tempfile.TemporaryDirectory() as folder:
             old = Path(folder) / 'old'
-            current = Path(folder) / 'usb'
+            intermediate = Path(folder) / 'usb'
+            current = Path(folder) / 'consolidated'
             relative = Path('financials/KR-A/run/saved-price.json')
             source = old / 'runtime' / relative
             local = current / 'runtime' / relative
@@ -36,9 +37,10 @@ class ReceiptAddresses(unittest.TestCase):
             current_pack.parent.mkdir(parents=True)
             original_pack.replace(current_pack)
             (current / 'config.json').write_text(
-                json.dumps({'records': {'previous_root': str(old)}}), encoding='utf-8')
+                json.dumps({'records': {'previous_root': str(old),
+                                       'previous_roots': [str(intermediate)]}}), encoding='utf-8')
             with patch('runtime_paths.ROOT', current):
-                for path in (source, local):
+                for path in (source, intermediate / 'runtime' / relative, local):
                     self.assertTrue(packed_exists(current / 'runtime', path))
                     self.assertEqual(packed_record(current / 'runtime', path),
                                      ('source-sha', 10, 'recipe-sha', b'packed-body'))

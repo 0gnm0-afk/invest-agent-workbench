@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from workbench_paths import ROOT
+from runtime_paths import local_runtime_path
 from atomic_io import load_bom as load, sha, write_new_json as write, checked_saved as checked, utc_now as now
 from accounts import account_view, publish_receipt
 
@@ -14,7 +15,7 @@ def saved_market(root=ROOT, run_dir=None):
     """Default to latest attempt; explicit prior views require a separate daily failure banner."""
     if run_dir is None:
         run_dir = load(root / 'runtime/latest.json')['output']
-    run_dir = Path(run_dir).resolve()
+    run_dir = local_runtime_path(run_dir, root=root).resolve()
     if not run_dir.is_relative_to((root / 'runtime').resolve()):
         raise ValueError('latest_outside_private_runtime')
     manifest = load(run_dir / 'manifest.json')

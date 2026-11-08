@@ -11,11 +11,13 @@ from pathlib import Path
 import re
 
 from records.store import RecordStore, _key, _sha, default_path
+from runtime_paths import (LEGACY_JOURNAL_DIR, journal_relative_path, local_runtime_path,
+                           previous_roots, runtime_lookup_paths)
 from workbench_paths import ROOT
 
 
 KIND = 'trade_journal'
-VAULT_DIR = Path('vault', '20_매매일지', '일지')
+VAULT_DIR = LEGACY_JOURNAL_DIR
 
 
 def journal_folder(root):
@@ -23,7 +25,7 @@ def journal_folder(root):
     mother = Path(settings['mother'])
     if not mother.is_absolute():
         raise ValueError('trade_journal_mother_must_be_absolute')
-    return mother.resolve() / VAULT_DIR
+    return mother.resolve() / journal_relative_path(settings)
 
 
 def _source(path, folder, *, existing=False):
@@ -53,8 +55,14 @@ def _validate(raw):
     raise ValueError('trade_journal_type_required')
 
 
-def _metadata(path):
-    return {'mother_relative_path': (VAULT_DIR / path.name).as_posix()}
+def _metadata(path, root):
+    settings = json.loads((Path(root) / 'config.json').read_text(encoding='utf-8-sig'))
+    mothers = [Path(settings['mother'])] + previous_roots(
+        settings.get('records', {}), 'previous_mother_root', 'previous_mother_roots')
+    for mother in mothers:
+        if path.is_relative_to(mother):
+            return {'mother_relative_path': path.relative_to(mother).as_posix()}
+    raise ValueError('trade_journal_source_outside_scope')
 
 
 def migrate(root=ROOT, *, store=None, sources=None):
@@ -76,14 +84,18 @@ def migrate(root=ROOT, *, store=None, sources=None):
         with closing(store.connect(write=True)) as db, db:
             db.execute('BEGIN IMMEDIATE')
             for path, raw in payloads.items():
-                row = db.execute(
-                    'SELECT kind,metadata FROM record_versions WHERE source_key=? AND sha256=?',
-                    (_key(path), _sha(raw)),
-                ).fetchone()
-                metadata = _metadata(path)
+                row = None
+                for old in runtime_lookup_paths(path, root=root):
+                    row = db.execute(
+                        'SELECT kind,metadata FROM record_versions WHERE source_key=? AND sha256=?',
+                        (_key(old), _sha(raw)),
+                    ).fetchone()
+                    if row:
+                        if row[0] != KIND or json.loads(row[1]) != _metadata(old, root):
+                            raise ValueError('trade_journal_version_conflict')
+                        break
+                metadata = _metadata(path, root)
                 if row:
-                    if row[0] != KIND or json.loads(row[1]) != metadata:
-                        raise ValueError('trade_journal_version_conflict')
                     continue
                 store._insert_version(db, path, raw, kind=KIND, root=root, metadata=metadata)
                 inserted += 1
@@ -101,10 +113,10 @@ def verify(root=ROOT, *, store=None):
         ).fetchall()
     paths, total = set(), 0
     for source, digest, metadata in rows:
-        path = _source(source, folder)
-        if json.loads(metadata) != _metadata(path):
+        path = _source(local_runtime_path(source, root=root), folder)
+        if json.loads(metadata) != _metadata(Path(source), root):
             raise ValueError('trade_journal_metadata_mismatch')
-        raw = store.read(path, digest)
+        raw = store.read(source, digest)
         if raw is None:
             raise ValueError('trade_journal_version_missing')
         _validate(raw)

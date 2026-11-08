@@ -13,6 +13,7 @@ import secrets
 import sqlite3
 
 from workbench_paths import ROOT
+from runtime_paths import local_runtime_path
 
 
 def packed(value):
@@ -25,7 +26,7 @@ def digest(value):
 
 class AccountStore:
     def __init__(self, path=None):
-        self.path = Path(path or ROOT/'runtime/accounts.sqlite3').resolve()
+        self.path = local_runtime_path(path or ROOT/'runtime/accounts.sqlite3').resolve()
 
     def connect(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)

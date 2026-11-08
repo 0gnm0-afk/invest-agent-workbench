@@ -13,6 +13,7 @@ from atomic_io import load_json_bytes, read_bytes, available
 from invest_agent.trading.market_provider import completed_sessions
 from atomic_io import atomic_write
 from workbench_paths import SCRIPTS
+from runtime_paths import local_runtime_path
 from launch.journal import error_frames
 from invest_agent.trading.store import instance_lock, BusyError
 
@@ -69,7 +70,7 @@ class DailyLaunch:
     def checked_run(self, value):
         if not value:
             return None
-        path = Path(value).resolve()
+        path = local_runtime_path(value, root=self.root).resolve()
         if not path.is_relative_to(self.root / 'runtime'):
             raise ValueError('run_outside_runtime')
         manifest = load_json_bytes(path/'manifest.json')
@@ -83,7 +84,7 @@ class DailyLaunch:
             run = self.checked_run(value)
             if not run or not run.get('market_source'):
                 return None
-            path = Path(value)
+            path = local_runtime_path(value, root=self.root)
             manifest = load_json_bytes(path/'manifest.json')
             review = path/'priority-review.json'
             if not available(review) or hashlib.sha256(read_bytes(review)).hexdigest() != manifest['output_hashes'].get('priority-review.json'):

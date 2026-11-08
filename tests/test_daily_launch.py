@@ -124,6 +124,23 @@ class Launch(unittest.TestCase):
         result=self.result('ok');(Path(result['output'])/'run.json').write_text('{}')
         self.assertIsNone(self.gate.usable_run(result['output']))
         with self.assertRaises(ValueError):self.gate.checked_run(self.root.parent)
+    def test_moved_latest_and_receipt_reuse_the_saved_run(self):
+        run = self.result('saved')
+        previous = self.root / 'previous-workspace'
+        (self.root / 'config.json').write_text(json.dumps({'records': {
+            'previous_roots': [str(previous)]}}), encoding='utf-8')
+        old_run = str(previous / 'runtime/saved')
+        latest = self.root / 'runtime/latest.json'
+        latest.write_text(json.dumps({'output': old_run}), encoding='utf-8')
+        self.assertEqual(self.gate.display_run(), run['output'])
+        self.gate.save({'day': '2026-09-30', 'state': 'succeeded',
+                        'display_run': old_run, 'run': old_run, 'targets': self.targets})
+        latest.unlink()
+        self.assertEqual(self.gate.display_run(), run['output'])
+        self.assertTrue(self.gate.target_complete(self.gate.read('2026-09-30'), self.plan(NOW)))
+        self.assertEqual(self.calls, [])
+        with self.assertRaisesRegex(ValueError, 'outside_runtime'):
+            self.gate.checked_run(previous / 'runtime/../../outside')
     def test_runner_exception_is_durable_and_private(self):
         self.gate.runner=lambda p,c:(_ for _ in ()).throw(ValueError('SECRET'))
         a=self.gate.once(NOW);self.assertEqual(a['state'],'failed');self.assertNotIn('SECRET',json.dumps(a));self.assertTrue(self.gate.once(NOW)['reused'])

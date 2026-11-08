@@ -12,6 +12,7 @@ from pathlib import Path
 import sqlite3
 
 from workbench_paths import ROOT
+from runtime_paths import local_runtime_path
 
 
 FIELDS = ('open', 'high', 'low', 'close', 'volume')
@@ -70,7 +71,7 @@ def validate(bars):
 
 class PriceStore:
     def __init__(self, path=None):
-        self.path = Path(path or default_path()).resolve()
+        self.path = local_runtime_path(path or default_path()).resolve()
 
     def connect(self, *, write=False):
         if not write:

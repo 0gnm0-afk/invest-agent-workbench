@@ -1,4 +1,5 @@
 from contextlib import closing
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -7,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from accounts.store import AccountStore
+from accounts.store import AccountStore, hydrate
 from accounts import account_view, publish_receipt
 from atomic_io import load_bom
 
@@ -59,6 +60,19 @@ class AccountStoreTests(unittest.TestCase):
             self.assertEqual(db.execute('SELECT count(*) FROM account_objects').fetchone()[0],1)
             db.execute("UPDATE account_objects SET payload='{}'")
         with self.assertRaisesRegex(ValueError,'integrity_failed'):self.store.read(ref)
+
+    def test_saved_account_reference_follows_relocation_without_recreating_old_database(self):
+        ref = self.store.save(self.snapshot)
+        old = self.root / 'old'
+        intermediate = self.root / 'usb'
+        (self.root / 'config.json').write_text(json.dumps({'records': {
+            'previous_root': str(old), 'previous_roots': [str(intermediate)]}}), encoding='utf-8')
+        with patch('runtime_paths.ROOT', self.root):
+            for owner in (old, intermediate, self.root):
+                historical = {**ref, 'path': str(owner / 'runtime/accounts.sqlite3')}
+                self.assertEqual(hydrate({'account_store_ref': historical}), self.snapshot)
+        self.assertFalse(old.exists())
+        self.assertFalse(intermediate.exists())
 
     def test_api_adapter_and_saved_dashboard_write_references(self):
         calls=[]

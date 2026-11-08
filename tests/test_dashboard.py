@@ -114,6 +114,17 @@ class StoredData(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'outside'):
             d.saved_market(self.root)
 
+    def test_latest_in_previous_workspace_replays_current_saved_market(self):
+        expected = d.saved_market(self.root)
+        previous = self.root / 'previous-workspace'
+        d.write(self.root / 'config.json', {'records': {'previous_roots': [str(previous)]}})
+        latest = self.root / 'runtime/latest.json'
+        latest.write_text(json.dumps({'output': str(previous / 'runtime/run')}), encoding='utf-8')
+        self.assertEqual(d.saved_market(self.root), expected)
+        latest.write_text(json.dumps({'output': str(previous / 'runtime/../../outside')}), encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'outside_runtime'):
+            d.saved_market(self.root)
+
 
 class BrokerBoundary(unittest.TestCase):
     class Error(Exception): pass

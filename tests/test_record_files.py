@@ -144,6 +144,36 @@ class RecordFileIntegrationTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     atomic_io.read_bytes(path)
 
+    def test_twice_moved_run_replays_all_path_generations_without_rewriting_db(self):
+        self.publish()
+        intermediate = self.root / 'intermediate'
+        current = self.root / 'consolidated'
+        current.mkdir()
+        (self.root / 'runtime').replace(current / 'runtime')
+        (current / 'config.json').write_text(json.dumps({'records': {
+            'previous_root': str(self.root), 'previous_roots': [str(intermediate)]}}), encoding='utf-8')
+        relative = self.run.relative_to(self.root)
+        (current / relative / 'quality.json').unlink()
+        database = current / 'runtime/records.sqlite3'
+        original_database = database.read_bytes()
+        launcher = DailyLaunch(current, accounts=False)
+        with patch('runtime_paths.ROOT', current), patch('records.files.ROOT', current):
+            for owner in (self.root, intermediate, current):
+                with self.subTest(owner=owner.name):
+                    restored = atomic_io.checked_saved(owner / relative / 'quality.json',
+                                                       sha(self.originals['quality.json']))
+                    self.assertEqual(restored, self.values['quality.json'])
+                    snapshot = atomic_io.checked_saved(owner / self.source.relative_to(self.root),
+                                                       sha((current / self.source.relative_to(self.root)).read_bytes()))
+                    self.assertEqual(snapshot['series'][0]['bars'], self.bars)
+                    direct = PriceStore(owner / 'runtime/ohlcv.sqlite3')
+                    self.assertEqual(direct.read(snapshot['series'][0]['bars_ref']), self.bars)
+                    self.assertEqual(launcher.checked_run(owner / relative), self.values['run.json'])
+                    self.assertEqual(launcher.usable_run(owner / relative), str(current / relative))
+                    with self.assertRaisesRegex(ValueError, 'saved_artifact_hash_mismatch'):
+                        atomic_io.checked_saved(owner / relative / 'quality.json', '0' * 64)
+        self.assertEqual(database.read_bytes(), original_database)
+
     def test_partial_thin_publication_can_resume_without_new_versions(self):
         self.publish()
         count = self.count_versions()

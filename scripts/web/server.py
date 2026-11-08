@@ -23,6 +23,7 @@ from analysis.service import AnalysisService
 from market.history.price_events import build as price_events
 from analysis import Forbidden
 from alerts.trailing import TrailingStore
+from runtime_paths import local_runtime_path
 
 
 def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None, daily_status=None, daily_retry=None,
@@ -329,7 +330,7 @@ def main():
         try:
             latest = json.loads((ROOT / 'runtime/latest.json').read_text(encoding='utf-8'))
             saved_notice = dict(saved_only=True, latest_state=latest.get('state'),
-                                display_stale=Path(latest['output']).resolve() != Path(base_run).resolve())
+                                display_stale=local_runtime_path(latest['output'], root=ROOT).resolve() != Path(base_run).resolve())
         except (OSError, ValueError, KeyError, TypeError):
             saved_notice = dict(saved_only=True, latest_state='unavailable', display_stale=True)
     # Capture the observed receipt before reading accounts. Only a subsequent
