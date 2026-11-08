@@ -1,4 +1,4 @@
-"""Archive verified financial outputs and leave disclosure inputs in place."""
+"""Archive the verified financial calculation input and outputs."""
 if not __package__:
     import sys
     from pathlib import Path
@@ -14,7 +14,7 @@ import re
 from atomic_io import atomic_write
 from records.files import resolve
 from records.paths import local_runtime_path, runtime_lookup_paths
-from records.store import RecordStore, default_path, _key, _sha
+from records.store import RecordStore, default_path, _hash, _key, _sha
 from workbench_paths import ROOT
 
 
@@ -22,7 +22,10 @@ ARTIFACTS = {
     'manifest.json': 'financial_manifest',
     'result.json': 'financial_result',
     'normalized.json': 'financial_normalized',
+    'source.json': 'financial_source',
 }
+BUNDLE = frozenset(ARTIFACTS)
+LEGACY_BUNDLE = BUNDLE - {'source.json'}
 
 
 def read_artifact(path):
@@ -61,7 +64,10 @@ def _validate(base, root, payloads, manifest_sha=None):
             or manifest.get('key') != key or not isinstance(manifest.get('version'), str)
             or not isinstance(manifest.get('files'), dict)):
         raise ValueError('invalid_financial_record_manifest')
-    for name in ('result.json', 'normalized.json'):
+    _hash(manifest['files'].get('source.json'))
+    for name in ('result.json', 'normalized.json', 'source.json'):
+        if name == 'source.json' and name not in payloads:
+            continue
         raw = payloads[name]
         if _sha(raw) != manifest['files'].get(name):
             raise ValueError('financial_record_artifact_hash_mismatch:' + name)
@@ -78,16 +84,19 @@ def _existing_bundle(db, base, payloads, metadata):
     sql = 'SELECT source_path,kind,sha256,metadata FROM record_versions WHERE source_key IN ({})'
     rows = db.execute(sql.format(','.join('?' for _ in keys)), keys).fetchall()
     if not rows:
-        return False
+        return frozenset()
+    present = frozenset(Path(path).name for path, _, _, _ in rows)
+    if present not in (LEGACY_BUNDLE, BUNDLE):
+        raise ValueError('financial_record_bundle_conflict')
     actual = sorted((Path(path).name, kind, digest) for path, kind, digest, _ in rows)
-    expected = sorted((name, kind, _sha(payloads[name])) for name, kind in ARTIFACTS.items())
+    expected = sorted((name, ARTIFACTS[name], _sha(payloads[name])) for name in present)
     if actual != expected or any(json.loads(meta) != metadata for _, _, _, meta in rows):
         raise ValueError('financial_record_bundle_conflict')
-    return True
+    return present
 
 
 def publish_snapshot(base, *, root=ROOT, store=None, manifest_sha=None):
-    """Register the three verified outputs in one transaction per snapshot."""
+    """Register only missing verified artifacts in one snapshot transaction."""
     base = Path(base).resolve()
     _identity(base, root)
     paths = {name: base / name for name in ARTIFACTS}
@@ -96,27 +105,29 @@ def publish_snapshot(base, *, root=ROOT, store=None, manifest_sha=None):
     payloads = {name: read_artifact(path) for name, path in paths.items()}
     metadata = _validate(base, root, payloads, manifest_sha)
     store = store or RecordStore(default_path(root))
-    already_saved = False
+    present = frozenset()
     if store.path.is_file():
         with closing(store.connect()) as db:
-            already_saved = _existing_bundle(db, base, payloads, metadata)
-    if not already_saved:
+            present = _existing_bundle(db, base, payloads, metadata)
+    missing = BUNDLE - present
+    if missing:
         with closing(store.connect(write=True)) as db, db:
             db.execute('BEGIN IMMEDIATE')
-            already_saved = _existing_bundle(db, base, payloads, metadata)
-            if not already_saved:
-                for name, kind in ARTIFACTS.items():
+            missing = BUNDLE - _existing_bundle(db, base, payloads, metadata)
+            for name, kind in ARTIFACTS.items():
+                if name in missing:
                     store._put(db, paths[name], payloads[name], kind=kind, root=root, metadata=metadata)
-    return dict(metadata, path=str(base), reused=already_saved,
-                artifacts=len(payloads), raw_bytes=sum(map(len, payloads.values())))
+    return dict(metadata, path=str(base), reused=not missing,
+                artifacts=len(payloads), raw_bytes=sum(map(len, payloads.values())),
+                inserted_artifacts=len(missing), inserted_bytes=sum(len(payloads[name]) for name in missing))
 
 
 def verify(store, *, root=ROOT):
-    """Check complete bundles and decode all their artifacts using only the DB."""
+    """Decode all DB bundles and report earlier bundles awaiting source backfill."""
     with closing(store.connect()) as db:
         check = db.execute('PRAGMA quick_check').fetchone()[0]
         rows = db.execute(
-            'SELECT source_path,kind,sha256,metadata FROM record_versions WHERE kind IN (?,?,?)',
+            'SELECT source_path,kind,sha256,metadata FROM record_versions WHERE kind IN (?,?,?,?)',
             tuple(ARTIFACTS.values())).fetchall()
     if check != 'ok':
         raise ValueError('financial_record_database_integrity_failed')
@@ -124,9 +135,12 @@ def verify(store, *, root=ROOT):
     for row in rows:
         grouped[local_runtime_path(row[0]).parent].append(row)
     verified_bytes = 0
+    legacy = 0
     for base, bundle in grouped.items():
         actual = sorted((Path(path).name, kind) for path, kind, _, _ in bundle)
-        if actual != sorted(ARTIFACTS.items()):
+        if actual == sorted((name, ARTIFACTS[name]) for name in LEGACY_BUNDLE):
+            legacy += 1
+        elif actual != sorted(ARTIFACTS.items()):
             raise ValueError('financial_record_incomplete_bundle:' + str(base))
         payloads = {}
         for path, _, digest, _ in bundle:
@@ -138,7 +152,8 @@ def verify(store, *, root=ROOT):
         if any(json.loads(meta) != metadata for _, _, _, meta in bundle):
             raise ValueError('financial_record_metadata_mismatch:' + str(base))
         verified_bytes += sum(map(len, payloads.values()))
-    return dict(snapshots=len(grouped), artifacts=len(rows), verified_bytes=verified_bytes, quick_check=check)
+    return dict(snapshots=len(grouped), artifacts=len(rows), verified_bytes=verified_bytes,
+                legacy_snapshots_missing_source=legacy, quick_check=check)
 
 
 def _latest_sha(base):
@@ -179,7 +194,9 @@ def main():
         atomic_write(args.output, json.dumps(result, ensure_ascii=False, indent=2))
     summary = {k: v for k, v in result.items() if k not in ('receipts', 'errors')}
     if 'receipts' in result:
-        summary.update(published=len(result['receipts']), errors=len(result['errors']))
+        summary.update(published=len(result['receipts']), errors=len(result['errors']),
+                       inserted_artifacts=sum(item['inserted_artifacts'] for item in result['receipts']),
+                       inserted_bytes=sum(item['inserted_bytes'] for item in result['receipts']))
     print(json.dumps(summary, ensure_ascii=False))
     return int(bool(result.get('errors')))
 

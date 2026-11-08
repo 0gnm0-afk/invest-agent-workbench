@@ -2,6 +2,8 @@
 from urllib.parse import urlparse, parse_qs
 from bs4 import BeautifulSoup
 
+from atomic_io import available, read_bytes
+
 SA_SECTORS = {'Financials', 'Healthcare', 'Technology', 'Industrials', 'Consumer Discretionary',
               'Materials', 'Energy', 'Communication Services', 'Real Estate', 'Consumer Staples', 'Utilities'}
 
@@ -34,7 +36,7 @@ def stockanalysis_profile(data, symbol, exchange):
 
 def load_reviews(root, checked, load, inputs, applied, age_issue):
     manifest_path = root/'external-review.json'
-    if not manifest_path.exists():
+    if not available(manifest_path):
         return {}
     manifest = load(checked(manifest_path, None, inputs))
     sources = (root/'sources').resolve()
@@ -68,7 +70,7 @@ def load_reviews(root, checked, load, inputs, applied, age_issue):
             elif meta['status'] != 200:
                 check['issue'] = 'public_page_http_'+str(meta['status'])
             elif kind == 'stockanalysis':
-                value, issue = stockanalysis_profile(path.read_bytes(), symbol, exchange)
+                value, issue = stockanalysis_profile(read_bytes(path), symbol, exchange)
                 check['issue'] = issue
                 review['alternate_classification'] = value
             else:

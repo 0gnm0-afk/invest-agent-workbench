@@ -38,7 +38,7 @@ def fetch(url):
 def prepare(evidence, output, applied, *, fetcher=fetch):
     import sectors.observation as so
     config_path = evidence / 'calculation-basis.json'
-    if not config_path.is_file():
+    if not artifact_io.available(config_path):
         return None
     # Check the original identities/hashes/approval, without relaxing future-date checks.
     original = load_basis(evidence, artifact_io.checked, artifact_io.load, {}, applied,

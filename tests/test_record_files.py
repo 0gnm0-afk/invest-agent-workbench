@@ -110,6 +110,23 @@ class RecordFileIntegrationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'saved_artifact_hash_mismatch'):
             atomic_io.checked_saved(path, self.manifest['output_hashes']['quality.json'])
 
+    def test_legacy_physical_snapshot_and_db_pointer_use_configured_usb_root(self):
+        old = self.root / 'old'
+        (self.root / 'config.json').write_text(
+            json.dumps({'records': {'previous_root': str(old)}}), encoding='utf-8')
+        relative = self.source.relative_to(self.root)
+        old_snapshot = old / relative
+        value = json.loads(self.source.read_bytes())
+        value['ohlcv_store']['path'] = str(old / 'runtime/ohlcv.sqlite3')
+        raw = json.dumps(value).encode('utf-8')
+        self.source.write_bytes(raw)
+        inputs = {}
+        with patch('runtime_paths.ROOT', self.root):
+            atomic_io.checked(old_snapshot, sha(raw), inputs)
+            actual = atomic_io.checked_saved(old_snapshot, sha(raw))
+        self.assertEqual(inputs, {str(old_snapshot): sha(raw)})
+        self.assertEqual(actual['series'][0]['bars'], self.bars)
+
     def test_thin_reference_path_database_and_hash_tampering_are_rejected(self):
         self.publish()
         publish_thin(self.run, root=self.root, store=self.store)

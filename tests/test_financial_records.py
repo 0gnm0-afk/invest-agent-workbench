@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from financials.store import FinancialStore, lock_file, save
-from records.financial import ARTIFACTS, publish_snapshot, read_artifact, verify
+from records.financial import ARTIFACTS, LEGACY_BUNDLE, publish_snapshot, read_artifact, verify
 from records.store import RecordStore, default_path
 
 
@@ -54,18 +54,43 @@ class FinancialRecords(unittest.TestCase):
         for name, raw in originals.items():
             self.assertEqual((self.base / name).read_bytes(), raw)
             self.assertEqual(self.store.read(self.base / name), raw)
-        self.assertIsNone(self.store.read(self.base / 'source.json'))
+        self.assertIsNone(self.store.read(self.base / 'raw' / 'official.json'))
         self.assertIsNone(self.store.read(self.base / 'saved-price.json'))
         for name in ARTIFACTS:
             (self.base / name).rename(self.base / (name + '.fixture-hidden'))
         self.assertEqual(self.financial.read(self.key)['result'], self.result)
         self.assertEqual(read_artifact(self.base / 'normalized.json'), originals['normalized.json'])
-        self.assertEqual(verify(self.store, root=self.root)['artifacts'], 3)
+        self.assertEqual(verify(self.store, root=self.root)['artifacts'], 4)
         self.assertTrue(self.publish()['reused'])
         (self.base / 'result.json').write_bytes(b'{}')
         result = self.financial.read(self.key)
         self.assertIsNone(result['result'])
         self.assertEqual(result['attempt']['error'], 'cached_snapshot_integrity_failed')
+
+    def test_legacy_bundle_backfills_only_verified_source(self):
+        metadata = dict(key=self.key, snapshot_id=self.sid, manifest_sha256=self.manifest_sha,
+                        version='financial-focus-8')
+        old = {
+            name: self.store.put(self.base / name, (self.base / name).read_bytes(),
+                                 kind=ARTIFACTS[name], root=self.root, metadata=metadata)
+            for name in LEGACY_BUNDLE
+        }
+        self.assertEqual(verify(self.store, root=self.root)['legacy_snapshots_missing_source'], 1)
+        source = self.base / 'source.json'
+        raw = source.read_bytes()
+        source.write_bytes(b'{}')
+        with self.assertRaisesRegex(ValueError, 'artifact_hash_mismatch:source.json'):
+            self.publish()
+        self.assertEqual(verify(self.store, root=self.root)['artifacts'], 3)
+        source.write_bytes(raw)
+        receipt = self.publish()
+        self.assertEqual(receipt['inserted_artifacts'], 1)
+        self.assertEqual(receipt['inserted_bytes'], len(raw))
+        self.assertEqual(self.store.read(source), raw)
+        for name, ref in old.items():
+            self.assertEqual(self.store.lookup(self.base / name), ref)
+        self.assertEqual(verify(self.store, root=self.root)['legacy_snapshots_missing_source'], 0)
+        self.assertEqual(self.publish()['inserted_artifacts'], 0)
 
     def test_hash_failure_and_transaction_failure_leave_no_partial_bundle(self):
         p = self.base / 'normalized.json'
@@ -131,6 +156,7 @@ class FinancialRecords(unittest.TestCase):
             collector.assert_not_called()
         self.assertEqual(result['state'], 'complete')
         self.assertEqual(result['result']['source_snapshot_id'], self.sid)
+        self.assertFalse((self.base / 'source.json').exists())
         self.assertEqual(verify(self.store, root=self.root)['snapshots'], 2)
 
 

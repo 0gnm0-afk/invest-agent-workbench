@@ -1,5 +1,4 @@
 """Apply immutable, directly verified Finviz refreshes to exact saved identities."""
-import json
 import atomic_io as artifact_io
 from pathlib import Path
 from urllib.parse import urlparse
@@ -12,7 +11,7 @@ def apply(groups, snapshot, checked, inputs, applied, age_issue, allowed_sectors
         return groups
     manifest_path = checked(Path(reference['path']), reference['sha256'], inputs)
     root = manifest_path.parent
-    manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+    manifest = artifact_io.load_json_bytes(manifest_path)
     if manifest.get('schema') != 1:
         raise ValueError('invalid_classification_refresh_schema')
     source = checked(Path(manifest['identity_snapshot']['path']), manifest['identity_snapshot']['sha256'], inputs)
@@ -26,12 +25,12 @@ def apply(groups, snapshot, checked, inputs, applied, age_issue, allowed_sectors
         if any(not p.is_relative_to(root.resolve()) for p in paths):
             raise ValueError('classification_refresh_path_outside_root')
         document, metadata = paths
-        meta = json.loads(checked(metadata,record['meta_sha256'],inputs).read_text(encoding='utf-8'))
+        meta = artifact_io.load_json_bytes(checked(metadata,record['meta_sha256'],inputs))
         if meta['status'] != 200 or any(urlparse(meta[k]).scheme!='https' or urlparse(meta[k]).hostname!='finviz.com' for k in ('url','final_url')):
             raise ValueError('classification_refresh_source_invalid')
         if age_issue(meta['observed_at'],applied):
             raise ValueError('classification_refresh_timestamp_invalid')
-        parsed = parse_alias_quote(checked(document,meta['sha256'],inputs).read_bytes(), record['finviz_symbol'],record['symbol'],record['exchange'])
+        parsed = parse_alias_quote(artifact_io.read_bytes(checked(document,meta['sha256'],inputs)), record['finviz_symbol'],record['symbol'],record['exchange'])
         if parsed['sector'] not in allowed_sectors or parsed['industry'].startswith('Closed-End Fund') or parsed['industry']=='Exchange Traded Fund':
             raise ValueError('classification_refresh_security_type_conflict')
         updates[key] = (parsed,{'path':str(document),'sha256':meta['sha256'],'url':meta['url'],
@@ -62,12 +61,12 @@ def apply_issuer_links(groups, manifest, identities, checked, inputs, applied, a
     if not reference:
         return groups
     meta_path = checked(Path(reference['meta_path']),reference['meta_sha256'],inputs)
-    metadata = json.loads(meta_path.read_text(encoding='utf-8'))
+    metadata = artifact_io.load_json_bytes(meta_path)
     if (len(metadata)!=1 or metadata[0]['url']!='https://www.sec.gov/files/company_tickers_exchange.json'
             or age_issue(metadata[0]['fetched_at'],applied)):
         raise ValueError('issuer_reference_source_or_time_invalid')
     path = checked(Path(reference['path']),metadata[0]['sha256'],inputs)
-    data = json.loads(path.read_text(encoding='utf-8'))
+    data = artifact_io.load_json_bytes(path)
     if data['fields'] != ['cik','name','ticker','exchange']:
         raise ValueError('issuer_reference_schema_invalid')
     issuers = {}

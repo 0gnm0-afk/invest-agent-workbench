@@ -20,7 +20,7 @@ from bs4 import BeautifulSoup
 import requests
 
 from workbench_paths import ROOT
-from atomic_io import sha
+from atomic_io import read_bytes, sha
 SECTORS = {'Basic Materials':'Basic Materials', 'Materials':'Basic Materials',
     'Communication Services':'Communication Services', 'Consumer Cyclical':'Consumer Cyclical',
     'Consumer Discretionary':'Consumer Cyclical', 'Consumer Defensive':'Consumer Defensive',
@@ -205,7 +205,7 @@ def verified(reference, inputs=None):
                     or sha(doc['path']) != doc['sha256']):
                 raise ValueError('adr_document_invalid')
             inputs[doc['path']] = doc['sha256']
-            pages.append(Path(doc['path']).read_bytes())
+            pages.append(read_bytes(doc['path']))
         if len(pages) != 2:
             raise ValueError('adr_documents_missing')
         parsed = parse_pages(*pages, row, bundle['session'])

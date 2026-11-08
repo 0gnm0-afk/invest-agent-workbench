@@ -38,16 +38,25 @@ def load(path):
 
 def read_bytes(path):
     """Read verified record references; recover migrated records/prices exactly."""
+    from records.files import resolve
+    from runtime_paths import local_runtime_path
+    path = Path(path)
     try:
-        raw = Path(path).read_bytes()
+        raw = path.read_bytes()
     except FileNotFoundError:
-        from records.files import resolve
+        local = local_runtime_path(path)
+        if local != path:
+            try:
+                raw = local.read_bytes()
+            except FileNotFoundError:
+                pass
+            else:
+                return resolve(path, raw)
         raw = resolve(path)
         if raw is not None:
             return raw
         from market.price_files import recover_bytes
         return recover_bytes(path)
-    from records.files import resolve
     return resolve(path, raw)
 
 

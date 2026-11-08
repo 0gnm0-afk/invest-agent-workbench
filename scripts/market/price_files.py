@@ -17,7 +17,7 @@ import re
 from pathlib import Path
 import zlib
 from market.price_receipts import packed_record, packed_exists, save_one
-from runtime_paths import runtime_lookup_paths
+from runtime_paths import local_runtime_path, runtime_lookup_paths
 
 from market.prices import PriceStore, default_path, digest, identity, normalized, FIELDS
 
@@ -187,6 +187,7 @@ class PriceFiles:
     def market_snapshot(self, path, expected):
         """Return a verified market view with the same pinned bar references used in replay."""
         from atomic_io import checked_saved,sha
+        path = local_runtime_path(path)
         record = self._record(path)
         if record is None:
             return checked_saved(path,expected)

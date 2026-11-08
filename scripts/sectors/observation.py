@@ -10,7 +10,8 @@ if not __package__:
 
 from workbench_paths import SCRIPTS
 import argparse
-from atomic_io import load, sha, write, checked
+from atomic_io import available, checked, load, read_bytes, sha, write
+from runtime_paths import local_runtime_path
 import csv
 import hashlib
 import html
@@ -118,35 +119,40 @@ def verified_parent(entry, symbol, records, probes, applied):
     return {'code':parent,'label':label},None
 
 
+def _saved_glob(folder, pattern):
+    physical = folder if folder.is_dir() else local_runtime_path(folder)
+    return sorted(folder / path.name for path in physical.glob(pattern))
+
+
 def group_rows(original, evidence, nh_root, applied, inputs):
     """Preserve source rows verbatim; derive a separate, evidence-backed group."""
     nh_manifest = load(checked(nh_root / 'sources-manifest.json', None, inputs))
     files = {Path(x['path']).name: x for x in nh_manifest}
     for name in ('m_new_stock.h', 'm_new_stock.mst'):
         checked(nh_root / files[name]['path'], files[name]['sha256'], inputs)
-    master = parse_master((nh_root / files['m_new_stock.mst']['path']).read_bytes(),
-                          (nh_root / files['m_new_stock.h']['path']).read_text(encoding='utf-8-sig'))
+    master = parse_master(read_bytes(nh_root / files['m_new_stock.mst']['path']),
+                          read_bytes(nh_root / files['m_new_stock.h']['path']).decode('utf-8-sig'))
     by_symbol = defaultdict(list)
     for row in master:
         if row['sMarket'] == '1':
             by_symbol[row['sCode']].append(row)
     code_probes = defaultdict(list)
-    for path in sorted((evidence / 'kr-probes').glob('*.json')):
+    for path in _saved_glob(evidence / 'kr-probes', '*.json'):
         value = load(checked(path, None, inputs))
         code_probes[value['expected_code']].append((path, value))
     individual = defaultdict(list)
-    for path in sorted((evidence / 'kr-individual').glob('*.json')):
+    for path in _saved_glob(evidence / 'kr-individual', '*.json'):
         value = load(checked(path, None, inputs))
         individual[value['inputs']['iem_cd']].append((path,value))
     us = {}
-    for path in sorted((evidence / 'sources').glob('finviz-*.html')):
+    for path in _saved_glob(evidence / 'sources', 'finviz-*.html'):
         if path.stem == 'finviz-map':
             continue
         meta_path = checked(path.with_suffix('.json'), None, inputs)
         meta = load(meta_path)
         checked(path, meta['sha256'], inputs)
         symbol = path.stem.removeprefix('finviz-')
-        value, reason = finviz_classification(path.read_bytes(), symbol)
+        value, reason = finviz_classification(read_bytes(path), symbol)
         us[symbol] = (value, reason, {**meta, 'path': str(path.resolve()),
                                     'identity_method': 'exact_ticker_and_published_exchange_no_isin'})
     public = load_public(evidence, checked, load, inputs, SECTORS)
@@ -440,7 +446,7 @@ def align_groups(groups, universe, applied):
 def build(market_root, classification_root, evidence, nh_root, applied, *, allow_universe_changes=False, basis_rechecks=None, snapshot=None):
     inputs = {}
     basis_contract = load_basis(evidence, checked, load, inputs, applied, age_issue, rechecks=basis_rechecks)
-    if (evidence/'wics-public.json').exists() and basis_contract is None:
+    if available(evidence/'wics-public.json') and basis_contract is None:
         raise ValueError('WICS_observation_requires_verified_calculation_basis')
     market_manifest = load(checked(market_root / 'manifest.json', None, inputs))
     for name, expected in market_manifest.items():

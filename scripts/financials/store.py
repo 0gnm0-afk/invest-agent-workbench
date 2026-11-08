@@ -144,7 +144,7 @@ class FinancialStore:
             if seed:
                 import shutil
                 seed=Path(seed);shutil.copytree(seed/'raw',base/'raw',dirs_exist_ok=True)
-                source=json.loads((seed/'source.json').read_bytes())
+                source=json.loads(read_artifact(seed/'source.json'))
                 try:
                     inherited=json.loads(read_artifact(seed/'result.json'))
                 except FileNotFoundError:

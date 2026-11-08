@@ -7,6 +7,8 @@ from urllib.parse import parse_qs, urlparse
 
 from bs4 import BeautifulSoup
 
+from atomic_io import available, read_bytes
+
 
 def parse_alias_quote(data, symbol, provider_symbol, exchange):
     """Accept aliases only when Finviz itself links the exact source ticker/exchange."""
@@ -82,7 +84,7 @@ def parse_screener(data):
 def load_public(root, checked, load, inputs, allowed_sectors):
     """Check source chain and preserve source-specific conflicts for the caller."""
     manifest_path=root/'finviz-public.json'
-    if not manifest_path.exists():return {}
+    if not available(manifest_path):return {}
     manifest=load(checked(manifest_path,None,inputs))
     sources=root/'sources'
     by_symbol=defaultdict(list)
@@ -105,21 +107,21 @@ def load_public(root, checked, load, inputs, allowed_sectors):
             if (page_url.scheme!='https' or page_url.hostname!='finviz.com' or
                     page_url.path!='/map.ashx' or parse_qs(page_url.query).get('t')!=['sec_all']):
                 raise ValueError('full_market_page_required')
-            soup=BeautifulSoup(page.read_bytes(),'html.parser')
+            soup=BeautifulSoup(read_bytes(page),'html.parser')
             links=soup.select('link[data-chunk-id="map_base_sec_all"]')
             if len(links)!=1 or links[0].get('href')!=url.path:
                 raise ValueError('map_page_bundle_link_mismatch')
-            records=parse_map(path.read_bytes())
+            records=parse_map(read_bytes(path))
         elif entry['kind']=='screener':
             if not url.path.startswith('/screener'):raise ValueError('screener_url_required')
             requested=set(parse_qs(url.query).get('t',[''])[0].split(','))
-            records=parse_screener(path.read_bytes())
+            records=parse_screener(read_bytes(path))
             if any(r['symbol'] not in requested for r in records):
                 raise ValueError('screener_unrequested_ticker_no_implicit_alias')
         elif entry['kind']=='alias_quote':
             if url.path not in ('/quote.ashx','/stock') or parse_qs(url.query).get('t')!=[entry['symbol']]:
                 raise ValueError('alias_quote_url_mismatch')
-            records=[parse_alias_quote(path.read_bytes(),entry['symbol'],entry['provider_symbol'],entry['exchange'])]
+            records=[parse_alias_quote(read_bytes(path),entry['symbol'],entry['provider_symbol'],entry['exchange'])]
         else:raise ValueError('unsupported_finviz_document')
         for r in records:
             if r['sector'] not in allowed_sectors:raise ValueError('unknown_finviz_sector')

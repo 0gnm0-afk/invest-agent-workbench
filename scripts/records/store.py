@@ -225,6 +225,10 @@ class RecordStore:
 
     def _put(self, db, source, raw, *, kind, root, metadata=None, encoded=None):
         source = _inside(source, root)
+        return self._insert_version(db, source, raw, kind=kind, root=root, metadata=metadata, encoded=encoded)
+
+    def _insert_version(self, db, source, raw, *, kind, root, metadata=None, encoded=None):
+        """Insert into a caller-owned transaction after source authority validation."""
         if not isinstance(raw, bytes):
             raise ValueError('record_source_bytes_required')
         sha = _sha(raw)

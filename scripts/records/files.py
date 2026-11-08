@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 from .paths import local_runtime_path
+from workbench_paths import ROOT
 
 
 MARKER = 'record_artifact_ref'
@@ -15,10 +16,20 @@ def _key(path):
 
 def _store(path):
     from .store import RecordStore, default_path
-    for parent in local_runtime_path(path).resolve().parents:
+    local = local_runtime_path(path).resolve()
+    for parent in local.parents:
         if parent.name == 'runtime':
             database = default_path(parent.parent)
-            return RecordStore(database) if database.is_file() else None
+            if database.is_file():
+                return RecordStore(database)
+            break
+    config = ROOT / 'config.json'
+    if config.is_file():
+        mother = json.loads(config.read_bytes()).get('mother')
+        if mother and Path(mother).is_absolute() and local.is_relative_to((Path(mother) / 'runtime').resolve()):
+            database = default_path(ROOT)
+            if database.is_file():
+                return RecordStore(database)
     return None
 
 
@@ -43,7 +54,7 @@ def resolve(path, raw=None):
 
 
 def available(path):
-    if Path(path).is_file():
+    if Path(path).is_file() or local_runtime_path(path).is_file():
         return True
     store = _store(path)
     return bool(store and store.lookup(path))

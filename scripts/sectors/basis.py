@@ -1,5 +1,5 @@
 """Official provider semantics applied only to the local sector observation path."""
-import hashlib
+from atomic_io import available, sha
 from datetime import datetime
 from pathlib import Path
 
@@ -28,7 +28,7 @@ REVIEWED_REVISIONS = frozenset({(
 
 def load_basis(root, checked, load, inputs, applied, age_issue, *, rechecks=None):
     path = root/'calculation-basis.json'
-    if not path.exists():
+    if not available(path):
         return None
     config = load(checked(path, None, inputs))
     if config.get('contract') != CONTRACT:
@@ -40,7 +40,7 @@ def load_basis(root, checked, load, inputs, applied, age_issue, *, rechecks=None
         rechecks = Path(rechecks).resolve()
         receipt = load(checked(rechecks, None, inputs))
         if (receipt.get('schema') != 1 or receipt.get('contract') != CONTRACT
-                or receipt.get('basis_sha256') != hashlib.sha256(path.read_bytes()).hexdigest()):
+                or receipt.get('basis_sha256') != sha(path)):
             raise ValueError('basis_recheck_identity_mismatch')
     docs = []
     for entry in config['documents']:

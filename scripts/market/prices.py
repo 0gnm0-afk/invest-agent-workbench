@@ -415,7 +415,8 @@ def freeze_snapshot(snapshot, path, store=None, *, source_sha256=''):
 def hydrate_snapshot(value):
     if not isinstance(value, dict) or 'ohlcv_store' not in value:
         return value
-    store = PriceStore(value['ohlcv_store']['path'])
+    from runtime_paths import local_runtime_path
+    store = PriceStore(local_runtime_path(value['ohlcv_store']['path']))
     def expand(series):
         return {**series, 'bars': store.read(series['bars_ref'],connection=db)} if 'bars_ref' in series else series
     with closing(store.connect()) as db:

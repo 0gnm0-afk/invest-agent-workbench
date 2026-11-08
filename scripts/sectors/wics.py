@@ -5,6 +5,8 @@ from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse, parse_qs
 from bs4 import BeautifulSoup
 
+from atomic_io import available, read_bytes
+
 
 def industry_hierarchy(data, sectors):
     """Roll up only exact published six-digit WICS labels, ignoring whitespace."""
@@ -87,7 +89,7 @@ def components(payload, code, name, as_of):
 
 def load_wics(root, checked, load, inputs):
     manifest_path = root/'wics-public.json'
-    if not manifest_path.exists():
+    if not available(manifest_path):
         return None
     manifest = load(checked(manifest_path, None, inputs))
     source_root = (root/'sources').resolve()
@@ -106,11 +108,11 @@ def load_wics(root, checked, load, inputs):
     script, script_meta = source(manifest['script'])
     tree, tree_meta = source(manifest['tree'])
     taxonomy, taxonomy_meta = source(manifest['taxonomy'])
-    text = page.read_text(encoding='utf-8-sig')
+    text = read_bytes(page).decode('utf-8-sig')
     if (urlparse(script_meta['url']).path not in text or '/api/tree/4' not in text or
             urlparse(tree_meta['url']).path != '/api/tree/4' or
             urlparse(taxonomy_meta['url']).path != '/About/WICS' or
-            '/Index/GetIndexComponets' not in script.read_text(encoding='utf-8-sig')):
+            '/Index/GetIndexComponets' not in read_bytes(script).decode('utf-8-sig')):
         raise ValueError('wics_public_source_chain_invalid')
     sectors = top_sectors(load(tree))
     entries = manifest['documents']
@@ -130,7 +132,7 @@ def load_wics(root, checked, load, inputs):
                 'context_observed_at': [m['observed_at'] for m in (page_meta, script_meta, tree_meta, taxonomy_meta)],
                 'classification_as_of': manifest['as_of'],
                 'identity_method': 'exact_KR_short_code_published_WICS_component_no_isin'})
-    hierarchy = industry_hierarchy(taxonomy.read_bytes(), sectors) if manifest.get('companies') else {}
+    hierarchy = industry_hierarchy(read_bytes(taxonomy), sectors) if manifest.get('companies') else {}
     for entry in manifest.get('companies', []):
         path, meta = source(entry['file'], 'navercomp.wisereport.co.kr')
         for key in ('url', 'final_url'):
@@ -138,7 +140,7 @@ def load_wics(root, checked, load, inputs):
             if (url.path != '/v2/company/c1010001.aspx' or
                     parse_qs(url.query) != {'cmp_cd': [entry['symbol']]}):
                 raise ValueError('wics_company_query_mismatch')
-        row = company_industry(path.read_bytes(), entry['symbol'], hierarchy)
+        row = company_industry(read_bytes(path), entry['symbol'], hierarchy)
         records[entry['symbol']].append({**row, 'url': meta['url'], 'path': str(path),
             'sha256': meta['sha256'], 'observed_at': meta['observed_at'],
             'context_observed_at': [tree_meta['observed_at'], taxonomy_meta['observed_at']],
