@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -22,6 +23,16 @@ FILE_TYPES = frozenset({'.md', '.txt', '.pdf', '.png', '.jpg', '.jpeg', '.webp',
 TEXT_TYPES = frozenset({'.md', '.txt', '.csv', '.tsv', '.html'})
 MAX_FILE_BYTES = 64 * 1024 * 1024
 MAX_TEXT_CHARS = 2_000_000
+MIME_TYPES = {
+    '.md': 'text/markdown', '.txt': 'text/plain', '.pdf': 'application/pdf',
+    '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+    '.webp': 'image/webp', '.gif': 'image/gif', '.csv': 'text/csv',
+    '.tsv': 'text/tab-separated-values', '.html': 'text/html',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+}
+BLOCKED_PARTS = frozenset({'.git', '.venv', 'secrets', 'auth', '.aws', '.codex', '.agents'})
 
 
 def _json(value):
@@ -62,6 +73,17 @@ def _text_page(value, offset, limit):
         raise ValueError('knowledge_invalid_text_pagination')
     return value[offset:offset + limit], dict(total=len(value), offset=offset,
         next_offset=offset + limit if offset + limit < len(value) else None)
+
+
+def _linked(path):
+    return path.is_symlink() or path.is_junction()
+
+
+def _source_media(source):
+    suffix = Path(source['original_name']).suffix.lower() if source.get('original_name') else '.txt'
+    if suffix not in MIME_TYPES:
+        raise ValueError('knowledge_source_file_type_unsupported')
+    return MIME_TYPES[suffix], '.jpg' if suffix == '.jpeg' else suffix
 
 
 class KnowledgeStore:
@@ -165,8 +187,7 @@ class KnowledgeStore:
         original_name, original_path = None, None
         if file_path is not None:
             path = Path(_text(file_path, 'file_path', limit=4000)).resolve()
-            blocked = {'.git', '.venv', 'secrets', 'auth', '.aws', '.codex', '.agents'}
-            if path.suffix.lower() not in FILE_TYPES or any(p.lower() in blocked for p in path.parts):
+            if path.suffix.lower() not in FILE_TYPES or any(p.lower() in BLOCKED_PARTS for p in path.parts):
                 raise ValueError('knowledge_disallowed_source_file')
             if not path.is_file() or path.stat().st_size > MAX_FILE_BYTES:
                 raise ValueError('knowledge_source_file_missing_or_too_large')
@@ -275,6 +296,8 @@ class KnowledgeStore:
             if raw is None or _sha(raw[0]) != result['sha256']:
                 raise ValueError('knowledge_source_integrity_failure')
             result['verified'] = True
+            result['mime_type'], _ = _source_media(result)
+            result['mime_basis'] = 'original_filename_extension' if result['original_name'] else 'provided_utf8_text'
             return result
 
     def export_source_bytes(self, source_id):
@@ -285,6 +308,53 @@ class KnowledgeStore:
         if _sha(raw) != result['sha256']:
             raise ValueError('knowledge_source_integrity_failure')
         return raw
+
+    def export_source(self, source_id):
+        """Materialize an explicit export in a fixed cache; never overwrite or execute."""
+        source = self.source(source_id, include_text=False)
+        raw = self.export_source_bytes(source_id)
+        mime_type, suffix = _source_media(source)
+        directory = self.path.parent / '01.원본내보내기'
+        if any(part.lower() in BLOCKED_PARTS for part in directory.parts) or _linked(directory):
+            raise ValueError('knowledge_unsafe_export_directory')
+        directory.mkdir(exist_ok=True)
+        if _linked(directory) or directory.resolve() != directory:
+            raise ValueError('knowledge_unsafe_export_directory')
+        target = directory / (source['sha256'] + suffix)
+        if _linked(target) or target.resolve() != target:
+            raise ValueError('knowledge_unsafe_export_target')
+        created = False
+        identity = None
+        try:
+            try:
+                handle = target.open('xb')
+            except FileExistsError:
+                # A duplicate reuses only the same complete bytes. A partial write
+                # from another process is a visible conflict, never overwritten.
+                if not target.is_file() or target.stat().st_size != len(raw):
+                    raise ValueError('knowledge_export_conflict_or_incomplete') from None
+            else:
+                created = True
+                with handle:
+                    identity = os.fstat(handle.fileno())
+                    handle.write(raw)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            if _linked(target) or target.resolve() != target or target.stat().st_size != len(raw):
+                raise ValueError('knowledge_unsafe_or_incomplete_export')
+            if _sha(target.read_bytes()) != source['sha256']:
+                raise ValueError('knowledge_export_conflict_or_incomplete')
+        except BaseException:
+            if created and identity is not None and target.exists() and not _linked(target):
+                current = target.stat()
+                if (current.st_dev, current.st_ino) == (identity.st_dev, identity.st_ino):
+                    target.unlink()
+            raise
+        return dict(source_id=source_id, path=str(target), filename=target.name,
+                    original_name=source['original_name'], mime_type=mime_type,
+                    mime_basis=source['mime_basis'], sha256=source['sha256'], byte_length=len(raw),
+                    verified=True, idempotent=not created, source=source,
+                    action='exported_original_bytes_not_executed', database_modified=False)
 
     def note(self, note_id, offset=0, limit=12000):
         with self._read() as db:
@@ -327,6 +397,48 @@ class KnowledgeStore:
             rows = list(db.execute('SELECT * FROM knowledge_summaries WHERE subject=? ORDER BY revision DESC', (subject,))) if db else []
         return [dict(json.loads(r['payload']), subject=subject, revision=r['revision'], created_at=r['created_at']) for r in rows]
 
+    def summary_history(self, subject, offset=0, limit=30):
+        """Newest-first bounded previews; exact revisions open via summary_read."""
+        self._subject(subject)
+        _page(offset, limit)
+        with self._read() as db:
+            if db is None:
+                rows, total = [], 0
+            else:
+                total = db.execute('SELECT count(*) FROM knowledge_summaries WHERE subject=?', (subject,)).fetchone()[0]
+                rows = db.execute('SELECT * FROM knowledge_summaries WHERE subject=? ORDER BY revision DESC LIMIT ? OFFSET ?',
+                                  (subject, limit, offset)).fetchall()
+        items = []
+        for row in rows:
+            payload = json.loads(row['payload'])
+            body, next_step = payload['body'], payload['next_step']
+            items.append(dict(subject=subject, revision=row['revision'], created_at=row['created_at'],
+                              author=payload['author'], status=payload['status'],
+                              body_preview=body[:2000], body_length=len(body), body_truncated=len(body) > 2000,
+                              next_step_preview=next_step[:1000] if next_step else None,
+                              next_step_truncated=bool(next_step and len(next_step) > 1000),
+                              note_count=len(payload['note_ids']), source_count=len(payload['source_ids']),
+                              sha256=_sha(row['payload'].encode('utf-8'))))
+        return dict(subject=subject, items=items, total=total, offset=offset,
+                    next_offset=offset + limit if offset + limit < total else None,
+                    order='revision_desc', authority='AI_synthesis_history_not_user_adoption')
+
+    def summary_read(self, subject, revision, offset=0, limit=12000):
+        """Read one immutable version; paginated body retains exact stored text."""
+        self._subject(subject)
+        if type(revision) is not int or revision < 1:
+            raise ValueError('knowledge_invalid_revision')
+        with self._read() as db:
+            row = db.execute('SELECT * FROM knowledge_summaries WHERE subject=? AND revision=?',
+                             (subject, revision)).fetchone() if db else None
+        if row is None:
+            raise ValueError('knowledge_summary_not_found')
+        result = json.loads(row['payload'])
+        result['body'], result['body_page'] = _text_page(result['body'], offset, limit)
+        result.update(subject=subject, revision=revision, created_at=row['created_at'],
+                      sha256=_sha(row['payload'].encode('utf-8')), mode='exact_saved_revision')
+        return result
+
     def search(self, query='', stock_key=None, topic=None, offset=0, limit=30):
         """Literal text search with exact stock/topic filters, no fuzzy entity assumptions."""
         _page(offset, limit)
@@ -360,7 +472,11 @@ class KnowledgeStore:
         _page(next_steps_offset, limit)
         subjects = self._subjects([topic] if topic else [], [stock_key] if stock_key else [])
         history = self.search(stock_key=stock_key, topic=topic, offset=offset, limit=limit)
-        current = {subject: values[0] for subject in subjects if (values := self.summaries(subject))}
+        current = {}
+        for subject in subjects:
+            versions = self.summary_history(subject, limit=1)
+            if versions['items']:
+                current[subject] = self.summary_read(subject, versions['items'][0]['revision'])
         related_topics = set()
         unresolved, next_steps = [], []
         with self._read() as db:

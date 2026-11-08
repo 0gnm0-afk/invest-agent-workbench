@@ -178,12 +178,14 @@ class CollaborationTests(unittest.TestCase):
             db.execute('UPDATE analysis_items SET payload=? WHERE id=?',(json.dumps(r),r['id']))
         with self.assertRaisesRegex(ValueError,'database_markdown_mismatch'):self.read()
 
-    def test_legacy_bridge_blocks_new_writes_without_restarting(self):
+    def test_direct_bridge_needs_no_legacy_server_capability(self):
         import analysis.bridge as analysis_bridge
-        with patch.object(analysis_bridge,'ensure',return_value=dict(url=self.origin,token='legacy',analysis_capabilities={})),patch.dict('os.environ',{'INVEST_ANALYSIS_ROLE':'collaboration'}):
-            with self.assertRaisesRegex(ValueError,'upgrade_required'):analysis_bridge.call('plan_save',{})
-        with patch.object(analysis_bridge,'ensure',return_value=dict(url=self.origin,token='legacy',analysis_capabilities={})),patch.dict('os.environ',{'INVEST_ANALYSIS_ROLE':'risk'}):
-            with self.assertRaisesRegex(ValueError,'upgrade_required'):analysis_bridge.call('record',{})
+        with patch('analysis.direct.service_for',return_value=self.s),patch('urllib.request.urlopen',side_effect=AssertionError('HTTP forbidden')),patch('subprocess.Popen',side_effect=AssertionError('server start forbidden')):
+            with patch.dict('os.environ',{'INVEST_ANALYSIS_ROLE':'collaboration'}):
+                self.assertEqual(analysis_bridge.call('collaboration_read',{'analysis_key':self.cid})['revision'],0)
+                with self.assertRaises(Forbidden):analysis_bridge.call('plan_decide',{})
+            with patch.dict('os.environ',{'INVEST_ANALYSIS_ROLE':'risk'}):
+                with self.assertRaises(Forbidden):analysis_bridge.call('record',{})
 
     def test_cross_case_refs_and_snapshot_rejected(self):
         other=self.s.dispatch('create',{'stock_key':'US:SYNTH','test_record':True},self.origin)
@@ -232,14 +234,8 @@ class CollaborationTests(unittest.TestCase):
         import asyncio
         from mcp import ClientSession,StdioServerParameters
         from mcp.client.stdio import stdio_client
-        from web.server import handler_for,ThreadingHTTPServer
-        capabilities={'collaboration':'stdio-collab','risk':'stdio-risk'}
-        server=ThreadingHTTPServer(('127.0.0.1',0),handler_for(self.data,{'US:SYNTH':self.stock},ROOT/'dashboard','browser',self.store.path,
-            analysis_capabilities=capabilities,analysis_dependencies={'histories':self.hist,'financials':self.fin}))
-        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
-        endpoint=self.root/'endpoint.json';endpoint.write_text(json.dumps(dict(url='http://127.0.0.1:'+str(server.server_port),analysis_capabilities=capabilities)),encoding='utf-8')
         wrapper=self.root/'mcp_fixture.py'
-        wrapper.write_text('import sys,runpy\nfrom pathlib import Path\nsys.path.insert(0,'+repr(str(ROOT/'scripts'))+')\nimport analysis.bridge as analysis_bridge\nanalysis_bridge.ENDPOINT=Path('+repr(str(endpoint))+')\nrunpy.run_module("analysis_mcp",run_name="__main__")\n',encoding='utf-8')
+        wrapper.write_text('import sys,runpy\nfrom pathlib import Path\nsys.path.insert(0,'+repr(str(ROOT/'scripts'))+')\nimport analysis.bridge as analysis_bridge\nimport analysis.direct as direct\nfrom drawings.store import WorkspaceStore\ndirect.ExistingWorkspace=lambda path: WorkspaceStore(Path('+repr(str(self.store.path))+'))\nanalysis_bridge.ROOT=Path('+repr(str(self.root))+')\nrunpy.run_module("analysis_mcp",run_name="__main__")\n',encoding='utf-8')
         async def session(role, action):
             params=StdioServerParameters(command=sys.executable,args=[str(wrapper)],env={'INVEST_ANALYSIS_ROLE':role,'PYTHONUTF8':'1'})
             async with stdio_client(params) as (read,write):
@@ -257,11 +253,9 @@ class CollaborationTests(unittest.TestCase):
             self.assertEqual(packet['current']['id'],saved_id)
             listed=await client.list_tools()
             self.assertFalse({'analysis_save_risk_review','risk_calculate','risk_overview','risk_save','analysis_calculate'} & {t.name for t in listed.tools})
-        try:
-            saved_id=asyncio.run(session('collaboration',save));plan=self.plan();self.adopt(plan)
-            asyncio.run(session('risk',consume))
-            self.assertEqual(self.read()['active_plans'][0]['record']['id'],plan['id'])
-        finally:server.shutdown();server.server_close();thread.join()
+        saved_id=asyncio.run(session('collaboration',save));plan=self.plan();self.adopt(plan)
+        asyncio.run(session('risk',consume))
+        self.assertEqual(self.read()['active_plans'][0]['record']['id'],plan['id'])
 
     def test_offline_blocks_refresh_but_saved_chart_remains_available(self):
         from web.server import handler_for, ThreadingHTTPServer
@@ -317,10 +311,10 @@ class CollaborationTests(unittest.TestCase):
             status,review=request('plan_review',review_args,'legacy-token',browser);self.assertEqual(status,200)
             status,saved=request('plan_decide',dict(contract_version=VERSION,expected_revision=2,confirmation=review['confirmation'],action='adopt',reason='fixture'),'legacy-token',browser)
             self.assertEqual(status,200);self.assertTrue(saved['verified'])
-            with patch.object(analysis_bridge,'ensure',return_value=dict(url=origin,token='legacy-token',analysis_capabilities=capabilities)),patch.dict('os.environ',{'INVEST_ANALYSIS_ROLE':'risk'}):
+            with patch('analysis.direct.service_for',return_value=self.s),patch.dict('os.environ',{'INVEST_ANALYSIS_ROLE':'risk'}):
                 packet=analysis_bridge.call('plan_input',dict(analysis_key=self.cid,plan_record_id=p['id'],mode='adopted'))
                 self.assertEqual(packet['plan_record']['id'],p['id'])
-                with self.assertRaises(ValueError):analysis_bridge.call('discussion_save',{'analysis_key':self.cid,**args})
+                with self.assertRaises(Forbidden):analysis_bridge.call('discussion_save',{'analysis_key':self.cid,**args})
         finally:server.shutdown();server.server_close();thread.join()
 
 

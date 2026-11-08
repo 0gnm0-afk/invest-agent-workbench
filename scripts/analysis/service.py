@@ -39,19 +39,21 @@ def context(value):
 
 
 class AnalysisService:
-    def __init__(self, store, histories, financials, view, root):
+    def __init__(self, store, histories, financials, view, root, *, initialize=True):
         self.store=store; self.histories=histories; self.financials=financials; self.view=view; self.root=Path(root)
-        with closing(store.connect()) as db, db:
-            db.executescript('''
-            CREATE TABLE IF NOT EXISTS analysis_cases (id TEXT PRIMARY KEY, stock_key TEXT NOT NULL, payload TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS analysis_snapshots (id TEXT PRIMARY KEY, case_id TEXT NOT NULL, payload TEXT NOT NULL, sha256 TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS analysis_items (id TEXT PRIMARY KEY, case_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL);
-            ''')
+        if initialize:
+            with closing(store.connect()) as db, db:
+                db.executescript('''
+                CREATE TABLE IF NOT EXISTS analysis_cases (id TEXT PRIMARY KEY, stock_key TEXT NOT NULL, payload TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS analysis_snapshots (id TEXT PRIMARY KEY, case_id TEXT NOT NULL, payload TEXT NOT NULL, sha256 TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS analysis_items (id TEXT PRIMARY KEY, case_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL);
+                ''')
         self.collaboration = Collaboration(
             connect=store.connect, root=self.root, case=self.case, snapshot=self.snapshot,
             item=self.item, rows=self.rows, snapshots=self.snapshot_summaries,
             capture=self.capture, links=self.links)
-        self.collaboration.migrate()
+        if initialize:
+            self.collaboration.migrate()
 
     def rows(self, table, case_id=None):
         if table not in ('analysis_cases','analysis_snapshots','analysis_items'): raise ValueError('table')

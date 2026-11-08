@@ -1,5 +1,9 @@
 # 분석 MCP · 대시보드 연결 MVP
 
+> 2026-11-08 ver3 실행 경로 갱신: 아래 본문은 당시 대시보드 연결 MVP의 기록이다. 현재 `scripts/session_mcp.py`의 분석 도구는 `analysis.bridge → analysis.direct → 기존 서비스/DB`로 직접 호출하며 HTTP 연결이나 dashboard 서버 시작을 요구하지 않는다. `analysis.ps1`도 저장 분석 키를 직접 조회하고 브라우저를 열지 않는다. 반환 `dashboard_url`은 `null`, 세션 재개는 `reopen_tool`을 사용한다. 대시보드 제작·아침 수집·신호 변경·사용자 자료 기반 전체 사용 흐름 검증은 별도 재개 범위다.
+>
+> 지식 원문은 `knowledge_source`로 텍스트/출처를 조회하고, PDF·이미지 등 원파일이 필요하면 `knowledge_source_export`로 SHA 검증 원본을 고정 로컬 캐시에 내보낸다. 과거 요약은 `knowledge_summary_history`의 revision 목록과 `knowledge_summary_read`의 정확한 버전/본문 페이지로 조회한다. 모든 도구는 기존 DB를 유지하며 과거 근거를 현재 채택으로 바꾸지 않는다.
+
 > 2026-10-04 후속: 아래 내용은 10/2 기반 연결의 당시 기록이다. 스킬 미연결 상태와 후속 범위는 [정성분석 스킬 연결](history/qualitative-skill-link-2026-10-04.md)로 대체됐다. 기존 작도·보유·권한 경계는 유지한다.
 
 사용자 요청의 연결 기반만 구현했다. 정성분석 스킬/방법론/자동 리포트 생성, 주문·미체결 조회, 위험 기준 변경, 가격 알림, 공개 저장소 변경·푸시는 포함하지 않는다.

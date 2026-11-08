@@ -1,7 +1,7 @@
 """Read-only STDIO MCP fallback when an already-open chat has an old tool catalog.
 
 Prints transient results to the caller, never to a news file/cache. Uses the same
-analysis_mcp.py server registered in Codex, not a parallel Telegram data path.
+session_mcp.py server registered in Codex, not a parallel Telegram data path.
 """
 import argparse
 import asyncio
@@ -27,7 +27,7 @@ async def call(op,args):
         await asyncio.to_thread(ensure_health, build_opener(ProxyHandler({})))
     except (OSError, ValueError):
         pass  # The MCP tool returns the normal unavailable/identity error.
-    params=StdioServerParameters(command=sys.executable,args=['-B','-X','utf8',str(ROOT/'scripts/analysis_mcp.py')],cwd=str(ROOT))
+    params=StdioServerParameters(command=sys.executable,args=['-B','-X','utf8',str(ROOT/'scripts/session_mcp.py')],cwd=str(ROOT))
     async with stdio_client(params) as (read,write):
         async with ClientSession(read,write) as session:
             await session.initialize()

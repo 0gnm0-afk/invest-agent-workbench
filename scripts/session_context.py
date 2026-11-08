@@ -64,7 +64,15 @@ def saved_context(stock_key, *, root=ROOT, offset=0, limit=30):
     root = Path(root)
     db = root / 'runtime/chart-workspaces.sqlite3'
     result = {'stock_key': stock_key, 'mode': 'saved_only', 'observed_at': datetime.now(timezone.utc).isoformat(),
-              'authority': 'historical_evidence_not_current_confirmation', 'errors': []}
+              'authority': 'historical_evidence_not_current_confirmation', 'errors': [],
+              'history_navigation': {
+                  'scope': 'recent_context_not_complete_history',
+                  'limits': {'cases': 100, 'plan_decisions': 100, 'monitors': 100, 'signals': 30},
+                  'all_cases': {'tool': 'analysis_list', 'arguments': {'stock_key': stock_key}},
+                  'all_monitors': {'tool': 'analysis_monitors', 'arguments': {'stock_key': stock_key}},
+                  'case_history': {'tool': 'analysis_history', 'required_argument': 'analysis_key',
+                                   'source': 'all_cases.cases[].id'},
+              }}
     try:
         cases = _payloads(db, 'analysis_cases', "WHERE stock_key=? AND coalesce(json_extract(payload,'$.test_record'),0)=0", (stock_key,), 100)
         result['cases'] = cases

@@ -223,6 +223,148 @@ class KnowledgeTests(unittest.TestCase):
                     break
             self.assertEqual(''.join(chunks), body)
 
+    def test_original_export_preserves_bytes_mime_names_and_deduplicates(self):
+        raw = b'%PDF-1.4\nexact original binary\x00\xff\n'
+        original = self.root / '산업 보고서.pdf'
+        original.write_bytes(raw)
+        source = self.store.ingest('Report', file_path=str(original), source_uri='https://example.invalid/report', as_of='2026-01-01', stock_keys=['US:AAA'])
+        original.unlink()
+        before = self.path.read_bytes()
+        exported = self.store.export_source(source['id'])
+        self.assertEqual(Path(exported['path']).read_bytes(), raw)
+        self.assertEqual(Path(exported['path']).parent, self.path.parent / '01.원본내보내기')
+        self.assertEqual(exported['original_name'], '산업 보고서.pdf')
+        self.assertEqual(exported['mime_type'], 'application/pdf')
+        self.assertEqual(exported['mime_basis'], 'original_filename_extension')
+        self.assertEqual(exported['source']['source_uri'], 'https://example.invalid/report')
+        self.assertEqual(exported['source']['as_of'], '2026-01-01')
+        self.assertTrue(exported['verified'])
+        self.assertFalse(exported['database_modified'])
+        self.assertEqual(exported['sha256'], hashlib.sha256(raw).hexdigest())
+        again = KnowledgeStore(self.path).export_source(source['id'])
+        self.assertTrue(again['idempotent'])
+        self.assertEqual(again['path'], exported['path'])
+        self.assertEqual(self.path.read_bytes(), before)
+        renamed = self.root / 'different-name.pdf'
+        renamed.write_bytes(raw)
+        other = self.store.ingest('Renamed report', file_path=str(renamed))
+        third = self.store.export_source(other['id'])
+        self.assertEqual(third['path'], exported['path'])
+        self.assertEqual(third['original_name'], 'different-name.pdf')
+        self.assertEqual(len(list(Path(exported['path']).parent.iterdir())), 1)
+
+    def test_text_export_conflict_never_overwrites_and_partial_write_cleans_up(self):
+        raw = '  원래 발언\n확인할 질문.\n'.encode('utf-8')
+        source = self.source(raw.decode('utf-8'))
+        directory = self.path.parent / '01.원본내보내기'
+        directory.mkdir()
+        target = directory / (source['sha256'] + '.txt')
+        conflicting = b'keep user-owned data'
+        target.write_bytes(conflicting)
+        with self.assertRaisesRegex(ValueError, 'export_conflict'):
+            self.store.export_source(source['id'])
+        self.assertEqual(target.read_bytes(), conflicting)
+        target.unlink()
+        with patch('knowledge.store.os.fsync', side_effect=OSError('fixture disk failure')):
+            with self.assertRaisesRegex(OSError, 'fixture disk failure'):
+                self.store.export_source(source['id'])
+        self.assertFalse(target.exists())
+        result = self.store.export_source(source['id'])
+        self.assertIsNone(result['original_name'])
+        self.assertEqual(result['mime_type'], 'text/plain')
+        self.assertEqual(Path(result['path']).read_bytes(), raw)
+
+    def test_export_rejects_linked_directory_and_target(self):
+        source = self.source()
+        outside = self.root / 'auth'
+        outside.mkdir()
+        directory = self.path.parent / '01.원본내보내기'
+        junction = False
+        try:
+            directory.symlink_to(outside, target_is_directory=True)
+        except OSError as error:
+            if os.name != 'nt':
+                self.skipTest('Host cannot create test symlink: ' + type(error).__name__)
+            # Windows junctions do not require the symlink privilege. Verify the
+            # real filesystem redirection guard on restricted Windows hosts too.
+            import _winapi
+            _winapi.CreateJunction(str(outside), str(directory))
+            junction = True
+        with self.assertRaisesRegex(ValueError, 'unsafe_export_directory'):
+            self.store.export_source(source['id'])
+        self.assertEqual(list(outside.iterdir()), [])
+        directory.rmdir() if junction else directory.unlink()
+        directory.mkdir()
+        private = outside / 'private.txt'
+        private.write_text('keep this file', encoding='utf-8')
+        target = directory / (source['sha256'] + '.txt')
+        if junction:
+            _winapi.CreateJunction(str(outside), str(target))
+        else:
+            target.symlink_to(private)
+        with self.assertRaisesRegex(ValueError, 'unsafe_export_target'):
+            self.store.export_source(source['id'])
+        self.assertEqual(private.read_text(encoding='utf-8'), 'keep this file')
+
+    def test_export_refuses_sensitive_storage_directory(self):
+        private_store = KnowledgeStore(self.root / 'secrets' / 'records.sqlite3')
+        source = private_store.ingest('Fixture only', text='Original fixture text.')
+        before = private_store.path.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'unsafe_export_directory'):
+            private_store.export_source(source['id'])
+        self.assertEqual(private_store.path.read_bytes(), before)
+        self.assertFalse((private_store.path.parent / '01.원본내보내기').exists())
+
+    def test_corrupt_original_fails_before_export_file_is_created(self):
+        source = self.source()
+        with closing(sqlite3.connect(self.path)) as db:
+            db.execute('DROP TRIGGER knowledge_blobs_update_guard')
+            db.execute('UPDATE knowledge_blobs SET raw=?', (b'fixture corruption',))
+            db.commit()
+        with self.assertRaisesRegex(ValueError, 'source_integrity_failure'):
+            self.store.export_source(source['id'])
+        self.assertFalse((self.path.parent / '01.원본내보내기').exists())
+
+    def test_summary_history_and_exact_version_paging_leave_database_unchanged(self):
+        note = self.note()
+        body = '첫 판단은 아직 가설이다.\n' * 400
+        first = self.store.save_summary('US:AAA', body, 0, note_ids=[note['id']], next_step='근거 확인')
+        self.store.save_summary('US:AAA', 'New provisional synthesis.', 1, note_ids=[note['id']])
+        self.store.save_summary('US:AAA', 'Latest synthesis remains AI-authored.', 2, note_ids=[note['id']])
+        before = self.path.read_bytes()
+        pages = [self.store.summary_history('US:AAA', offset=i, limit=1) for i in range(3)]
+        self.assertEqual([p['items'][0]['revision'] for p in pages], [3, 2, 1])
+        self.assertEqual([p['next_offset'] for p in pages], [1, 2, None])
+        self.assertEqual(pages[0]['total'], 3)
+        old = pages[-1]['items'][0]
+        self.assertEqual(len(old['body_preview']), 2000)
+        self.assertTrue(old['body_truncated'])
+        self.assertEqual(old['note_count'], 1)
+        reconstructed, offset = '', 0
+        while True:
+            packet = self.store.summary_read('US:AAA', 1, offset=offset, limit=1000)
+            reconstructed += packet['body']
+            self.assertEqual(packet['revision'], 1)
+            self.assertEqual(packet['created_at'], first['created_at'])
+            self.assertEqual(packet['sha256'], old['sha256'])
+            self.assertEqual(packet['note_ids'], [note['id']])
+            self.assertEqual(packet['mode'], 'exact_saved_revision')
+            offset = packet['body_page']['next_offset']
+            if offset is None:
+                break
+        self.assertEqual(reconstructed, body)
+        self.assertEqual(self.path.read_bytes(), before)
+        with self.assertRaisesRegex(ValueError, 'summary_not_found'):
+            self.store.summary_read('US:AAA', 99)
+        with self.assertRaisesRegex(ValueError, 'invalid_revision'):
+            self.store.summary_read('US:AAA', True)
+
+    def test_summary_history_reads_missing_db_without_creating_it(self):
+        self.assertEqual(self.store.summary_history('US:AAA')['total'], 0)
+        with self.assertRaisesRegex(ValueError, 'summary_not_found'):
+            self.store.summary_read('US:AAA', 1)
+        self.assertFalse(self.path.exists())
+
     def test_mcp_persistence_across_processes_without_dashboard(self):
         with patch.dict(os.environ, {'PYDANTIC_DISABLE_PLUGINS': '__all__'}):
             from mcp import ClientSession, StdioServerParameters
@@ -280,6 +422,18 @@ class KnowledgeTests(unittest.TestCase):
                     original = await call(client, 'knowledge_source', {'source_id': source['id']})
                     self.assertEqual(original['sha256'], hashlib.sha256(raw).hexdigest())
                     self.assertTrue(original['verified'])
+                    history = await call(client, 'knowledge_summary_history', {'subject': 'US:AAA', 'limit': 1})
+                    self.assertEqual(history['items'][0]['revision'], 1)
+                    previous = await call(client, 'knowledge_summary_read', {'subject': 'US:AAA', 'revision': 1, 'limit': 10})
+                    self.assertEqual(previous['body'], 'Fixture qu')
+                    self.assertEqual(previous['body_page']['next_offset'], 10)
+                    exported = await call(client, 'knowledge_source_export', {'source_id': source['id']})
+                    self.assertEqual(Path(exported['path']).read_bytes(), raw)
+                    self.assertEqual(exported['original_name'], document.name)
+                    self.assertEqual(exported['mime_type'], 'application/pdf')
+                    self.assertTrue(exported['verified'])
+                    repeat_export = await call(client, 'knowledge_source_export', {'source_id': source['id']})
+                    self.assertTrue(repeat_export['idempotent'])
 
         asyncio.run(second_session())
         document.unlink()

@@ -53,6 +53,16 @@ class SavedCycleContextTests(unittest.TestCase):
         self.assertTrue(current['verified'])
         self.assertEqual(before, self.path.read_bytes())
 
+    def test_recent_context_exposes_full_history_tools(self):
+        result = saved_context('US:SYNTH', root=self.root)
+        navigation = result['history_navigation']
+        self.assertEqual(navigation['scope'], 'recent_context_not_complete_history')
+        self.assertEqual(navigation['all_cases'], {
+            'tool': 'analysis_list', 'arguments': {'stock_key': 'US:SYNTH'}})
+        self.assertEqual(navigation['case_history']['tool'], 'analysis_history')
+        self.assertEqual(navigation['limits']['signals'], 30)
+        self.assertFalse(self.path.exists())
+
     def test_corrupt_immutable_draft_is_explicit_failure_not_head_only_success(self):
         store = TradeCycleStore(self.path)
         store.save_draft('US:SYNTH', plan())

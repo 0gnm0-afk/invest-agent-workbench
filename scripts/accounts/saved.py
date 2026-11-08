@@ -3,7 +3,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 
 
-def merge_saved(store, nh_view):
+def merge_saved(store, nh_view, *, persist=True):
     view = deepcopy(nh_view)
     receipt, attempt = store.latest('meritz'), store.latest_attempt('meritz')
     if not receipt and not attempt:
@@ -59,5 +59,8 @@ def merge_saved(store, nh_view):
     merged = {'schema_version':1, 'provider':'NH PLUG / Meritz', 'source':'broker_export',
               'as_of':view['as_of'], 'accounts':view.get('accounts', []), 'accounts_complete':view['accounts_complete'],
               'base_currency':'KRW', 'fx_to_base':fx, 'max_age_hours':'24', 'limitations':view.get('limitations', [])}
-    view['snapshot_ref'] = store.save(merged)
+    if persist:
+        view['snapshot_ref'] = store.save(merged)
+    else:
+        view.pop('snapshot_ref', None)
     return view
