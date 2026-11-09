@@ -1,5 +1,7 @@
 # 분석 MCP · 대시보드 연결 MVP
 
+> 2026-11-09 저장 재사용: 현재 `analysis_read`는 ID·captured_at을 제외한 전체 입력이 같으면 기존 snapshot_id·최초 저장 시각을 반환한다. 변경된 입력만 새 snapshot으로 고정한다. 기존 ID·본문·해시와 과거 조회는 유지하며 아래 과거 기록의 매 조회 신규 생성 설명을 대체한다.
+
 > 2026-11-08 ver3 실행 경로 갱신: 아래 본문은 당시 대시보드 연결 MVP의 기록이다. 현재 `scripts/session_mcp.py`의 분석 도구는 `analysis.bridge → analysis.direct → 기존 서비스/DB`로 직접 호출하며 HTTP 연결이나 dashboard 서버 시작을 요구하지 않는다. `analysis.ps1`도 저장 분석 키를 직접 조회하고 브라우저를 열지 않는다. 반환 `dashboard_url`은 `null`, 세션 재개는 `reopen_tool`을 사용한다. 대시보드 제작·아침 수집·신호 변경·사용자 자료 기반 전체 사용 흐름 검증은 별도 재개 범위다.
 >
 > 지식 원문은 `knowledge_source`로 텍스트/출처를 조회하고, PDF·이미지 등 원파일이 필요하면 `knowledge_source_export`로 SHA 검증 원본을 고정 로컬 캐시에 내보낸다. 과거 요약은 `knowledge_summary_history`의 revision 목록과 `knowledge_summary_read`의 정확한 버전/본문 페이지로 조회한다. 모든 도구는 기존 DB를 유지하며 과거 근거를 현재 채택으로 바꾸지 않는다.

@@ -371,7 +371,7 @@ def main():
     server = ThreadingHTTPServer(('127.0.0.1', args.port), handler_for(data, stocks, ROOT / 'dashboard', token, views=views, daily_status=controller.status if controller else None, daily_retry=controller.retry if controller else None, analysis_capabilities=capabilities, offline=args.offline, exclusion_review=exclusion_review, launch=controller.launch if controller else None))
     server.daemon_threads = True
     del data, stocks  # Only the replaceable view owns the large price graph.
-    ready = {'url': 'http://127.0.0.1:' + str(server.server_port), 'output': str(output), 'token': token}
+    ready = {'url': 'http://127.0.0.1:' + str(server.server_port), 'output': str(output) if output else None, 'token': token}
     if args.ready_file:
         args.ready_file.write_text(json.dumps(ready), encoding='utf-8')
     from atomic_io import atomic_write

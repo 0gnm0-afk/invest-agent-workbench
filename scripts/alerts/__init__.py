@@ -116,7 +116,6 @@ def saved_inputs(root, market_run, keys=None, *, account_failed=False):
     """Verified saved run + saved accounts + selected series; never refresh providers."""
     from accounts import account_view
     from atomic_io import load_bom as load, checked_saved as checked
-    import tempfile
     root = Path(root)
     run_dir = Path(market_run).resolve()
     if not run_dir.is_relative_to((root/'runtime').resolve()):
@@ -124,9 +123,8 @@ def saved_inputs(root, market_run, keys=None, *, account_failed=False):
     manifest = load(run_dir/'manifest.json')
     run = checked(run_dir/'run.json', manifest['output_hashes'].get('run.json'))
     source = Path(run['market_source'])/'snapshot.json'
-    with tempfile.TemporaryDirectory(prefix='alert-account-', dir=root/'runtime') as folder:
-        bundle = account_view(load(root/'config.json'), Path(folder), refresh=False,
-                              saved_dashboard_root=root/'runtime/dashboard')
+    bundle = account_view(load(root/'config.json'), root/'runtime/dashboard/view', refresh=False,
+                          saved_dashboard_root=root/'runtime/dashboard', persist_receipt=False)
     if account_failed:
         bundle = {**bundle, 'query_state': 'failed'}
     if keys is None:

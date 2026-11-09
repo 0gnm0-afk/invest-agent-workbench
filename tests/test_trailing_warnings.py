@@ -202,6 +202,8 @@ class SavedAlertInputs(unittest.TestCase):
                 bundle, stocks = saved_inputs(root,run)
                 self.assertIs(bundle,accounts); self.assertEqual(set(stocks),{'US:A'})
                 self.assertFalse(read.call_args.kwargs['refresh'])
+                self.assertFalse(read.call_args.kwargs['persist_receipt'])
+                self.assertFalse((root/'runtime/dashboard').exists())
                 bundle, stocks = saved_inputs(root,run,{'US:B'},account_failed=True)
                 self.assertEqual(set(stocks),{'US:B'}); self.assertEqual(bundle['query_state'],'failed')
                 self.assertEqual(accounts['query_state'],'received')

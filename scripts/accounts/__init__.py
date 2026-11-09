@@ -49,7 +49,7 @@ def collect_balances(reader, pages, error_type):
             'query_basis': {m: inputs for m, (_, inputs) in nh_requests('<account>').items()}}
 
 
-def _nh_account_view(config, output, refresh=True, saved_dashboard_root=None, request_id=None):
+def _nh_account_view(config, output, refresh=True, saved_dashboard_root=None, request_id=None, *, persist_receipt=True):
     store = AccountStore(Path(saved_dashboard_root or output.parent).parent/'accounts.sqlite3')
     mother = Path(config['mother'])
     # Reuse account-only adapters without shadowing current market/chart modules.
@@ -85,7 +85,7 @@ def _nh_account_view(config, output, refresh=True, saved_dashboard_root=None, re
                 previous, previous_meta, previous_score = candidate, meta, score
         except (OSError, ValueError, KeyError):
             continue
-    result = {'attempted_at': now(), 'query_state': 'not_requested', 'reason': None,
+    result = {'attempted_at': now() if refresh else None, 'query_state': 'not_requested', 'reason': None,
               'accounts': [], 'as_of': None, 'source_mode': 'missing', 'risk': None,
               'endpoint_calls': [], 'limitations': [], 'snapshot_sha256': None}
     snapshot = None
@@ -130,7 +130,7 @@ def _nh_account_view(config, output, refresh=True, saved_dashboard_root=None, re
             snapshot = None
             result.update(query_state='failed', reason=str(exc) if isinstance(exc, NHError) else type(exc).__name__)
             store.complete('nh',lease['request_id'],lease['lease'],metadata=result)
-    if observation_ref:
+    if observation_ref and persist_receipt:
         write(output / 'account-observation.private.json', {'account_store_ref':observation_ref})
     if snapshot is None and previous:
         snapshot = previous
@@ -148,13 +148,13 @@ def _nh_account_view(config, output, refresh=True, saved_dashboard_root=None, re
     return result
 
 
-def account_view(config, output, refresh=True, saved_dashboard_root=None, request_id=None):
+def account_view(config, output, refresh=True, saved_dashboard_root=None, request_id=None, *, persist_receipt=True):
     """Daily owns the NH refresh; other providers are read from their saved receipts."""
     from accounts.saved import merge_saved
-    nh = _nh_account_view(config, output, refresh, saved_dashboard_root, request_id)
+    nh = _nh_account_view(config, output, refresh, saved_dashboard_root, request_id, persist_receipt=persist_receipt)
     store = AccountStore(Path(saved_dashboard_root or output.parent).parent/'accounts.sqlite3')
     result = merge_saved(store, nh)
-    if result.get('snapshot_ref'):
+    if result.get('snapshot_ref') and persist_receipt:
         path = output/'account-snapshot.private.json'
         write(path, {'account_store_ref':result['snapshot_ref']})
         result['snapshot_sha256'] = sha(path)
@@ -174,8 +174,7 @@ def publish_receipt(output, accounts, *, view=None, **metadata):
 
 def refresh_account_snapshot(root=ROOT, request_id=None):
     """One balance-only refresh; immutable receipt is reusable by scheduled and UI paths."""
-    output = root/'runtime/dashboard'/('account-'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'))
-    output.mkdir(parents=True)
-    accounts = account_view(load(root/'config.json'), output, refresh=True, request_id=request_id)
-    publish_receipt(output, accounts)
+    # Query result, raw response and merged payload already live in accounts.sqlite3.
+    output = root/'runtime/dashboard/view'  # Legacy lookup anchor, never created.
+    accounts = account_view(load(root/'config.json'), output, refresh=True, request_id=request_id, persist_receipt=False)
     return accounts

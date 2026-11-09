@@ -74,6 +74,31 @@ class AccountStoreTests(unittest.TestCase):
         self.assertFalse(old.exists())
         self.assertFalse(intermediate.exists())
 
+    def test_memory_views_and_repeated_refresh_request_do_not_create_receipt_files(self):
+        from accounts import refresh_account_snapshot
+        calls = []
+        def read(path, inputs, continuation=None):
+            calls.append(path)
+            return ({'Output_0':[{'acct_type':'01','acct_no':'SYNTH_ACCOUNT_254aa248acb4'}], 'rsp_msg':'OK'} if path=='/n2/acctinfo'
+                    else {'Output_0':{},'Output_1':[],'rsp_msg':'OK'}), {'cts_flag':'N'}
+        (self.root/'config.json').write_text(json.dumps({'mother':str(self.root/'mother')}))
+        with patch.dict(sys.modules, {'nh_api':SimpleNamespace(read=read,NHError=RuntimeError)}):
+            first = refresh_account_snapshot(self.root, request_id='one-observation')
+            with closing(self.store.connect()) as db:
+                counts = [db.execute('SELECT count(*) FROM '+t).fetchone()[0] for t in ('account_objects','account_queries')]
+            files = sorted(str(p.relative_to(self.root)) for p in self.root.rglob('*') if p.is_file())
+            for _ in range(20):
+                again = refresh_account_snapshot(self.root, request_id='one-observation')
+                saved = account_view({'mother':str(self.root/'mother')}, self.root/'runtime/dashboard/view',
+                                     refresh=False, persist_receipt=False)
+                self.assertEqual(saved['accounts'], first['accounts'])
+                self.assertEqual(again['as_of'], first['as_of'])
+            with closing(self.store.connect()) as db:
+                self.assertEqual([db.execute('SELECT count(*) FROM '+t).fetchone()[0] for t in ('account_objects','account_queries')], counts)
+            self.assertEqual(sorted(str(p.relative_to(self.root)) for p in self.root.rglob('*') if p.is_file()), files)
+        self.assertEqual(len(calls), 3)
+        self.assertFalse((self.root/'runtime/dashboard').exists())
+
     def test_api_adapter_and_saved_dashboard_write_references(self):
         calls=[]
         def read(path, inputs, continuation=None):

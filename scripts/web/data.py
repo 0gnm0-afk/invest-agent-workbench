@@ -164,15 +164,18 @@ class StockSearch:
 def build(root=ROOT, refresh=True, *, market_run=None, daily_update=None, persist_view=False):
     config = load(root / 'config.json')
     sys.path.insert(0, str(Path(config['engine']) / 'src'))
-    output = root / 'runtime/dashboard' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
-    output.mkdir(parents=True)
+    # Ordinary views are memory projections of the existing DBs. Only an
+    # explicitly requested export owns a new immutable output directory.
+    output = root / 'runtime/dashboard' / (datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ') if persist_view else 'view')
+    if persist_view:
+        output.mkdir(parents=True)
     try:
         market = saved_market(root, market_run)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         market = {'state': 'unavailable', 'errors': ['saved_market_unavailable:' + type(exc).__name__],
                   'entries': [], 'sectors': [], 'stocks': {}, 'session_dates': {}, 'quality': {},
                   'candidate_count': None, 'entry_candidate_count': None}
-    accounts = account_view(config, output, refresh)
+    accounts = account_view(config, output, refresh, persist_receipt=persist_view)
     if (daily_update or {}).get('account_state') == 'failed':
         accounts.update(query_state='failed', reason='daily_account_refresh_failed')
     stocks = market.pop('stocks')
@@ -188,8 +191,7 @@ def build(root=ROOT, refresh=True, *, market_run=None, daily_update=None, persis
     data = {'generated_at': now(), 'market': market, 'accounts': accounts, 'trailing': warnings}
     if daily_update is not None:
         data['daily_update'] = daily_update
-    # Account/source receipts are immutable; full view export remains opt-in.
-    publish_receipt(output, accounts, view=data if persist_view else None,
-                    market_network_calls=0, view_storage='export' if persist_view else 'memory',
-                    market_run=str(market_run) if market_run else None)
-    return output, data, stocks
+    if persist_view:
+        publish_receipt(output, accounts, view=data, market_network_calls=0, view_storage='export',
+                        market_run=str(market_run) if market_run else None)
+    return output if persist_view else None, data, stocks

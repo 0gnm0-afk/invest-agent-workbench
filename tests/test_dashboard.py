@@ -68,18 +68,16 @@ class StoredData(unittest.TestCase):
         with patch.object(Path, 'read_bytes', side_effect=MemoryError('whole_file_buffer')):
             self.assertEqual(d.sha(self.source), expected)
 
-    def test_build_persists_account_receipt_without_large_view_copies(self):
+    def test_build_reuses_db_without_receipt_files_and_exports_only_on_request(self):
         d.write(self.root/'config.json', {'engine': str(self.root/'engine')})
         accounts = dict(query_state='saved', holdings=[])
         with patch.object(d, 'account_view', return_value=accounts), patch('alerts.trailing.TrailingStore.update', side_effect=AssertionError('saved view must not rewrite warnings')):
-            output, data, stocks = d.build(self.root, refresh=False, market_run=self.run)
+            for _ in range(20):
+                output, data, stocks = d.build(self.root, refresh=False, market_run=self.run)
         self.assertIn('US:ABC', stocks)
         self.assertEqual(data['accounts'], accounts)
-        self.assertFalse((output/'dashboard.json').exists())
-        self.assertFalse((output/'stocks.json').exists())
-        receipt = d.load(output/'manifest.json')
-        self.assertEqual(receipt['files']['account-view.json'], d.sha(output/'account-view.json'))
-        self.assertEqual(receipt['view_storage'], 'memory')
+        self.assertIsNone(output)
+        self.assertFalse((self.root/'runtime/dashboard').exists())
         with patch.object(d, 'account_view', return_value=accounts), patch('alerts.trailing.TrailingStore.update', return_value={}):
             exported, _, _ = d.build(self.root, refresh=False, market_run=self.run, persist_view=True)
         self.assertTrue((exported/'dashboard.json').exists())

@@ -74,8 +74,11 @@ class AnalysisService:
         with closing(self.store.connect()) as db:
             row=db.execute('SELECT payload,sha256 FROM analysis_snapshots WHERE id=? AND case_id=?',(snapshot_id,case_id)).fetchone()
         if not row: raise ValueError('snapshot_not_found_for_analysis')
-        value=json.loads(row[0])
-        if digest(value)!=row[1]: raise ValueError('snapshot_integrity_failed')
+        return self.decode_snapshot(*row)
+
+    def decode_snapshot(self, payload, expected):
+        value=json.loads(payload)
+        if digest(value)!=expected: raise ValueError('snapshot_integrity_failed')
         if 'chart_price_ref' in value:
             from market.prices import PriceStore
             from market.history.chart import aggregate
@@ -163,9 +166,8 @@ class AnalysisService:
         from accounts.store import AccountStore
         account_store=AccountStore(self.root/'runtime/accounts.sqlite3')
         stored['accounts']={'account_store_ref':account_store.save(value['accounts'])}
-        with closing(self.store.connect()) as db,db:
-            db.execute('INSERT INTO analysis_snapshots VALUES (?,?,?,?)',(value['id'],case['id'],packed(stored),digest(stored)))
-        return value
+        from .snapshots import save_once
+        return save_once(self.store.connect, value, stored, self.decode_snapshot)
 
     def snapshot_summaries(self, case_id):
         with closing(self.store.connect()) as db:

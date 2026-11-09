@@ -35,6 +35,51 @@ class AnalysisTests(unittest.TestCase):
         self.s=AnalysisService(self.store,self.hist,self.fin,lambda:({'accounts':self.accounts,'market':{'state':'partial'}},{'US:NVDA':self.stock}),self.root)
         self.detail=self.s.dispatch('create',{'stock_key':'US:NVDA','test_record':True},'http://127.0.0.1:1234');self.case=self.detail['case'];self.cid=self.case['id'];self.sid=self.detail['snapshots'][0]['id']
     def tearDown(self): self.tmp.cleanup()
+    def test_same_inputs_reuse_id_after_restart_and_concurrent_capture(self):
+        def counts():
+            with closing(self.store.connect()) as db:
+                return db.execute('SELECT count(*),sum(length(payload)) FROM analysis_snapshots').fetchone()
+        before = counts()
+        original = self.s.snapshot(self.cid, self.sid)
+        for _ in range(20):
+            self.assertEqual(self.s.capture(self.case), original)
+        reopened = AnalysisService(self.store, self.hist, self.fin, self.s.view, self.root, initialize=False)
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            values = list(pool.map(lambda _: reopened.capture(self.case), range(12)))
+        self.assertTrue(all(v == original for v in values))
+        self.assertEqual(counts(), before)
+        self.assertEqual(len(self.s.snapshot_summaries(self.cid)), 1)
+        self.bars[-1]['close'] = 106
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            changed = list(pool.map(lambda _: reopened.capture(self.case), range(12)))
+        self.assertEqual(len({v['id'] for v in changed}), 1)
+        self.assertNotEqual(changed[0]['id'], self.sid)
+        self.assertEqual(counts()[0], before[0]+1)
+        self.assertEqual(self.s.snapshot(self.cid, self.sid), original)
+
+    def test_legacy_rows_indexed_once_without_changing_hashes_or_ids(self):
+        with closing(self.store.connect()) as db, db:
+            db.execute('DELETE FROM analysis_snapshot_inputs')
+            before = db.execute('SELECT * FROM analysis_snapshots').fetchall()
+        self.assertEqual(self.s.capture(self.case)['id'], self.sid)
+        with closing(self.store.connect()) as db:
+            self.assertEqual(db.execute('SELECT * FROM analysis_snapshots').fetchall(), before)
+            self.assertEqual(db.execute('SELECT count(*) FROM analysis_snapshot_inputs').fetchone()[0], 1)
+
+    def test_changes_outside_component_hashes_create_new_snapshot_and_reversion_reuses(self):
+        original = self.s.snapshot(self.cid, self.sid)
+        self.stock['isin_code'] = 'US-SYNTHETIC'
+        identity = self.s.capture(self.case)
+        self.assertNotEqual(identity['id'], self.sid)
+        changed_case = copy.deepcopy(self.case)
+        changed_case['context']['range'] = '12'
+        view = self.s.capture(changed_case)
+        self.assertNotEqual(view['id'], identity['id'])
+        del self.stock['isin_code']
+        self.assertEqual(self.s.capture(self.case), original)
+        self.assertEqual(self.s.snapshot(self.cid, identity['id']), identity)
+
     def test_empty_drawings_reconnect(self):
         v=self.s.snapshot(self.cid,self.sid);self.assertEqual(v['workspace']['state']['drawings'],[])
         reopened=AnalysisService(self.store,self.hist,self.fin,self.s.view,self.root)

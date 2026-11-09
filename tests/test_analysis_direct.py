@@ -79,6 +79,11 @@ class DirectAnalysisTests(unittest.TestCase):
         self.assertEqual(value['total'], 4)
         self.assertEqual(value['next_offset'], 2)
         self.assertNotEqual(value['snapshot_id'], self.sid)
+        with patch('analysis.direct.LazyFinancials.__getattr__', lambda _, name: getattr(self.fin, name)):
+            for _ in range(5):
+                again = self.invoke('read', {'analysis_key': self.cid, 'section': 'chart', 'limit': 2})
+                self.assertEqual(again['snapshot_id'], value['snapshot_id'])
+                self.assertEqual(again['captured_at'], value['captured_at'])
         self.assertEqual(before, self.prices.path.read_bytes())
         replay = self.invoke('read', {'analysis_key': self.cid, 'snapshot_id': value['snapshot_id'], 'section': 'chart', 'offset': 2})
         self.assertEqual([b['date'] for b in replay['chart']['bars']], ['2026-09-22', '2026-09-23'])

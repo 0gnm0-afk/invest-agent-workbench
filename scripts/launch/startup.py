@@ -3,6 +3,8 @@ from web import ASSETS, STARTUP_ASSETS
 import argparse
 import json
 import os
+import queue
+import subprocess
 import time
 from launch.instance import acquire, release, existing, publish, reuse
 import re
@@ -16,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from workbench_paths import ROOT
+from atomic_io import atomic_write
 
 
 def loading_page(assets):
@@ -94,29 +97,81 @@ def run_dashboard(arguments, ready_file, state):
         state['failed'] = True
     except BaseException:
         state['failed'] = True
-        # Persist even when pythonw inherited unusable standard handles.
-        with ready_file.with_suffix('.err.log').open('a', encoding='utf-8', buffering=1) as log:
-            traceback.print_exc(file=log)
-        traceback.print_exc()
+        write_error(ready_file.with_suffix('.err.log'))
         if sys.stderr is not None:
+            traceback.print_exc()
             sys.stderr.flush()
 
 
+def write_error(path):
+    # Latest diagnostic, bounded even when the same failed launch is retried.
+    atomic_write(path, traceback.format_exc()[-65536:])
+
+
+def announce(args, value):
+    if args.ready_file:
+        atomic_write(args.ready_file, json.dumps(value))
+    if sys.stdout is not None:
+        try:
+            print(json.dumps(value), flush=True)
+        except (BrokenPipeError, OSError):
+            pass  # A desktop caller closing its pipe must not kill the server.
+    if getattr(args, 'detached', False):
+        # The desktop process reads one handshake. Workers never retain its pipe.
+        stream = sys.stdout
+        sys.stdout = open(os.devnull, 'w', encoding='utf-8')
+        if stream is not None:
+            try:
+                stream.close()
+            except OSError:
+                pass
+
+
+def desktop(remaining, open_browser=False):
+    """Short-lived client; detached server readiness travels over a pipe, not files."""
+    python = Path(sys.executable)
+    if python.name.lower() == 'pythonw.exe':
+        python = python.with_name('python.exe')
+    command = [str(python), '-B', '-u', str(ROOT/'scripts/dashboard_startup.py'), '--detached', *remaining]
+    if open_browser:
+        command.append('--open-browser')
+    process = subprocess.Popen(command, cwd=ROOT, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    result = queue.Queue()
+    def receive():
+        try:
+            result.put(process.stdout.readline())
+        except OSError:
+            result.put(b'')
+        finally:
+            process.stdout.close()
+    threading.Thread(target=receive, daemon=True).start()
+    try:
+        line = result.get(timeout=245)
+    except queue.Empty:
+        raise ValueError('dashboard_start_timeout: inspect runtime/dashboard/server.json') from None
+    if not line:
+        raise ValueError('dashboard_start_failed: inspect runtime/dashboard/launch-error.log')
+    value = json.loads(line)
+    if value.get('error'):
+        raise ValueError(value['error'])
+    print(json.dumps(value), flush=True)
+    return value
+
+
 def serve(args, remaining):
-    if args.ready_file is None:
-        args.ready_file = ROOT / 'runtime/dashboard' / ('ready-' + uuid.uuid4().hex + '.json')
-    args.ready_file.parent.mkdir(parents=True, exist_ok=True)
-    inner_ready = args.ready_file.with_name(args.ready_file.stem + '-data.json')
-    # Reject a reused receipt instead of ever redirecting to an old server.
-    if args.ready_file.exists() or inner_ready.exists():
-        raise ValueError('ready-file must be new for each launch')
+    folder = ROOT / 'runtime/dashboard'
+    folder.mkdir(parents=True, exist_ok=True)
+    inner_ready = folder / 'data-ready.json'
+    # Only the owner of the OS lease can replace the previous server receipt.
+    inner_ready.unlink(missing_ok=True)
     state = {'instance_id': uuid.uuid4().hex}
     server = ThreadingHTTPServer(('127.0.0.1', 0), handler_for(ROOT / 'dashboard', state, inner_ready))
     server.daemon_threads = True
     ready = {'url': 'http://127.0.0.1:' + str(server.server_port), 'output': None, 'state': 'loading', 'pid': os.getpid()}
     publish(ROOT, {**ready, 'instance_id': state['instance_id'], 'offline': '--offline' in remaining})
-    args.ready_file.write_text(json.dumps(ready), encoding='utf-8')
-    print(json.dumps(ready), flush=True)
+    announce(args, ready)
     threading.Thread(target=run_dashboard, args=(remaining, inner_ready, state), daemon=True).start()
     if args.open_browser:
         threading.Thread(target=webbrowser.open, args=(ready['url'],), daemon=True).start()
@@ -142,23 +197,21 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--ready-file', type=Path)
     parser.add_argument('--open-browser', action='store_true')
+    parser.add_argument('--desktop', action='store_true')
+    parser.add_argument('--detached', action='store_true', help=argparse.SUPPRESS)
     args, remaining = parser.parse_known_args()
-    # Reuse and lease errors happen before serve(); pythonw needs diagnostics here too.
-    detached_errors = sys.stderr is None
-    if sys.stdout is None or detached_errors:
-        diagnostic = args.ready_file or ROOT / 'runtime/dashboard' / ('launch-' + uuid.uuid4().hex + '.json')
-        diagnostic.parent.mkdir(parents=True, exist_ok=True)
-        if sys.stdout is None:
-            sys.stdout = diagnostic.with_suffix('.log').open('a', encoding='utf-8', buffering=1)
-        if detached_errors:
-            sys.stderr = diagnostic.with_suffix('.err.log').open('a', encoding='utf-8', buffering=1)
+    if args.desktop:
+        if args.ready_file or args.detached:
+            parser.error('--desktop cannot be combined with --ready-file or --detached')
+        return desktop(remaining, args.open_browser)
     try:
         return launch(parser, args, remaining)
     except Exception:
-        if not detached_errors:
+        write_error(ROOT / 'runtime/dashboard/launch-error.log')
+        if args.detached:
+            announce(args, {'error': 'dashboard_start_failed: inspect runtime/dashboard/launch-error.log'})
+        if sys.stderr is not None and not args.detached:
             raise
-        traceback.print_exc()
-        sys.stderr.flush()
         raise SystemExit(1) from None
 
 
@@ -184,11 +237,7 @@ def launch(parser, args, remaining):
             time.sleep(.25)
             continue
         result = reuse(ROOT, value, remaining)
-        if args.ready_file:
-            args.ready_file.parent.mkdir(parents=True, exist_ok=True)
-            args.ready_file.write_text(json.dumps(result), encoding='utf-8')
-        if sys.stdout is not None:
-            print(json.dumps(result), flush=True)
+        announce(args, result)
         if args.open_browser:
             webbrowser.open(result['url'])
         return

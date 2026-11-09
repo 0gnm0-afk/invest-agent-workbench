@@ -41,6 +41,71 @@ class Instance(unittest.TestCase):
         self.assertTrue(json.loads(receipt.read_text())['reused'])
         self.assertEqual(json.loads(receipt.read_text())['url'], value['url'])
 
+    def test_repeated_reopen_needs_no_ready_files_or_logs(self):
+        with patch.object(startup, 'ROOT', self.root), patch.object(startup, 'acquire', return_value=None), patch.object(startup, 'existing', return_value=self.value), patch.object(startup, 'serve') as build, patch.object(sys, 'argv', ['startup', '--saved-accounts']), patch.object(sys, 'stdout', None):
+            for _ in range(30):
+                startup.main()
+        build.assert_not_called()
+        self.assertFalse(list(self.root.rglob('*')))
+
+    def test_repeated_failure_overwrites_bounded_diagnostic(self):
+        with patch.object(startup, 'ROOT', self.root), patch.object(startup, 'acquire', side_effect=OSError('x'*100000)), patch.object(sys, 'argv', ['startup']), patch.object(sys, 'stdout', None), patch.object(sys, 'stderr', None):
+            for _ in range(10):
+                with self.assertRaises(SystemExit):
+                    startup.main()
+        files = [p for p in self.root.rglob('*') if p.is_file()]
+        self.assertEqual(len(files), 1)
+        self.assertLessEqual(files[0].stat().st_size, 65536)
+
+    def test_desktop_pipe_reuses_real_detached_server_and_restart_keeps_file_count(self):
+        import subprocess
+        from contextlib import redirect_stdout
+        import io
+        scripts = Path(__file__).resolve().parents[1]/'scripts'
+        (self.root/'scripts').mkdir()
+        code = ("import sys, json\nfrom pathlib import Path\n"
+                + "sys.path.insert(0, " + repr(str(scripts)) + ")\n"
+                + "import launch.startup as s\ns.ROOT = Path(" + repr(str(self.root)) + ")\n"
+                + "def builder(arguments, ready, state):\n"
+                + "    value=json.loads((s.ROOT/'runtime/dashboard/server.json').read_text())\n"
+                + "    s.atomic_write(ready, json.dumps({'url': value['url']}))\n"
+                + "s.run_dashboard=builder\ns.main()\n")
+        (self.root/'scripts/dashboard_startup.py').write_text(code, encoding='utf-8')
+        processes = []
+        real_popen = subprocess.Popen
+        def popen(*args, **kwargs):
+            child = real_popen(*args, **kwargs)
+            processes.append(child)
+            return child
+        def files():
+            return sorted(str(p.relative_to(self.root)) for p in (self.root/'runtime').rglob('*') if p.is_file())
+        try:
+            with patch.object(startup, 'ROOT', self.root), patch.object(subprocess, 'Popen', side_effect=popen), redirect_stdout(io.StringIO()):
+                first = startup.desktop(['--offline', '--saved-accounts'])
+                for _ in range(8):
+                    result = startup.desktop(['--offline', '--saved-accounts'])
+                    self.assertTrue(result['reused'])
+                    self.assertEqual(result['pid'], first['pid'])
+                    processes[-1].wait(timeout=5)
+                before = files()
+                self.assertEqual(len(before), 3)  # lease, current shell, current data readiness
+                processes[0].terminate()
+                processes[0].wait(timeout=5)
+                second = startup.desktop(['--offline', '--saved-accounts'])
+                self.assertNotEqual(second['pid'], first['pid'])
+                # Ensure the second builder has published before comparing files.
+                for _ in range(100):
+                    if (self.root/'runtime/dashboard/data-ready.json').exists():
+                        break
+                    import time
+                    time.sleep(.01)
+                self.assertEqual(files(), before)
+        finally:
+            for child in processes:
+                if child.poll() is None:
+                    child.terminate()
+                child.wait(timeout=5)
+
     def test_daily_flags_reach_existing_server_but_saved_reopen_is_read_only(self):
         with patch.object(instance, 'request', return_value={'workspace':str(self.root),'token':'local'}) as request:
             instance.reuse(self.root, self.value, ['--saved-accounts'])
@@ -59,7 +124,7 @@ class Instance(unittest.TestCase):
                     if stream is not None:
                         stream.close()
         build.assert_not_called()
-        logs = list((self.root/'runtime/dashboard').glob('launch-*.err.log'))
+        logs = list((self.root/'runtime/dashboard').glob('launch-error.log'))
         self.assertEqual(len(logs), 1)
         diagnostic = logs[0].read_text(encoding='utf-8')
         self.assertIn('Traceback (most recent call last)', diagnostic)
@@ -79,7 +144,7 @@ class Instance(unittest.TestCase):
                         stream.close()
         build.assert_not_called()
         self.assertFalse(receipt.exists())
-        self.assertIn('OSError: lease_fixture_failure', receipt.with_suffix('.err.log').read_text(encoding='utf-8'))
+        self.assertIn('OSError: lease_fixture_failure', (self.root/'runtime/dashboard/launch-error.log').read_text(encoding='utf-8'))
 
     def test_slow_loading_probe_waits_for_existing_owner(self):
         loading = dict(self.value,state='loading',dashboard_url=None)
