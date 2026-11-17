@@ -4,7 +4,7 @@ import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from launch.daily import attempt_id
+from web.data import market_update
 
 
 class RetryConflict(ValueError):
@@ -15,7 +15,9 @@ class DashboardDaily:
     def __init__(self, daily, views, builder, base_run, *, saved_accounts=True, now=None, observe_only=False, baseline_record=None):
         self.daily, self.views, self.builder = daily, views, builder
         self.display_run = base_run
-        self.saved_accounts = saved_accounts
+        # Kept as a caller compatibility argument only. The web never requests
+        # account collection, including when reopening a running server.
+        self.daily.accounts = False
         self.observe_only = observe_only
         self.clock = now or (lambda: datetime.now(timezone.utc))
         self.lock = threading.RLock()
@@ -35,9 +37,9 @@ class DashboardDaily:
     def signature(record):
         return tuple(record.get(k) for k in ('attempt_id', 'started_at', 'state', 'finished_at', 'display_run'))
 
-    def _start(self, *, initial=False, retry=False, expected=None, refresh_accounts=False):
+    def _start(self, *, initial=False, retry=False, expected=None):
         self.active, self.ready, self.view_error = True, False, None
-        self.thread = threading.Thread(target=self._prepare, kwargs=dict(initial=initial, retry=retry, expected=expected, refresh_accounts=refresh_accounts), daemon=True)
+        self.thread = threading.Thread(target=self._prepare, kwargs=dict(initial=initial, retry=retry, expected=expected), daemon=True)
         self.thread.start()
 
     def start(self, retry=False):
@@ -45,19 +47,16 @@ class DashboardDaily:
             if not self.active:
                 self._start(initial=not self.observe_only, retry=retry)
 
-    def launch(self, *, daily_refresh, retry_market, saved_accounts):
+    def launch(self, *, daily_refresh, retry_market, saved_accounts=True):
         """Reopening an existing server uses the same once-per-day gate."""
         with self.lock:
             if daily_refresh and not self.active:
                 self.observe_only = False
-                self.saved_accounts = saved_accounts
-                self.daily.accounts = not saved_accounts
+                self.daily.accounts = False
                 self._start(initial=True, retry=retry_market)
-            elif not daily_refresh and not saved_accounts and not self.active:
-                self._start(refresh_accounts=True)
             return self.status()
 
-    def _prepare(self, *, initial=False, retry=False, expected=None, refresh_accounts=False):
+    def _prepare(self, *, initial=False, retry=False, expected=None):
         try:
             now = self.clock()
             record = (self.daily.once(now, retry=retry, expected_attempt=expected) if initial or retry
@@ -72,18 +71,13 @@ class DashboardDaily:
                 self.record = record
             # A later saved recalculation is valid display evidence, not a successful retry.
             display = self.daily.display_run() or record.get('display_run')
-            update = self.daily.public({**record, 'display_run': display})
-            account_stale = self.views['view'][0].get('accounts', {}).get('stale', False)
-            refresh = refresh_accounts or (not record.get('account_attempted') and initial and not retry and not self.saved_accounts and (not record.get('reused') or account_stale))
-            account_changed = record.get('account_attempted') and not record.get('reused') and self.signature(record) != self.seen
-            if display == self.display_run and not refresh and not account_changed:
-                data, stocks = self.views['view']
-                next_view = ({**data, 'daily_update': update}, stocks)
-            else:
-                _, data, stocks = self.builder(refresh=refresh, market_run=display, daily_update=update)
-                if data.get('market', {}).get('state') == 'unavailable':
-                    raise ValueError('dashboard_preparation_failed')
-                next_view = (data, stocks)
+            update = market_update(self.daily.public({**record, 'display_run': display}))
+            # Re-read saved observations on explicit opening/publication, even
+            # if the market run did not change. This does not collect accounts.
+            _, data, stocks = self.builder(refresh=False, market_run=display, daily_update=update)
+            if data.get('market', {}).get('state') == 'unavailable':
+                raise ValueError('dashboard_preparation_failed')
+            next_view = (data, stocks)
             with self.lock:
                 self.views['view'] = next_view
                 self.revision += 1
@@ -111,11 +105,11 @@ class DashboardDaily:
             record = persisted if self.active and persisted else self.record
             if record.get('state') == 'saved':
                 record = {**record, 'run': self.display_run}
-            value = self.daily.public({**record, 'display_run': self.display_run})
+            value = market_update(self.daily.public({**record, 'display_run': self.display_run}))
             if self.view_error:
                 value.update(state='failed', error=self.view_error)
             value.update(enabled=True, observe_only=self.observe_only, view_ready=self.ready, revision=self.revision, reused=self.record.get('reused', False),
-                         retry_available=not self.observe_only and self.ready and value['day'] == self.day() and (value['state'] in ('failed', 'interrupted', 'partial') or value.get('account_state') in ('failed','partial')))
+                         retry_available=not self.observe_only and self.ready and value['day'] == self.day() and value['state'] in ('failed', 'interrupted', 'partial'))
             return value
 
     def retry(self, expected_attempt):

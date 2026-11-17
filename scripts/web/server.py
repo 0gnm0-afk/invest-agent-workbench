@@ -1,5 +1,5 @@
 """Private loopback dashboard; serves only curated views and bundled assets."""
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import argparse
 import json
 from web import ASSETS
@@ -9,16 +9,15 @@ import sqlite3
 from http.cookies import SimpleCookie
 from launch.daily import DailyLaunch, plan_for
 from web.refresh import DashboardDaily, RetryConflict
-from market.exclusions import ExclusionReview, ReviewConflict
-from invest_agent.trading.store import instance_lock
 import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from web.data import ROOT, build, StockSearch
+from web.data import ROOT, build, StockSearch, home_view, market_update
 from market.history.chart import HistoryStore, timeframe
 from financials.store import FinancialStore, selected_stock
 from drawings.store import WorkspaceStore, Conflict, moving_averages
+from drawings.l1_trendlines import l1_trendlines
 from analysis.service import AnalysisService
 from market.history.price_events import build as price_events
 from analysis import Forbidden
@@ -27,8 +26,11 @@ from runtime_paths import local_runtime_path
 
 
 def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None, daily_status=None, daily_retry=None,
-                analysis_capabilities=None, analysis_dependencies=None, risk_options=None, offline=False, exclusion_review=None, launch=None):
+                analysis_capabilities=None, analysis_dependencies=None, risk_options=None, offline=False, exclusion_review=None, launch=None, root=None):
     views = views if views is not None else {'view': (data, stocks)}
+    data_root = Path(root) if root is not None else (Path(workspace_path).parent if workspace_path else ROOT)
+    if root is None and workspace_path and data_root.name == 'runtime':
+        data_root = data_root.parent
     store = WorkspaceStore(workspace_path or ROOT / "runtime/chart-workspaces.sqlite3")
     histories = (analysis_dependencies['histories'] if analysis_dependencies else
                  HistoryStore((Path(workspace_path).parent if workspace_path else ROOT / 'runtime') / 'chart-history.sqlite3'))
@@ -56,7 +58,6 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
             self.send_header('Referrer-Policy', 'no-referrer')
             if cookie:
                 self.send_header('Set-Cookie', 'workbench_confirm_' + str(self.server.server_port) + '=' + browser_session + '; HttpOnly; SameSite=Strict; Path=/api/analysis-rpc')
-                self.send_header('Set-Cookie', 'workbench_scope_confirm=' + browser_session + '; HttpOnly; SameSite=Strict; Path=/api/market-exclusions')
             self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
             self.end_headers()
             self.wfile.write(body)
@@ -76,20 +77,29 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
             if path == '/health':
                 return self.send(json.dumps({'app': 'invest-workbench', 'token': token, 'analysis_protocol': 1, 'price_events_protocol': 1, 'pivot_rule': 'weekly-swing-2', 'collaboration_protocol': 1, 'scenario_monitor_protocol': 1, 'report_reading_protocol': 2, 'offline': offline, 'workspace': str(ROOT)}).encode(), cookie=self.headers.get('Sec-Fetch-Site') == 'same-origin')
             if path == '/api/daily-update':
-                return self.send(json.dumps(daily_status() if daily_status else {'enabled':False}, ensure_ascii=False).encode('utf-8'))
-            if path == '/api/market-exclusions':
-                if query:
-                    return self.send(b'{"error":"invalid_exclusion_request"}', status=400)
-                try:
-                    result = exclusion_review.status() if exclusion_review else {'issues':[], 'job':None, 'busy':False, 'view_ready':False}
-                    return self.send(json.dumps(result, ensure_ascii=False, allow_nan=False).encode('utf-8'))
-                except (ValueError, KeyError, TypeError, OSError):
-                    return self.send(b'{"error":"exclusion_review_unavailable"}', status=503)
+                return self.send(json.dumps(market_update(daily_status()) if daily_status else {'enabled':False}, ensure_ascii=False).encode('utf-8'))
             if path == '/api/trailing':
                 target = (Path(workspace_path).parent if workspace_path else ROOT/'runtime')/'trailing-warnings.sqlite3'
                 return self.send(json.dumps(TrailingStore(target).public(datetime.now(timezone.utc), plan_for(datetime.now(timezone.utc))['targets']), ensure_ascii=False, allow_nan=False).encode('utf-8'))
             if path == '/api/home':
-                return self.send(json.dumps(data, ensure_ascii=False, allow_nan=False).encode('utf-8'))
+                return self.send(json.dumps(home_view(data), ensure_ascii=False, allow_nan=False).encode('utf-8'))
+            if path.startswith('/api/l1-trendlines/'):
+                key = urllib.parse.unquote(path[len('/api/l1-trendlines/'):])
+                if key not in stocks:
+                    return self.send(b'{"error":"unknown_stock"}', status=404)
+                try:
+                    if set(query) - {'start', 'end', 'timeframe'} or any(len(v) != 1 for v in query.values()):
+                        raise ValueError('invalid_l1_request')
+                    start, end = (query.get(field, [None])[0] for field in ('start', 'end'))
+                    for value in (start, end):
+                        if value is not None and (len(value) != 10 or date.fromisoformat(value).isoformat() != value):
+                            raise ValueError('invalid_l1_window')
+                    if start is not None and end is not None and start > end:
+                        raise ValueError('invalid_l1_window')
+                except (ValueError, TypeError):
+                    return self.send(b'{"error":"invalid_l1_request"}', status=400)
+                result = l1_trendlines(key, root=data_root, start=start, end=end, timeframe=frame)
+                return self.send(json.dumps(result, ensure_ascii=False, allow_nan=False).encode('utf-8'))
             if path == '/api/stock-search':
                 if set(query) - {'q'} or len(query.get('q', [''])) != 1:
                     return self.send(b'{"error":"invalid_search_query"}', status=400)
@@ -145,7 +155,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                 value = stocks.get(key)
                 if value is None:
                     value = {'state': 'unavailable', 'reason': 'saved_price_series_missing', 'bars': []}
-                elif exclusion_review:
+                else:
                     from market.scope import match
                     excluded = match(value)
                     if excluded:
@@ -171,7 +181,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                 frame = timeframe(query.get('timeframe', ['1d'])[0])
             except ValueError:
                 return self.send(b'{"error":"invalid_timeframe"}', status=400)
-            if path not in ('/api/launch', '/api/daily-update', '/api/market-exclusions') and not path.startswith(('/api/chart-state/', '/api/chart-history/', '/api/financials/', '/api/analysis-rpc')):
+            if path not in ('/api/launch', '/api/daily-update', '/api/analysis-rpc') and not path.startswith(('/api/chart-state/', '/api/chart-history/', '/api/financials/')):
                 return self.send(b'{"error":"read_only"}', status=405)
             expected = '127.0.0.1:' + str(self.server.server_port)
             supplied_token = self.headers.get('X-Workbench-Token', '')
@@ -182,7 +192,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
             if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
                 return self.send(b'{"error":"json_required"}', status=415)
             key = urllib.parse.unquote(path.rsplit('/', 1)[-1])
-            if path not in ('/api/launch', '/api/analysis-rpc', '/api/daily-update', '/api/market-exclusions') and key not in stocks:
+            if path not in ('/api/launch', '/api/analysis-rpc', '/api/daily-update') and key not in stocks:
                 return self.send(b'{"error":"unknown_stock"}', status=404)
             try:
                 length = int(self.headers.get('Content-Length', '0'))
@@ -203,47 +213,23 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                         return self.send(b'{"error":"invalid_launch_request"}', status=400)
                     if offline or not launch:
                         return self.send(b'{"error":"launch_unavailable"}', status=409)
-                    return self.send(json.dumps(launch(**body), ensure_ascii=False).encode('utf-8'), status=202)
+                    # Old launchers can send saved_accounts=False; it never
+                    # grants an account query through the dashboard.
+                    return self.send(json.dumps(market_update(launch(**{**body, 'saved_accounts': True})), ensure_ascii=False).encode('utf-8'), status=202)
                 if path == '/api/daily-update':
                     if (query or not isinstance(body, dict) or set(body) != {'retry', 'attempt_id'}
                             or body['retry'] is not True or not isinstance(body['attempt_id'], str)
                             or not 0 < len(body['attempt_id']) <= 128):
                         return self.send(b'{"error":"invalid_daily_request"}', status=400)
+                    if offline:
+                        return self.send(b'{"error":"offline_collection_disabled"}', status=403)
                     if not daily_retry:
                         return self.send(b'{"error":"daily_retry_unavailable"}', status=503)
                     try:
                         result = daily_retry(body['attempt_id'])
                     except RetryConflict:
                         return self.send(b'{"error":"daily_attempt_changed"}', status=409)
-                    return self.send(json.dumps(result, ensure_ascii=False, allow_nan=False).encode('utf-8'), status=202)
-                if path == '/api/market-exclusions':
-                    cookies = SimpleCookie(self.headers.get('Cookie', ''))
-                    candidate = cookies.get('workbench_scope_confirm')
-                    if self.headers.get('Sec-Fetch-Site') != 'same-origin' or not candidate or not secrets.compare_digest(candidate.value, browser_session):
-                        return self.send(b'{"error":"local_browser_confirmation_required"}', status=403)
-                    if query or not isinstance(body,dict):
-                        return self.send(b'{"error":"invalid_exclusion_request"}', status=400)
-                    action = body.get('action')
-                    if not (action == 'approve' and set(body)=={'action','review_id','issue_ids'} or action == 'retry' and set(body)=={'action','job_id'} and isinstance(body['job_id'],str) or action == 'recollect' and set(body)=={'action','review_id','issue_ids','provider'} and body['provider'] in ('toss','nh')):
-                        return self.send(b'{"error":"invalid_exclusion_request"}', status=400)
-                    if offline and action in ('recollect', 'retry'):
-                        return self.send(b'{"error":"offline_collection_disabled"}', status=403)
-                    if not exclusion_review:
-                        return self.send(b'{"error":"exclusion_review_unavailable"}', status=503)
-                    try:
-                        if action=='recollect':
-                            result=exclusion_review.recollect(body['review_id'],body['issue_ids'],body['provider'])
-                        else:
-                            result = exclusion_review.approve(body['review_id'],body['issue_ids']) if action=='approve' else exclusion_review.retry(body['job_id'])
-                    except ReviewConflict:
-                        return self.send(b'{"error":"exclusion_review_changed"}', status=409)
-                    except ValueError as exc:
-                        known = {'invalid_exclusion_request','invalid_exclusion_selection','empty_market_scope'}
-                        code = str(exc) if str(exc) in known else 'exclusion_review_unavailable'
-                        return self.send(json.dumps({'error':code}).encode(), status=400 if code in known else 503)
-                    except (OSError, KeyError, TypeError):
-                        return self.send(b'{"error":"exclusion_review_unavailable"}', status=503)
-                    return self.send(json.dumps(result, ensure_ascii=False, allow_nan=False).encode('utf-8'), status=202)
+                    return self.send(json.dumps(market_update(result), ensure_ascii=False, allow_nan=False).encode('utf-8'), status=202)
                 if path == '/api/analysis-rpc':
                     if not isinstance(body, dict) or set(body) != {'op', 'arguments'}:
                         raise ValueError('invalid_analysis_request')
@@ -318,8 +304,8 @@ def main():
         parser.error('--retry-market requires --daily-refresh')
     if args.build_only and args.daily_refresh:
         parser.error('--build-only is saved-market only')
-    daily = DailyLaunch(ROOT, accounts=not args.saved_accounts) if args.daily_refresh else None
-    base_run = (daily or DailyLaunch(ROOT)).display_run()
+    daily = DailyLaunch(ROOT, accounts=False) if args.daily_refresh else None
+    base_run = (daily or DailyLaunch(ROOT, accounts=False)).display_run()
     saved_notice = None
     if not daily and base_run:
         try:
@@ -328,42 +314,22 @@ def main():
                                 display_stale=local_runtime_path(latest['output'], root=ROOT).resolve() != Path(base_run).resolve())
         except (OSError, ValueError, KeyError, TypeError):
             saved_notice = dict(saved_only=True, latest_state='unavailable', display_stale=True)
-    # Capture the observed receipt before reading accounts. Only a subsequent
+    # Capture the observed market receipt. Only a subsequent
     # receipt may require another full build of the same market.
-    baseline_record = (DailyLaunch(ROOT).read(plan_for(datetime.now(timezone.utc))['day'])
+    baseline_record = (DailyLaunch(ROOT, accounts=False).read(plan_for(datetime.now(timezone.utc))['day'])
                        if not daily and not args.offline else None)
     output, data, stocks = build(refresh=False, market_run=base_run, daily_update=saved_notice, persist_view=args.build_only)
     views = {'view':(data, stocks)}
-    controller = (DashboardDaily(daily or DailyLaunch(ROOT), views, build, base_run,
-                                 saved_accounts=args.saved_accounts, observe_only=not daily, baseline_record=baseline_record)
+    controller = (DashboardDaily(daily or DailyLaunch(ROOT, accounts=False), views, build, base_run,
+                                 saved_accounts=True, observe_only=not daily, baseline_record=baseline_record)
                   if not args.offline else None)
     if args.build_only:
         print(json.dumps({'output': str(output), 'market_state': data['market']['state'],
                           'account_query_state': data['accounts']['query_state']}))
         return
-    def publish_exclusion(result_run):
-        # Do not replace a newer daily result with an older approval result.
-        with instance_lock(ROOT/'runtime/dashboard-daily'),instance_lock(ROOT/'runtime'):
-            if controller and controller.active:
-                raise ReviewConflict('daily_view_preparation_running')
-            gate = daily or DailyLaunch(ROOT)
-            result_run = gate.display_run() or str(result_run)
-            run = gate.checked_run(result_run)
-            update = daily.public({**controller.record,'display_run':str(result_run)}) if daily else dict(saved_only=True,latest_state=run['state'],display_stale=False)
-            _, next_data, next_stocks = build(refresh=False,market_run=str(result_run),daily_update=update)
-            if next_data.get('market',{}).get('state')=='unavailable':
-                raise ValueError('dashboard_preparation_failed')
-            if controller:
-                with controller.lock:
-                    views['view'] = (next_data,next_stocks)
-                    controller.display_run = str(result_run)
-                    controller.revision += 1
-            else:
-                views['view'] = (next_data,next_stocks)
-    exclusion_review = ExclusionReview(ROOT,publish=publish_exclusion)
     token = secrets.token_urlsafe(18)
     capabilities = {role: secrets.token_urlsafe(32) for role in ('collaboration','risk')}
-    server = ThreadingHTTPServer(('127.0.0.1', args.port), handler_for(data, stocks, ROOT / 'dashboard', token, views=views, daily_status=controller.status if controller else None, daily_retry=controller.retry if controller else None, analysis_capabilities=capabilities, offline=args.offline, exclusion_review=exclusion_review, launch=controller.launch if controller else None))
+    server = ThreadingHTTPServer(('127.0.0.1', args.port), handler_for(data, stocks, ROOT / 'dashboard', token, views=views, daily_status=controller.status if controller else None, daily_retry=controller.retry if controller else None, analysis_capabilities=capabilities, offline=args.offline, launch=controller.launch if controller else None))
     server.daemon_threads = True
     del data, stocks  # Only the replaceable view owns the large price graph.
     ready = {'url': 'http://127.0.0.1:' + str(server.server_port), 'output': str(output) if output else None, 'token': token}
@@ -373,7 +339,7 @@ def main():
     atomic_write(ROOT / 'runtime/dashboard/analysis-endpoint.json', json.dumps({**ready, 'analysis_capabilities':capabilities}, ensure_ascii=False, sort_keys=True, allow_nan=False))
     print(json.dumps(ready), flush=True)
     if args.open_browser:
-        webbrowser.open(ready['url'])
+        webbrowser.open(ready['url'] + '/#search')
     if controller:
         controller.start(retry=args.retry_market)
     server.serve_forever()

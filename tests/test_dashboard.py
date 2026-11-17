@@ -261,12 +261,14 @@ class BrokerBoundary(unittest.TestCase):
 class HttpBoundary(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.temp = tempfile.TemporaryDirectory()
+        cls.temp = tempfile.TemporaryDirectory(prefix='m10-http-')
         cls.addClassCleanup(cls.temp.cleanup)
         dependencies = {'histories': SimpleNamespace(saved=SimpleNamespace(stocks={}, markets={})),
                         'financials': SimpleNamespace()}
-        cls.server = ThreadingHTTPServer(('127.0.0.1', 0), handler_for({'market': {'state':'failed'}}, {}, Path(__file__).resolve().parents[1]/'dashboard', 'test',
-            Path(cls.temp.name)/'chart.sqlite3', analysis_dependencies=dependencies))
+        # HTTPServer normally reverse-resolves its bound IP. A fixture needs no DNS.
+        with patch('socket.getfqdn', return_value='127.0.0.1'):
+            cls.server = ThreadingHTTPServer(('127.0.0.1', 0), handler_for({'market': {'state':'failed'}}, {}, Path(__file__).resolve().parents[1]/'dashboard', 'test',
+                Path(cls.temp.name)/'chart.sqlite3', analysis_dependencies=dependencies))
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True);cls.thread.start()
 
     @classmethod
@@ -284,17 +286,14 @@ class HttpBoundary(unittest.TestCase):
         assets=Path(__file__).resolve().parents[1]/'dashboard'
         groups={'shell': ('app.js','style.css','format.js','tooltips.js'),
                 'charts': ('charts.js','stock-chart.js','chart-events.js'),
-                'accounts': ('risk-workbench.js','risk-workbench.css'),
                 'financials': ('financial-focus.js','financial-focus.css','financials.css'),
-                'market': ('market-exclusions.js','market-exclusions.css'),
                 'alerts': ('trailing.js',),
-                'cycles': ('trade-cycle.js','trade-cycle.css'),
-                'drawings': ('drawing-tools.js','chart-workspace.js','chart-tools.css'),
+                'drawings': ('drawing-tools.js','chart-workspace.js','chart-tools.css','l1-trendlines.js'),
                 'analysis': ('analysis.js','collaboration.js','report-reader.js','report-reader.css'),
                 'scenarios': ('scenario-preview.js','scenario-monitor.js','scenario-monitor.css')}
         for folder,names in groups.items():
             for name in names:
-                status,body=self.get('/'+name)
+                status,body=self.get(('/assets/' if name == 'l1-trendlines.js' else '/')+name)
                 self.assertEqual(status,200,name)
                 self.assertEqual(body,(assets/folder/name).read_bytes())
 

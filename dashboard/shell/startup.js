@@ -1,8 +1,12 @@
 (() => {
   const message = document.getElementById('startup-message');
   let failures = 0;
+  function targetHash() {
+    const hash = location.hash || '#search';
+    return /^#(?:search|risk)(?:\?|$)/.test(hash) || /^#stock\/[^/]+\/[^/]+(?:\?|$)/.test(hash) ? hash : '#search';
+  }
   function selectedRoute() {
-    const route = (location.hash.slice(1) || 'home').split('/')[0];
+    const route = targetHash().slice(1).split(/[/?]/)[0];
     document.querySelectorAll('[data-nav]').forEach(link => link.classList.toggle('active', link.dataset.nav === route));
   }
   async function poll() {
@@ -14,7 +18,7 @@
       if (status.state === 'ready') {
         const target = new URL(status.url);
         if (target.protocol !== 'http:' || target.hostname !== '127.0.0.1' || !target.port || target.username || target.password) throw new Error('invalid_target');
-        target.hash = location.hash || '#home';
+        target.hash = targetHash();
         location.replace(target.href);
         return;
       }

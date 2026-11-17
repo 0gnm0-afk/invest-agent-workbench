@@ -156,6 +156,31 @@ window.WorkbenchWorkspace = (() => {
     function beforeUnload(e){if(dirty()){e.preventDefault();e.returnValue='';}}
     chart=WorkbenchCharts.create(plot,[{type:'candles',currency,label:currency,options:{title:''},data:bars.map(b=>({time:b.date,open:b.open,high:b.high,low:b.low,close:b.close})).concat(drawingBars.slice(bars.length).map(b=>({time:b.date})))},{type:'volume',label:'거래량',pane:1,data:bars.map(b=>({time:b.date,...(b.volume==null?{}:{value:b.volume}),color:b.close>=b.open?'#298463':'#994653'})),options:{title:'',priceFormat:{type:'volume'}}}],{height:plot.clientHeight,headroom:.12,lastBars:126,onReady:(c,refs)=>{price=refs[0].ref;}});
     chart.timeScale().setVisibleLogicalRange({from:Math.max(0,bars.length-126),to:bars.length-1+25});
+    const l1Legend=document.createElement('p');l1Legend.className='chart-caption l1-legend';
+    l1Legend.setAttribute('role','status');plot.parentElement.insertAdjacentElement('afterend',l1Legend);
+    const l1=WorkbenchL1Trendlines.attach({chart,lineSeries:LightweightCharts.LineSeries,
+      lineStyles:LightweightCharts.LineStyle,legend:l1Legend,delay:180,isCurrent:()=>!dead&&isCurrent(),
+      request:async input=>{
+        const query=new URLSearchParams({start:input.start,end:input.end,timeframe:input.timeframe});
+        const response=await fetch('/api/l1-trendlines/'+encodeURIComponent(input.stock_key)+'?'+query,
+          {method:'GET',cache:'no-store'});
+        if(!response.ok)throw Error('l1_read_failed');
+        return response.json();
+      }});
+    let l1Window='';
+    const windowDay=value=>typeof value==='string'?value:
+      `${value.year}-${String(value.month).padStart(2,'0')}-${String(value.day).padStart(2,'0')}`;
+    function updateL1() {
+      if(dead||!isCurrent())return;
+      const visible=chart.timeScale().getVisibleRange();
+      if(!visible)return;
+      const input={stock_key:market+':'+symbol,start:windowDay(visible.from),end:windowDay(visible.to),timeframe:frame};
+      const signature=JSON.stringify(input);
+      if(signature===l1Window)return;
+      // Set first: adding/removing reference series can itself notify the scale.
+      l1Window=signature;l1.update(input);
+    }
+    chart.timeScale().subscribeVisibleLogicalRangeChange(updateL1);updateL1();
     const detachPan=WorkbenchCharts.enableFreePan(plot,chart,price);
     const detachHoldings=window.WorkbenchTrailing?.attachStock({series:price,host:plot.parentElement,market,symbol,currency,isCurrent});
     const detachEvents=window.WorkbenchEvents?.attach({chart,series:price,plot,bars:drawingBars,frame,packet:stock.price_events});
@@ -189,7 +214,7 @@ window.WorkbenchWorkspace = (() => {
     if(missing)q('.drawing-hint').textContent=`현재 가격 기간 밖의 작도 ${missing}개는 보존하며 차트에 표시하지 않습니다. 목록에서 수정할 수 있습니다.`;
     let contextTimer;
     chart.timeScale().subscribeVisibleLogicalRangeChange(()=>{clearTimeout(contextTimer);contextTimer=setTimeout(()=>{if(!dead)window.dispatchEvent(new Event('workbench-context'));},500);});
-    active={canAutoRefresh:()=>!dirty()&&!saving&&!drawings.isEditing(),save,setProposals(value){proposals=value;},context(){return {timeframe:frame,price_scale:'linear',selected_drawing:selected,visible_range:chart.timeScale().getVisibleLogicalRange()};},visibleRange(value){chart.timeScale().setVisibleLogicalRange(value);},async reload(){if(dirty())throw Error('미저장 작도가 있어 다시 읽지 않았습니다.');const r=await fetch(url);if(!r.ok)throw Error('작도 다시 읽기 실패');const v=await r.json();state=v.state;revision=v.revision;lastSaved=JSON.stringify(state);history=[];future=[];selected=null;refresh();renderAverages();await loadAverages();status('채택 결과 저장본 복원됨');},destroy(){dead=true;clearTimeout(timer);clearTimeout(contextTimer);averageVersion++;detachHoldings?.();detachEvents?.();detachPan();drawings.destroy();smaLegend.remove();WorkbenchCharts.remove(chart);document.removeEventListener('keydown',keyboard);window.removeEventListener('beforeunload',beforeUnload);},range(value){price.priceScale().applyOptions({autoScale:true});let from=0;if(value!=='all'){const end=new Date(bars.at(-1).date+'T00:00:00Z');end.setUTCMonth(end.getUTCMonth()-Number(value));const start=end.toISOString().slice(0,10);from=bars.findIndex(b=>b.date>=start);if(from<0)from=bars.length-1;}chart.timeScale().setVisibleLogicalRange({from,to:bars.length-1+Math.min(60,Math.max(10,Math.round((bars.length-from)*.2)))});}};
+    active={canAutoRefresh:()=>!dirty()&&!saving&&!drawings.isEditing(),save,setProposals(value){proposals=value;},context(){return {timeframe:frame,price_scale:'linear',selected_drawing:selected,visible_range:chart.timeScale().getVisibleLogicalRange()};},visibleRange(value){chart.timeScale().setVisibleLogicalRange(value);},async reload(){if(dirty())throw Error('미저장 작도가 있어 다시 읽지 않았습니다.');const r=await fetch(url);if(!r.ok)throw Error('작도 다시 읽기 실패');const v=await r.json();state=v.state;revision=v.revision;lastSaved=JSON.stringify(state);history=[];future=[];selected=null;refresh();renderAverages();await loadAverages();status('채택 결과 저장본 복원됨');},destroy(){dead=true;clearTimeout(timer);clearTimeout(contextTimer);averageVersion++;chart.timeScale().unsubscribeVisibleLogicalRangeChange(updateL1);l1.dispose();l1Legend.remove();detachHoldings?.();detachEvents?.();detachPan();drawings.destroy();smaLegend.remove();WorkbenchCharts.remove(chart);document.removeEventListener('keydown',keyboard);window.removeEventListener('beforeunload',beforeUnload);},range(value){price.priceScale().applyOptions({autoScale:true});let from=0;if(value!=='all'){const end=new Date(bars.at(-1).date+'T00:00:00Z');end.setUTCMonth(end.getUTCMonth()-Number(value));const start=end.toISOString().slice(0,10);from=bars.findIndex(b=>b.date>=start);if(from<0)from=bars.length-1;}chart.timeScale().setVisibleLogicalRange({from,to:bars.length-1+Math.min(60,Math.max(10,Math.round((bars.length-from)*.2)))});}};
     return active;
   }
   return {mount,closeActive,current:()=>active};

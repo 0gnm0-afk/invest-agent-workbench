@@ -94,8 +94,11 @@ class SearchHttp(unittest.TestCase):
             'KR': SimpleNamespace(market='KR', listings={'005930.KS': {'listing_exchange': 'KOSPI'}})})
         self.history = SimpleNamespace(saved=saved)
         with patch('web.server.HistoryStore', return_value=self.history):
-            handler = handler_for(*self.views['view'], self.root, 'secret-token', self.root/'workspace.sqlite3', views=self.views)
-        self.server = ThreadingHTTPServer(('127.0.0.1', 0), handler)
+            handler = handler_for(*self.views['view'], self.root, 'secret-token', self.root/'workspace.sqlite3', views=self.views,
+                analysis_dependencies={'histories': self.history, 'financials': SimpleNamespace()})
+        # The fixture has a numeric loopback address; skip HTTPServer reverse DNS.
+        with patch('socket.getfqdn', return_value='127.0.0.1'):
+            self.server = ThreadingHTTPServer(('127.0.0.1', 0), handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
