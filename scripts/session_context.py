@@ -67,14 +67,10 @@ def saved_context(stock_key, *, root=ROOT, offset=0, limit=30):
     except (sqlite3.Error, ValueError, KeyError) as exc:
         result['errors'].append({'component': 'saved_analysis', 'error_type': type(exc).__name__})
     try:
-        market, symbol = stock_key.split(':', 1)
-        prices = root / 'runtime/ohlcv.sqlite3'
-        series = _read(prices, "SELECT id,metadata FROM price_series WHERE json_extract(metadata,'$.market')=? AND json_extract(metadata,'$.symbol')=?", (market, symbol))
-        result['prices'] = []
-        for s in series:
-            last = _read(prices, 'SELECT day,close,revision FROM prices WHERE series_id=? ORDER BY day DESC LIMIT 1', (s['id'],))
-            result['prices'].append({'metadata': json.loads(s['metadata']), 'last_completed_saved_bar': last[0] if last else None})
-    except (sqlite3.Error, ValueError) as exc:
+        # C2: prices are read only through the M03 saved-price service.
+        from market.prices import saved_price_context
+        result['prices'] = saved_price_context(stock_key, root=root)
+    except (sqlite3.Error, ValueError, KeyError, TypeError) as exc:
         result['errors'].append({'component': 'prices', 'error_type': type(exc).__name__})
     try:
         from signals.store import public
