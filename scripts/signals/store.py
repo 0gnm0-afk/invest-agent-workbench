@@ -133,12 +133,11 @@ def delivery_events(root, targets):
 def evaluate_saved(root, targets):
     """Read canonical prices only, evaluate explicit watches, never collect/send."""
     from signals.technical import evaluate
-    from market.prices import PriceStore, default_path
+    from market.prices import saved_bars
     import exchange_calendars as xcals
     from invest_agent.trading.market_provider import KR_CLOSURES
     store = SignalStore(root)
     watches = store.public()['watches']
-    prices = PriceStore(default_path(root))
     output = []
     for watch in watches:
         if not watch['enabled']:
@@ -147,14 +146,15 @@ def evaluate_saved(root, targets):
         market, symbol = key.split(':', 1)
         cutoff = targets.get(market)
         try:
-            sid = prices.find(dict(market=market, symbol=symbol))
-            if sid is None:
-                raise ValueError('price_identity_missing_or_ambiguous')
-            # 조 2b 전환 대상: M03 bars 읽기로 교체하고 cutoff/revision/hash를 보존한다.
-            with closing(prices.connect()) as db:
-                rows = db.execute('SELECT day,open,high,low,close,volume,revision FROM prices WHERE series_id=? AND day<=? ORDER BY day', (sid, cutoff)).fetchall()
-            bars = [dict(zip(('date', 'open', 'high', 'low', 'close', 'volume'), row[:6])) for row in rows]
-            if not bars:
+            try:
+                saved = saved_bars(dict(market=market, symbol=symbol), root=root, cutoff=cutoff)
+            except FileNotFoundError as exc:
+                # The former read-only SQLite connection exposed this failure type.
+                raise sqlite3.OperationalError('saved_price_database_missing') from exc
+            bars = saved['bars']
+            # The former day <= NULL query yielded no bars; None is not an
+            # instruction to evaluate every saved day when a target is missing.
+            if cutoff is None or not bars:
                 raise ValueError('price_history_missing')
             # Calendar verification covers the complete source range. Long
             # exchange holidays retain the research's separate warmup policy.
@@ -163,7 +163,7 @@ def evaluate_saved(root, targets):
             if market == 'KR':
                 sessions = [d for d in sessions if d not in KR_CLOSURES]
             evaluation = evaluate(bars, completed_asof=cutoff, expected_sessions=sessions, stock_key=key)
-            reference = dict(series_id=sid, revision=max(r[6] for r in rows),
+            reference = dict(series_id=saved['series_id'], revision=max(saved['revisions'].values()),
                              sha256=hashlib.sha256(packed(bars).encode()).hexdigest(),
                              first=bars[0]['date'], last=bars[-1]['date'])
             output.append(store.record(watch, evaluation, close=bars[-1]['close'], price_reference=reference))

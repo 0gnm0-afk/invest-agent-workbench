@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from session_context import saved_context
+from market.prices import PriceStore, saved_price_context
 
 
 class SavedContextTests(unittest.TestCase):
@@ -128,6 +129,63 @@ class SavedContextTests(unittest.TestCase):
             for component in ('saved_analysis', 'prices', 'technical_signals')])
         self.assertFalse(result['found'])
         self.assertEqual(before, {p: p.read_bytes() for p in before})
+
+    def test_price_service_matches_complete_schema_results_without_writes(self):
+        self.price_fixture()
+        series = [dict(market='US', symbol='SYNTH', basis='adjusted'),
+                  dict(market='US', symbol='SYNTH', basis='raw'),
+                  dict(market='US', symbol='OTHER', basis='raw')]
+        with closing(sqlite3.connect(self.prices)) as db, db:
+            for number, metadata in enumerate(series):
+                db.execute('INSERT INTO price_series VALUES (?,?)', (str(number), json.dumps(metadata)))
+            db.executemany('INSERT INTO prices VALUES (?,?,?,?)', [
+                ('0', '2026-01-01', 11, 1), ('0', '2026-01-02', 12, 3), ('2', '2026-01-03', 99, 1)])
+        before = self.fingerprint(self.prices)
+        original_connect = PriceStore.connect
+
+        def readonly(store, *, write=False):
+            self.assertFalse(write, 'C2 context attempted a price write')
+            return original_connect(store, write=False)
+
+        with patch.object(PriceStore, 'connect', readonly):
+            for key in ('US:SYNTH', 'US:OTHER', 'US:MISSING'):
+                with self.subTest(key=key):
+                    legacy = saved_context(key, root=self.root)
+                    self.assertEqual(saved_price_context(key, root=self.root), legacy['prices'])
+                    self.assertEqual(legacy['errors'], [])
+        self.assertEqual(before, self.fingerprint(self.prices))
+
+    def test_price_service_missing_bars_table_reports_error_without_partial_prices(self):
+        # After the 2b switch the context no longer publishes a partial [] when
+        # the bars table is missing; the error is recorded and prices is absent.
+        self.prices.parent.mkdir(parents=True)
+        with closing(sqlite3.connect(self.prices)) as db, db:
+            db.execute('CREATE TABLE price_series (id INTEGER PRIMARY KEY, metadata TEXT)')
+            db.execute('INSERT INTO price_series VALUES (?,?)',
+                       (1, json.dumps(dict(market='US', symbol='SYNTH'))))
+        before = self.fingerprint(self.prices)
+        legacy = saved_context('US:SYNTH', root=self.root)
+        self.assertNotIn('prices', legacy)
+        self.assertEqual(legacy['errors'], [{'component': 'prices', 'error_type': 'OperationalError'}])
+        self.assertFalse(legacy['found'])
+        with self.assertRaisesRegex(sqlite3.OperationalError, 'no such table: prices'):
+            saved_price_context('US:SYNTH', root=self.root)
+        self.assertEqual(before, self.fingerprint(self.prices))
+
+    def test_price_service_missing_series_table_keeps_prices_key_absent(self):
+        # Initializing prices=[] before C2 is not an equivalent workaround:
+        # errors while selecting series have historically omitted the key.
+        self.prices.parent.mkdir(parents=True)
+        with closing(sqlite3.connect(self.prices)) as db, db:
+            db.execute('CREATE TABLE original (value TEXT)')
+        before = self.fingerprint(self.prices)
+        legacy = saved_context('US:SYNTH', root=self.root)
+        self.assertNotIn('prices', legacy)
+        self.assertEqual(legacy['errors'], [{'component': 'prices', 'error_type': 'OperationalError'}])
+        self.assertFalse(legacy['found'])
+        with self.assertRaisesRegex(sqlite3.OperationalError, 'no such table: price_series'):
+            saved_price_context('US:SYNTH', root=self.root)
+        self.assertEqual(before, self.fingerprint(self.prices))
 
     def test_invalid_input_is_rejected_before_reading(self):
         with patch('session_context._read', side_effect=AssertionError('read attempted')):
