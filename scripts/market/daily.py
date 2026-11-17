@@ -22,6 +22,9 @@ from invest_agent.trading.store import instance_lock
 from market.collect import audit, run as collect
 from atomic_io import write_json
 import market.nh_fallback as nh_fallback
+from market.collection_receipts import ROLE as RECEIPT_ROLE, collection_receipt
+from invest_agent.trading.market_provider import completed_sessions
+from launch.daily import capped_sessions
 
 from workbench_paths import ROOT
 
@@ -30,10 +33,11 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def code_hashes(engine):
-    paths = list((ROOT/'scripts').rglob('*.py')) + list((ROOT/'scripts').rglob('*.json'))
+def code_hashes(engine, *, root=None):
+    root = Path(root or ROOT)
+    paths = list((root/'scripts').rglob('*.py')) + list((root/'scripts').rglob('*.json'))
     paths += list((engine/'src/invest_agent').rglob('*.py'))
-    paths += [ROOT/'daily.ps1', ROOT/'config.json']
+    paths += [root/'daily.ps1', root/'config.json']
     return {str(p.resolve()):artifact_io.sha(p) for p in paths if p.is_file()}
 
 
@@ -59,12 +63,41 @@ def saved_fallback_summary(fallback):
     return result
 
 
+def target_trade_dates(source, evaluated, cutoff):
+    """A valid saved attempt owns its dates; it needs no current calendar.
+
+    An unreadable/unverified input is still recorded as a failed attempt against
+    today's planned dates. Full source verification remains inside the run.
+    Freeze the calendar before creating a run directory so planning errors do
+    not leave an apparently started collection without terminal evidence.
+    """
+    if source:
+        try:
+            source = Path(source)
+            manifest = artifact_io.load(source/'manifest.json')
+            expected = manifest['snapshot.json']
+            if not expected:
+                raise ValueError('snapshot_hash_missing')
+            snapshot = artifact_io.load_json_bytes(artifact_io.checked(source/'snapshot.json', expected, {}))
+            dates = {m:snapshot['sessions'][m][-1] for m in ('KR', 'US')}
+            for value in dates.values():
+                datetime.strptime(value, '%Y-%m-%d')
+            return dates
+        except (OSError, ValueError, KeyError, TypeError, IndexError):
+            pass
+    return {m:capped_sessions(completed_sessions(m, evaluated), cutoff)[-1] for m in ('KR', 'US')}
+
+
 def render(run, output):
     """Publish collection status and quality without retired selection artifacts."""
     lines = ['# 일일 시장 수집', '', f"실행 상태: **{run['state']}** / 처리: {run['processing_state']}",
              f"모드: {run['mode']} / 시작: {run['started_at']} / 종료: {run.get('finished_at', '진행 중')}", '']
     if run.get('error'):
         lines += [f"오류: {run['error']}", '']
+    lines += ['신규 가격 공급자: Toss',
+              '저장 재현: ' + ('과거 NH 자료 포함 · 새 NH 요청 없음'
+                            if run.get('nh_fallback', {}).get('provenance') == 'saved_source_no_new_requests'
+                            else '수집 run에 기록된 출처 유지' if run['mode'] != 'live' else '해당 없음'), '']
     lines += ['| 단계 | 상태 |', '|---|---|'] + [f'| {k} | {v} |' for k,v in run['stages'].items()]
     if run.get('quality'):
         q = run['quality']
@@ -76,13 +109,21 @@ def render(run, output):
     (output/'report.html').write_text(page, encoding='utf-8')
 
 
-def run(config, source=None, recover_source=None, nh_evidence=None, *, session_cutoff=None, evaluated_at=None, prior_result=None):
+def run(config, source=None, recover_source=None, nh_evidence=None, *, session_cutoff=None, evaluated_at=None, prior_result=None, root=None):
+    root = Path(root or ROOT).resolve()
+    if nh_evidence and (source or not recover_source):
+        raise ValueError('saved_nh_evidence_requires_recover')
     date = datetime.now(ZoneInfo('Asia/Seoul')).date().isoformat()
     mode = 'replay' if source else 'recover' if recover_source else 'live'
-    output = ROOT/'runtime'/date/(datetime.now(timezone.utc).strftime('%H%M%S')+'-'+mode+'-'+uuid4().hex[:8])
+    started_at = now()
+    evaluated = datetime.fromisoformat(evaluated_at or started_at)
+    targets = target_trade_dates(source or recover_source, evaluated, session_cutoff)
+    output = root/'runtime'/date/(datetime.now(timezone.utc).strftime('%H%M%S')+'-'+mode+'-'+uuid4().hex[:8])
     output.mkdir(parents=True)
-    run = {'schema':1, 'state':'running', 'processing_state':'running', 'mode':mode, 'started_at':now(),
-           'output':str(output), 'stages':{s:'not_started' for s in ('inputs','collection','nh_fallback','adr_metadata','quality','report')}}
+    run = {'schema':1, 'state':'running', 'processing_state':'running', 'mode':mode, 'started_at':started_at,
+           'output':str(output), 'collection_receipt':RECEIPT_ROLE,
+           'target_trade_date':targets,
+           'stages':{s:'not_started' for s in ('inputs','collection','nh_fallback','adr_metadata','quality','report')}}
     if session_cutoff:
         run.update(session_cutoff=session_cutoff, evaluated_at=evaluated_at)
     started = time.monotonic()
@@ -93,7 +134,7 @@ def run(config, source=None, recover_source=None, nh_evidence=None, *, session_c
         write_json(output/'run.json', run)
         print(json.dumps({'stage':name,'state':value,'output':str(output)}, ensure_ascii=True), flush=True)
     try:
-        hashes = code_hashes(Path(config['engine']))
+        hashes = code_hashes(Path(config['engine']), root=root)
         write_json(output/'config.json', config)
         update('inputs', 'completed')
         stage = 'collection'
@@ -105,18 +146,18 @@ def run(config, source=None, recover_source=None, nh_evidence=None, *, session_c
         else:
             collection_root = output/'collection'
             previous = None
-            latest = ROOT/'runtime/latest.json'
+            latest = root/'runtime/latest.json'
             if latest.is_file():
                 prior_run = Path(artifact_io.load(latest)['output'])/'run.json'
                 if artifact_io.available(prior_run):
                     previous = artifact_io.load(prior_run).get('market_source')
             if prior_result:
                 from launch.daily import DailyLaunch
-                checked_prior = DailyLaunch(ROOT).checked_run(prior_result)
+                checked_prior = DailyLaunch(root).checked_run(prior_result)
                 previous = checked_prior.get('market_source')
                 inputs[str(Path(prior_result)/'run.json')] = artifact_io.sha(Path(prior_result)/'run.json')
             kwargs = {'session_cutoff':session_cutoff,'evaluated_at':evaluated_at} if session_cutoff else {}
-            collect(collection_root, ROOT/'config.json', prior_source=previous, **kwargs)
+            collect(collection_root, root/'config.json', prior_source=previous, project_root=root, **kwargs)
             frozen_path = collection_root/'frozen.json'
             seed_revision = artifact_io.load(frozen_path)['config'].get('seed_revision') if frozen_path.is_file() else None
             if seed_revision is not None:
@@ -128,12 +169,12 @@ def run(config, source=None, recover_source=None, nh_evidence=None, *, session_c
                 run['incremental_seed'] = str(previous)
             source = Path(artifact_io.load(collection_root/'latest.json')['attempt'])
             update(stage, 'completed')
-        if mode != 'replay' and config.get('ohlcv',{}).get('provider') == 'toss' and not nh_evidence:
+        if mode != 'replay' and not nh_evidence:
             run['toss_source'] = str(source)
             run['nh_fallback'] = {'attempted':0, 'adopted':0, 'unrecovered':0,
                                   'reason':'single_provider_toss'}
             update('nh_fallback', 'not_requested_single_provider')
-        elif mode != 'replay':
+        elif nh_evidence:
             original_source = source
             run['toss_source'] = str(original_source)
             source_check(original_source)
@@ -141,40 +182,30 @@ def run(config, source=None, recover_source=None, nh_evidence=None, *, session_c
             inputs[str(original_source/'manifest.json')] = artifact_io.sha(original_source/'manifest.json')
             stage = 'nh_fallback'
             update(stage, 'running')
-            previous = None
-            latest = ROOT/'runtime/latest.json'
-            if latest.is_file():
-                prior_run = Path(artifact_io.load(latest)['output'])/'run.json'
-                if artifact_io.available(prior_run):
-                    previous = artifact_io.load(prior_run).get('market_source')
-            if prior_result:
-                from launch.daily import DailyLaunch
-                previous = DailyLaunch(ROOT).checked_run(prior_result).get('market_source')
             source, fallback, fallback_inputs = nh_fallback.recover(
                 original_source,output/'nh_fallback',config,
-                evidence_root=nh_evidence,prior_source=previous)
+                evidence_root=nh_evidence,prior_source=original_source,allow_auto_exclusions=False,root=root)
             run['nh_fallback'] = {k:fallback[k] for k in ('attempted','adopted','unrecovered')}
             run['nh_fallback']['excluded'] = len(fallback.get('automatic_exclusions',[]))
-            if not nh_evidence:
-                import market.scope as market_scope
-                market_scope.remember(fallback.get('automatic_exclusions',[]),market_scope.load())
+            run['nh_fallback']['provenance'] = 'saved_source_no_new_requests'
             inputs.update(fallback_inputs)
             update(stage, 'completed' if fallback['unrecovered'] == 0 else 'completed_with_exceptions')
         else:
             update('nh_fallback', 'not_requested_offline')
-        if mode != 'replay' and not nh_evidence and config.get('adr_metadata',{}).get('enabled'):
+        if mode == 'live' and config.get('adr_metadata',{}).get('enabled'):
             import market.adr as adr_metadata
             stage = 'adr_metadata'
             update(stage, 'running')
             inputs.update({str(source/name):h for name,h in artifact_io.load(source/'manifest.json').items()})
             inputs[str(source/'manifest.json')] = artifact_io.sha(source/'manifest.json')
-            reference = adr_metadata.collect(artifact_io.load(source/'snapshot.json'), output/'adr-evidence')
+            reference = adr_metadata.collect(artifact_io.load(source/'snapshot.json'), output/'adr-evidence',
+                                             cache=root/'runtime/adr-metadata-cache')
             source = adr_metadata.derive(source, output/'adr-market', reference)
             records = adr_metadata.read(reference['path'])['records']
             run['adr_metadata'] = {'requested':len(records),'available':sum(r['state']=='available' for r in records)}
             update(stage, 'completed' if all(r['state']=='available' for r in records) else 'completed_with_exceptions')
         else:
-            update('adr_metadata', 'not_requested_offline' if mode == 'replay' or nh_evidence else 'disabled')
+            update('adr_metadata', 'not_requested_offline' if mode != 'live' else 'disabled')
         run['market_source'] = str(source)
         inputs.update({str(source/name):h for name,h in artifact_io.load(source/'manifest.json').items()})
         inputs[str(source/'manifest.json')] = artifact_io.sha(source/'manifest.json')
@@ -197,6 +228,10 @@ def run(config, source=None, recover_source=None, nh_evidence=None, *, session_c
             for market in ('KR', 'US')}
         run['data_times'] = {k:snapshot.get(k) for k in ('fetched_at','collected_until')}
         run['data_times']['session_dates'] = {m: dates[-1] for m, dates in snapshot['sessions'].items()}
+        # Replay/recover target the saved attempt's frozen sessions, just as the
+        # launcher's compatibility receipt does when no new targets are given.
+        if mode != 'live':
+            run['target_trade_date'] = dict(run['data_times']['session_dates'])
         update(stage, quality['processing_state'])
         run['approved_exclusions'] = snapshot.get('scope_exclusions', [])
         del snapshot
@@ -212,6 +247,7 @@ def run(config, source=None, recover_source=None, nh_evidence=None, *, session_c
         run.update(finished_at=now(), elapsed_seconds=round(time.monotonic()-started,3))
         render(run, output)
         write_json(output/'run.json', run)
+        write_json(output/RECEIPT_ROLE, collection_receipt(run, artifact_io.sha(output/'run.json')))
         write_json(output/'manifest.json', {'schema':1, 'code_hashes':hashes, 'input_hashes':inputs,
                    'output_hashes':{str(p.relative_to(output)):artifact_io.sha(p) for p in output.rglob('*')
                                     if p.is_file() and 'cache' not in p.relative_to(output).parts}})
@@ -220,9 +256,9 @@ def run(config, source=None, recover_source=None, nh_evidence=None, *, session_c
         # replaces freshly generated structured outputs with pinned references.
         from records.store import publish_run
         from records.files import publish_thin
-        publish_run(output, root=ROOT)
-        publish_thin(output, root=ROOT)
-        write_json(ROOT/'runtime/latest.json', {'output':str(output), 'state':run['state'], 'mode':mode})
+        publish_run(output, root=root)
+        publish_thin(output, root=root)
+        write_json(root/'runtime/latest.json', {'output':str(output), 'state':run['state'], 'mode':mode})
     return run
 
 
@@ -245,8 +281,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', type=Path, help='Offline replay of an immutable market attempt')
     parser.add_argument('--verify', type=Path, help='Offline checksum and calculation replay')
-    parser.add_argument('--recover', type=Path, help='New run from a saved Toss attempt with NH fallback')
-    parser.add_argument('--nh-evidence', type=Path, help='Previously captured NH requests for --recover')
+    parser.add_argument('--recover', type=Path, help='Reprocess a saved Toss attempt; no new NH requests')
+    parser.add_argument('--nh-evidence', type=Path, help='Replay hash-verified saved NH responses with --recover; never authenticate or request')
     parser.add_argument('--session-cutoff', help='Dashboard-only latest permitted session date')
     parser.add_argument('--evaluated-at', help='Frozen timezone-aware first launch timestamp')
     parser.add_argument('--prior-run', type=Path, help='Verified prior result for incremental seed after a failed attempt')

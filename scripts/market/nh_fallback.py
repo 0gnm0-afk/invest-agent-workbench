@@ -1,4 +1,4 @@
-"""Qualified NH whole-series fallback for unavailable or unusable Toss observations."""
+"""Reproduce qualified historical NH observations from saved, hashed evidence."""
 from contextlib import closing
 import hashlib
 import json
@@ -13,8 +13,7 @@ from market.collect import audit
 from atomic_io import write_json, sha, load_bom
 from market.price_files import PriceFiles, available
 from market.quality import adr_cap_unavailable, is_depositary_receipt
-from market.providers.nh_auth import NHMarketError
-from market.providers.nh_client import MarketClient, PERIOD, KR_PERIOD, CURRENT, us_period_inputs, kr_period_inputs
+from market.providers.nh_client import NHMarketError, MarketClient, PERIOD, KR_PERIOD, CURRENT, us_period_inputs, kr_period_inputs
 
 
 # Provider/data failures are recoverable; calendar/configuration/programming errors are not.
@@ -205,13 +204,13 @@ def completed_cap(listing, bar, payload, exchange):
             'market_cap_price_basis':'nh_dated_regular_session_close'}
 
 
-def pin_replayed_series(snapshot, recovered):
+def pin_replayed_series(snapshot, recovered, *, root=None):
     """Preserve newly recovered historical values without changing active price rows."""
     if not recovered or 'ohlcv_store' not in snapshot:
         return
     from market.prices import PriceStore, identity
     from market.retire_history import HistoricalFiles
-    store = PriceStore(snapshot['ohlcv_store']['path'])
+    store = PriceStore(snapshot['ohlcv_store']['path'], root=root)
     with closing(store.connect(write=True)) as db, db:
         db.execute('BEGIN IMMEDIATE')
         for row in recovered:
@@ -221,7 +220,13 @@ def pin_replayed_series(snapshot, recovered):
             row['bars_ref'] = ref
 
 
-def recover(source, output, config, *, evidence_root=None, prior_source=None, only_keys=None, allow_auto_exclusions=True):
+def recover(source, output, config, *, evidence_root=None, prior_source=None, only_keys=None, allow_auto_exclusions=True, root=None):
+    # New prices come only from Toss. This entry is for explicit saved replay.
+    if evidence_root is None:
+        raise ValueError('single_provider_toss')
+    from workbench_paths import ROOT
+    from market.prices import PriceStore, default_path
+    replay_root = Path(root) if root is not None else ROOT
     source, output = Path(source).resolve(), Path(output).resolve()
     if output.exists():
         raise ValueError('nh_fallback_output_already_exists')
@@ -234,10 +239,10 @@ def recover(source, output, config, *, evidence_root=None, prior_source=None, on
         source_hash = sha(path)
     else:
         raise FileNotFoundError(manifest)
-    original = PriceFiles().market_snapshot(path,source_hash)
+    original = PriceFiles(PriceStore(default_path(replay_root), root=replay_root)).market_snapshot(path,source_hash)
     output.mkdir(parents=True)
     import market.scope as market_scope
-    policy = market_scope.load()
+    policy = market_scope.load(root=replay_root) if root is not None else market_scope.load()
     write_json(output/'input-scope-policy.json',policy)
     original = market_scope.apply_snapshot(original, policy)
     # Older saved inputs could claim quoted_price while carrying a null cap.
@@ -264,6 +269,9 @@ def recover(source, output, config, *, evidence_root=None, prior_source=None, on
         domestic.setdefault((row.get('sMarket'),row.get('sCode')),[]).append(row)
     universe = {(r['market'],r['symbol']):r for r in original['universe']}
     client = MarketClient(output,evidence_root)
+    evidence_manifest = Path(evidence_root) / 'manifest.json'
+    if evidence_manifest.is_file():
+        inputs[str(evidence_manifest.resolve())] = sha(evidence_manifest)
     results, recovered = [], []
     metadata_recovered = {}
     new_exclusions = []
@@ -293,7 +301,7 @@ def recover(source, output, config, *, evidence_root=None, prior_source=None, on
                 identity_verified = listing.get('listing_exchange_family') == 'KOSPI' and len(rows)==1
             identity_conflict = bool(rows) and not identity_verified
             report['nh_identity_verified'] = identity_verified
-            report['nh_requested'] = True
+            report.update(nh_requested=False, nh_replayed=True)
             if error['error_code'] == 'unavailable_market_cap':
                 # Preserve valid Toss OHLCV. Only request the missing metadata.
                 if market == 'US':
@@ -365,7 +373,7 @@ def recover(source, output, config, *, evidence_root=None, prior_source=None, on
             # Identity/parity/auth/outage failures are never evidence of data absence.
             # No healthy Toss security is queried just to cross-check a failed security.
             if (error.get('error_code') in missing_prices and reason in absent
-                    and report.get('nh_requested') and not report.get('nh_price_observed') and listing.get('isin_code')):
+                    and report.get('nh_replayed') and not report.get('nh_price_observed') and listing.get('isin_code')):
                 rule = policy['dual_provider']
                 item = {k:listing.get(k) for k in ('market','symbol','name','isin_code','provider_symbol')}
                 item.update(reason='dual_provider_data_unavailable',approved_on=rule['approved_on'],
@@ -377,7 +385,7 @@ def recover(source, output, config, *, evidence_root=None, prior_source=None, on
         results.append(report)
         write_json(output/'progress.json',{'targets':len(targets),'completed':len(results),
                                            'adopted':len(recovered)+len(metadata_recovered),'results':results})
-    pin_replayed_series(original,recovered)
+    pin_replayed_series(original,recovered,root=replay_root)
     adopted = {(r['market'],r['symbol']) for r in recovered}
     original['series'] = sorted([r for r in original['series'] if (r['market'],r['symbol']) not in adopted]
                                 +recovered,key=lambda r:(r['market'],r['symbol']))
@@ -395,11 +403,11 @@ def recover(source, output, config, *, evidence_root=None, prior_source=None, on
     if 'active_scope_complete' in coverage:
         from market.scope import refresh_coverage
         refresh_coverage(original)
-    original['source'] = 'live_public_toss_with_qualified_nh_fallback'
-    original['collection_mode'] = 'toss_main_nh_unusable_symbols_v2'
+    original['source'] = 'saved_toss_with_qualified_nh_replay'
+    original['collection_mode'] = 'saved_nh_evidence_replay'
     for market in {r['market'] for r in recovered}:
         original['providers'][market] = 'Toss adjusted candles; qualified NH PLUG period for adopted rows'
-    original['nh_fallback'] = {'attempted':len(targets),'adopted':len(recovered)+len(metadata_recovered),
+    original['nh_fallback'] = {'provenance':'saved_source_no_new_requests','attempted':len(targets),'adopted':len(recovered)+len(metadata_recovered),
                                'observed_not_adopted':sum(r['state']=='observed_not_adopted' for r in results),
                                'original_source':str(source),'excluded':len(new_exclusions),'results':retained_reports+results}
     if new_exclusions:

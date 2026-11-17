@@ -186,14 +186,17 @@ class PriceFiles:
 
     def market_snapshot(self, path, expected):
         """Return a verified market view with the same pinned bar references used in replay."""
-        from atomic_io import checked_saved,sha
-        path = local_runtime_path(path)
+        from market.prices import _saved_snapshot_bytes, hydrate_snapshot
+        path = local_runtime_path(path, root=self.store.root)
         record = self._record(path)
         if record is None:
-            return checked_saved(path,expected)
+            raw = _saved_snapshot_bytes(path, expected, root=self.store.root, store=self.store)
+            return hydrate_snapshot(json.loads(raw.decode('utf-8-sig')), root=self.store.root)
         source,size,recipe_hash,compressed = record
-        if source!=expected or (Path(path).is_file() and sha(path)!=expected):
+        if source!=expected:
             raise ValueError('saved_artifact_hash_mismatch:'+Path(path).name)
+        if Path(path).is_file():
+            _saved_snapshot_bytes(path, expected, root=self.store.root, store=self.store)
         body=zlib.decompress(compressed)
         if hashlib.sha256(body).hexdigest()!=recipe_hash:
             raise ValueError('price_file_recipe_hash_mismatch')
@@ -208,7 +211,7 @@ class PriceFiles:
         return value
 
     def _record(self, path):
-        record = packed_record(self.store.path.parent, path)
+        record = packed_record(self.store.path.parent, path, root=self.store.root)
         if record is not None:
             return record
         if not self.store.path.is_file():
@@ -216,7 +219,7 @@ class PriceFiles:
         with closing(self.connect()) as db:
             if not db.execute("SELECT 1 FROM sqlite_master WHERE name='price_files'").fetchone():
                 return None
-            for candidate in runtime_lookup_paths(path):
+            for candidate in runtime_lookup_paths(path, root=self.store.root):
                 row = db.execute('SELECT source_sha256,original_bytes,recipe_sha256,recipe FROM price_files WHERE path=?',
                                  (file_key(candidate),)).fetchone()
                 if row is not None:
@@ -237,7 +240,7 @@ class PriceFiles:
         return raw
 
     def contains(self, path):
-        if packed_exists(self.store.path.parent, path):
+        if packed_exists(self.store.path.parent, path, root=self.store.root):
             return True
         if not self.store.path.is_file():
             return False
@@ -245,11 +248,11 @@ class PriceFiles:
             if not db.execute("SELECT 1 FROM sqlite_master WHERE name='price_files'").fetchone():
                 return False
             return any(db.execute('SELECT 1 FROM price_files WHERE path=?', (file_key(candidate),)).fetchone()
-                       for candidate in runtime_lookup_paths(path))
+                       for candidate in runtime_lookup_paths(path, root=self.store.root))
 
 
-def recover_bytes(path):
-    return PriceFiles().recover(path)
+def recover_bytes(path, *, root=None, store=None):
+    return PriceFiles(store or PriceStore(root=root)).recover(path)
 
 
 def available(path):

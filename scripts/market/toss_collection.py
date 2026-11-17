@@ -83,7 +83,7 @@ def make_collector(root):
             client = TossMarketClient()
         request={**request,'ohlcv_path':str(default_path(root))}
         return collect(request, {}, Path(root) / 'market-cache', client, now=evaluated_at,
-                       refresh=request.get('refresh_market', False))
+                       refresh=request.get('refresh_market', False), project_root=root)
 
     callback.collector_id = COLLECTOR_ID
     callback.collector_version = collector_version()
@@ -91,16 +91,16 @@ def make_collector(root):
 
 
 def collect(config, account, cache_root, get, *, now=None, refresh=False,
-            prior_series=None, prior_source=None):
+            prior_series=None, prior_source=None, project_root=None):
     now = now or datetime.now(timezone.utc)
     validate_profile(config['profile'])
     root = Path(cache_root).resolve()
     with instance_lock(root):
-        return _collect(config, account, root, get, now, refresh, prior_series or {}, prior_source)
+        return _collect(config, account, root, get, now, refresh, prior_series or {}, prior_source, project_root)
 
 
-def _collect(config, account, root, get, now, refresh, prior_series, prior_source):
-    scope_policy = market_scope.load()
+def _collect(config, account, root, get, now, refresh, prior_series, prior_source, project_root=None):
+    scope_policy = market_scope.load(root=project_root)
     scope_policy['completed_sessions'] = {}
     for market in ('KR', 'US'):
         try:
@@ -222,12 +222,12 @@ def _collect(config, account, root, get, now, refresh, prior_series, prior_sourc
                                                    for field in ('isin_code','listing_exchange_family')):
                         raise ValueError('checkpoint_instrument_changed')
                     if 'bars_ref' in payload:
-                        payload = {**payload, 'bars': PriceStore(cached['ohlcv_path']).read(payload['bars_ref'])}
+                        payload = {**payload, 'bars': PriceStore(cached['ohlcv_path'], root=project_root).read(payload['bars_ref'])}
                     usable_tail(payload['bars'], sessions[market])
                     return payload, 'cache'
             except (OSError, ValueError, KeyError, TypeError):
                 pass
-        price_store = PriceStore(config.get('ohlcv_path') or root/'ohlcv.sqlite3')
+        price_store = PriceStore(config.get('ohlcv_path') or root/'ohlcv.sqlite3', root=project_root)
         previous = prior_series.pop((market, symbol), None) if not raw and not refresh else None
         seed_source = prior_source
         if not refresh and previous is None:

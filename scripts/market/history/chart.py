@@ -71,10 +71,15 @@ class HistoryStore:
         self.client = None
         self.saved = SavedMarketHistories(self.path.parent)
         parent = self.path.parent
+        self.root = parent.parent if parent.name == 'runtime' else parent
         self.prices = PriceStore(default_path(parent.parent) if (parent.parent/'config.json').exists()
-                                 else parent/'ohlcv.sqlite3')
+                                 else parent/'ohlcv.sqlite3', root=self.root)
 
-    def connect(self):
+    def connect(self, *, write=False):
+        if not write:
+            db = sqlite3.connect(self.path.resolve().as_uri() + '?mode=ro', uri=True, timeout=5)
+            db.execute('PRAGMA query_only=ON')
+            return db
         self.path.parent.mkdir(parents=True, exist_ok=True)
         db = sqlite3.connect(self.path, timeout=5)
         db.execute('CREATE TABLE IF NOT EXISTS history (identity TEXT PRIMARY KEY, payload TEXT NOT NULL, sha256 TEXT NOT NULL)')
@@ -123,10 +128,14 @@ class HistoryStore:
             raise ValueError('history_cache_hash_mismatch')
         return json.loads(row[0])
 
+    def read(self, stock, frame='1d'):
+        """Saved-only chart view for M06; never calls ensure or initializes caches."""
+        return self.view(stock, frame)
+
     def view(self, stock, frame='1d'):
         timeframe(frame)
         from market.scope import match
-        exclusion = match(stock)
+        exclusion = match(stock, root=getattr(self, 'root', self.path.parent.parent))
         if exclusion:
             return {**stock, 'bars':[], 'timeframe':frame, 'history':{
                 'state':'excluded', 'reason':exclusion['reason'], 'approved_on':exclusion['approved_on']}}
@@ -147,7 +156,7 @@ class HistoryStore:
 
     def ensure(self, stock, retry=False):
         from market.scope import match
-        exclusion = match(stock)
+        exclusion = match(stock, root=getattr(self, 'root', self.path.parent.parent))
         if exclusion:
             return {**self.view(stock), 'history': {'state':'excluded','reason':exclusion['reason'], 'approved_on':exclusion['approved_on']}}
         if not _allows_selected_history(self.saved.packet(stock)):

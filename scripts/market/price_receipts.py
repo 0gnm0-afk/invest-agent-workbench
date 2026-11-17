@@ -35,9 +35,9 @@ def _entries(path, timestamp, size):
         return z.NameToInfo.copy()
 
 
-def _entry(runtime, source):
-    physical = local_runtime_path(Path(source).resolve())
-    for original in runtime_lookup_paths(source):
+def _entry(runtime, source, *, root=None):
+    physical = local_runtime_path(Path(source).resolve(), root=root)
+    for original in runtime_lookup_paths(source, root=root):
         path, name = address(runtime, physical, original_path=original)
         if path is None or not path.is_file():
             continue
@@ -48,12 +48,12 @@ def _entry(runtime, source):
     return None
 
 
-def packed_exists(runtime, source):
-    return _entry(runtime, source) is not None
+def packed_exists(runtime, source, *, root=None):
+    return _entry(runtime, source, root=root) is not None
 
 
-def packed_record(runtime, source):
-    entry = _entry(runtime, source)
+def packed_record(runtime, source, *, root=None):
+    entry = _entry(runtime, source, root=root)
     if entry is None:
         return None
     path, info = entry

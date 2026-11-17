@@ -14,10 +14,11 @@ POLICY = (SCRIPTS / 'market/policies/exclusions.json')
 REGISTRY = ROOT/'runtime/market-scope-auto/records.json'
 
 
-def read_registry():
-    if not REGISTRY.exists():
+def read_registry(*, root=None):
+    registry = Path(root)/'runtime/market-scope-auto/records.json' if root is not None else REGISTRY
+    if not registry.exists():
         return [], b''
-    raw = REGISTRY.read_bytes()
+    raw = registry.read_bytes()
     data = json.loads(raw)
     if data.get('schema') != 1:
         raise ValueError('invalid_automatic_scope_registry')
@@ -45,19 +46,21 @@ def remember(records, policy):
         return len(added)
 
 
-def load(path=None, *, user_registry=None):
+def load(path=None, *, user_registry=None, root=None):
     path = Path(path or POLICY)
     payload = json.loads(path.read_text(encoding='utf-8'))
     if payload.get('schema') != 1 or payload.get('scope') != 'market_symbol_until_user_restores':
         raise ValueError('invalid_market_exclusion_policy')
     registry_raw = b''
     if (payload.get('dual_provider') or {}).get('enabled'):
-        automatic, registry_raw = read_registry()
+        automatic, registry_raw = read_registry(root=root)
         manual_keys = {(r['market'],r['symbol']) for r in payload['records']}
         payload['records'] += [r for r in automatic if (r['market'],r['symbol']) not in manual_keys
             and r.get('dual_provider_rule') == payload['dual_provider'].get('rule_id')
             and r.get('reason') == 'dual_provider_data_unavailable']
     from market.exclusions import read_records
+    if user_registry is None and root is not None:
+        user_registry = Path(root)/'runtime/market-scope-user/records.json'
     approved, user_raw = read_records(user_registry)
     existing = {(r['market'],r['symbol'],r.get('isin_code'),r.get('exchange')) for r in payload['records']}
     payload['records'] += [r for r in approved if (r['market'],r['symbol'],r.get('isin_code'),r.get('exchange')) not in existing]
@@ -73,8 +76,8 @@ def load(path=None, *, user_registry=None):
     return {**payload, 'path': str(path.resolve()), 'sha256': hashlib.sha256(path.read_bytes()+registry_raw+lifecycle_raw+user_raw).hexdigest()}
 
 
-def match(row, policy=None, *, completed_session=None):
-    policy = policy if policy is not None else load()
+def match(row, policy=None, *, completed_session=None, root=None):
+    policy = policy if policy is not None else load(root=root)
     as_of = completed_session if completed_session is not None else policy.get('completed_sessions', {}).get(
         row['market'], datetime.now(timezone.utc).date().isoformat())
     for found in policy['records']:
