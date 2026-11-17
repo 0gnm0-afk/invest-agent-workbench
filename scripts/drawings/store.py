@@ -1,5 +1,5 @@
 """Local user chart workspaces; independent of immutable market/broker data."""
-from contextlib import closing
+from contextlib import closing, contextmanager
 from copy import deepcopy
 import hashlib
 import json
@@ -269,6 +269,168 @@ class WorkspaceStore:
                            (identity, current, json.dumps(payload, ensure_ascii=False, allow_nan=False), updated))
         return {'revision': current, 'updated_at': updated, 'drawing_limit': 300, 'drawing_kinds': list(KINDS), 'drawing_extensions': 'bounded-v1', 'extension_kinds': list(EXTENDABLE_KINDS), 'average_limit': 7,
                 'state': {'schema': 1, 'drawings': payload['drawings'], 'averages': payload['averages'][frame]}}
+
+
+    @contextmanager
+    def read_transaction(self, *, connection=None):
+        """One saved snapshot, without schema initialization or migration.
+
+        Missing files yield None; they are never created. A supplied connection
+        keeps its transaction and ownership (including any uncommitted writes).
+        If it has no transaction yet, only this reader's BEGIN is rolled back.
+        """
+        if connection is None and not self.path.is_file():
+            yield None
+            return
+        db = connection
+        own_connection = db is None
+        if own_connection:
+            db = sqlite3.connect(self.path.resolve().as_uri() + '?mode=ro', uri=True, timeout=5)
+        own_transaction = not db.in_transaction
+        try:
+            if own_transaction:
+                db.execute('BEGIN')
+            yield db
+        finally:
+            if own_transaction and db.in_transaction:
+                db.rollback()
+            if own_connection:
+                db.close()
+
+    @staticmethod
+    def _read_key(stock_key):
+        if not isinstance(stock_key, str) or not re.fullmatch(r'(KR|US):[A-Z0-9.\-]{1,24}', stock_key):
+            raise ValueError('exact_stock_key_required')
+
+    @staticmethod
+    def _read_status(stock_key, status, **fields):
+        return dict(stock_key=stock_key, status=status, workspace_revision=None,
+                    workspace_saved_at=None, payload=None, **fields)
+
+    @staticmethod
+    def _saved_row(stock_key, row):
+        revision, raw, saved_at = row
+        if type(revision) is not int or revision < 0:
+            raise ValueError('invalid_saved_revision')
+        payload = json.loads(raw)
+        if (not isinstance(payload, dict) or set(payload) != {'drawings', 'averages'}
+                or not isinstance(payload['averages'], dict)
+                or set(payload['averages']) != {'1d', '1w', '1mo'}):
+            raise ValueError('invalid_shared_workspace')
+        for frame in ('1d', '1w', '1mo'):
+            validate(dict(schema=1, drawings=payload['drawings'],
+                          averages=payload['averages'][frame]), drawing_limit=300)
+        return dict(stock_key=stock_key, status='ok' if payload['drawings'] else 'empty',
+                    workspace_revision=revision, workspace_saved_at=saved_at,
+                    revision=revision, updated_at=saved_at, payload=payload)
+
+    def _saved_workspace(self, db, stock_key, revision):
+        if db is None:
+            return self._read_status(stock_key, 'missing_database')
+        tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        row = None
+        if 'shared_chart_workspaces' in tables:
+            row = db.execute('SELECT revision,payload,updated_at FROM shared_chart_workspaces WHERE identity=?',
+                             (stock_key,)).fetchone()
+        if row is None:
+            legacy = ('chart_workspaces' in tables and db.execute(
+                'SELECT 1 FROM chart_workspaces WHERE identity IN (?,?,?) LIMIT 1',
+                (stock_key, stock_key + '|1w', stock_key + '|1mo')).fetchone())
+            status = ('legacy_requires_migration' if legacy else
+                      'missing_table' if 'shared_chart_workspaces' not in tables else 'missing_workspace')
+            return self._read_status(stock_key, status)
+        if revision is not None and revision != row[0]:
+            row = db.execute('SELECT revision,payload,updated_at FROM chart_workspace_versions '
+                             'WHERE identity=? AND revision=?', (stock_key, revision)).fetchone() \
+                if 'chart_workspace_versions' in tables else None
+            if row is None:
+                return self._read_status(stock_key, 'missing_revision', requested_revision=revision)
+        return self._saved_row(stock_key, row)
+
+    def saved_workspace(self, stock_key, revision=None, *, connection=None):
+        """C3 latest or exact saved revision; never substitutes a missing version."""
+        self._read_key(stock_key)
+        if revision is not None and (type(revision) is not int or revision < 0):
+            raise ValueError('invalid_revision')
+        try:
+            with self.read_transaction(connection=connection) as db:
+                return self._saved_workspace(db, stock_key, revision)
+        except (sqlite3.DatabaseError, ValueError, TypeError, KeyError) as exc:
+            return self._read_status(stock_key, 'corrupt_data', reason=type(exc).__name__)
+
+    def workspace_revisions(self, stock_key, after_revision, *, connection=None):
+        """M07 internal history, retaining every intermediate saved snapshot.
+
+        ``revisions`` is ordered and strictly after ``after_revision`` (-1 reads
+        from revision 0); ``baseline`` is the exact preceding requested version.
+        Missing history is explicit and is never silently reconstructed. Changes
+        contain original before/after drawings, including deletion/restoration.
+        Use connection= with the monitor's transaction to keep its writes atomic.
+        """
+        self._read_key(stock_key)
+        if type(after_revision) is not int or after_revision < -1:
+            raise ValueError('invalid_revision')
+        result = dict(stock_key=stock_key, after_revision=after_revision,
+                      current_revision=None, baseline=None, revisions=[],
+                      history_complete=False, missing_revision_ranges=[])
+        try:
+            with self.read_transaction(connection=connection) as db:
+                current = self._saved_workspace(db, stock_key, None)
+                result['status'] = current['status']
+                if current['status'] not in ('ok', 'empty'):
+                    return result
+                head = current['revision']
+                result['current_revision'] = head
+                if after_revision > head:
+                    result['status'] = 'revision_ahead_of_workspace'
+                    return result
+                history = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                                     "AND name='chart_workspace_versions'").fetchone()
+                rows = db.execute('SELECT revision,payload,updated_at FROM chart_workspace_versions '
+                                  'WHERE identity=? ORDER BY revision', (stock_key,)).fetchall() if history else []
+                versions = [self._saved_row(stock_key, row) for row in rows]
+                if versions and versions[-1]['revision'] > head:
+                    raise ValueError('history_ahead_of_workspace')
+                if versions and versions[-1]['revision'] == head:
+                    if versions[-1] != current:
+                        raise ValueError('history_head_mismatch')
+                else:
+                    versions.append(current)
+                prior, prior_revision, seen = {}, -1, set()
+                for version in versions:
+                    revision = version['revision']
+                    drawings = {d['id']: d for d in version['payload']['drawings']}
+                    continuous = revision == prior_revision + 1
+                    changes = []
+                    if continuous:
+                        for ident in sorted(prior.keys() | drawings.keys()):
+                            before, after = prior.get(ident), drawings.get(ident)
+                            if before == after:
+                                continue
+                            action = ('deleted' if after is None else 'changed' if before is not None
+                                      else 'restored' if ident in seen else 'added')
+                            changes.append(dict(drawing_id=ident, action=action, before=before, after=after))
+                    version.update(changes=changes, changes_complete=continuous)
+                    seen.update(drawings)
+                    prior, prior_revision = drawings, revision
+                    if revision == after_revision:
+                        result['baseline'] = version
+                    if revision > after_revision:
+                        result['revisions'].append(version)
+                expected = max(0, after_revision)
+                for version in versions:
+                    revision = version['revision']
+                    if revision < expected:
+                        continue
+                    if revision > expected:
+                        result['missing_revision_ranges'].append([expected, revision - 1])
+                    expected = revision + 1
+                result['history_complete'] = not result['missing_revision_ranges']
+                result['status'] = 'ok' if result['history_complete'] else 'history_incomplete'
+                return result
+        except (sqlite3.DatabaseError, ValueError, TypeError, KeyError) as exc:
+            return {**result, 'status': 'corrupt_data', 'reason': type(exc).__name__,
+                    'revisions': [], 'baseline': None, 'history_complete': False}
 
 
 def moving_averages(stock, periods):

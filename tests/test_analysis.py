@@ -228,10 +228,16 @@ class AnalysisTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'retired_risk_operation'):
             self.s.dispatch('calculate',{},'http://127.0.0.1:1234')
     def test_geometry_all_kinds_frame_and_js_projection_parity(self):
-        js="const fs=require('fs'),vm=require('vm');global.window={};vm.runInThisContext(fs.readFileSync(process.argv[1],'utf8'));const a=JSON.parse(fs.readFileSync(0,'utf8'));const t=window.DrawingTools.timeline(a.bars,a.frame);console.log(JSON.stringify(a.days.map(d=>window.DrawingTools.index(d,t,a.frame))));"
+        # Identical fixed vectors run in test_l1_trendlines_ui.cjs, directly under
+        # the M00 Node guard (an unguarded subprocess is deliberately not used).
+        expected_by_frame = {
+            '1d': [0, 1/3, 1, 2, 3, 77],
+            '1w': [-.4+.8*4/7, -.4+.8*5/7, .6, .6+.8/7, .6+.8*2/7, 15.6+.8/7],
+            '1mo': [-.4+.8*17/30, -.4+.8*18/30, -.4+.8*20/30, -.4+.8*21/30, -.4+.8*22/30, 3.6+.8*4/31],
+        }
         for frame in ('1d','1w','1mo'):
             bars=aggregate(self.bars,frame);slots=timeline(bars,frame);days=['2026-09-18','2026-09-19','2026-09-21','2026-09-22','2026-09-23','2027-01-05']
-            expected=json.loads(subprocess.check_output(['node','-e',js,str(ROOT/'dashboard/drawings/drawing-tools.js')],input=json.dumps(dict(bars=bars,frame=frame,days=days)).encode()))
+            expected=expected_by_frame[frame]
             for day,value in zip(days,expected):
                 actual=logical(day,slots,frame)
                 if value is None:self.assertIsNone(actual)
