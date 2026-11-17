@@ -58,8 +58,7 @@ def packed(value):
     return json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True)
 
 
-# 조 2b 전환 대상: M03 공통 읽기로 구 내장 bars/bars_ref와 원본 해시를 보존한다.
-def holding_series(path, expected_hash, keys):
+def holding_series(path, expected_hash, keys, *, root=None):
     """Read selected series from our indent=2 immutable snapshot without loading the universe."""
     if not path.exists():
         from atomic_io import checked_saved
@@ -76,11 +75,17 @@ def holding_series(path, expected_hash, keys):
     with path.open(encoding='utf-8-sig') as stream:
         for line in stream:
             if line.rstrip() == '  "ohlcv_store": {':
-                from market.prices import PriceStore
+                from market.prices import hydrate_snapshot
                 value = json.loads(path.read_text(encoding='utf-8-sig'))
-                store = PriceStore(value['ohlcv_store']['path'])
+                store_path = value['ohlcv_store']['path']
                 rows = [s for s in value['series'] if s['market']+':'+s['symbol'] in keys]
-                result = {s['market']+':'+s['symbol']: {**s, 'bars': store.read(s['bars_ref'])} for s in rows}
+                result = {}
+                for row in rows:
+                    # Require the same fixed reference and hydrate only this
+                    # selected row; empty selections never open a price DB.
+                    selected = hydrate_snapshot({'ohlcv_store': {'path': store_path},
+                        'series': [{**row, 'bars_ref': row['bars_ref']}]}, root=root)
+                    result[row['market']+':'+row['symbol']] = selected['series'][0]
                 if len(result) != len(rows):
                     raise ValueError('duplicate_market_series')
                 return result
@@ -131,5 +136,5 @@ def saved_inputs(root, market_run, keys=None, *, account_failed=False):
     if keys is None:
         keys = {p['market']+':'+p.get('quote_symbol',p['symbol'])
                 for a in bundle['accounts'] for p in a['positions'] if equity(p)}
-    stocks = holding_series(source, manifest['input_hashes'].get(str(source)), keys)
+    stocks = holding_series(source, manifest['input_hashes'].get(str(source)), keys, root=root)
     return bundle, stocks
