@@ -1,6 +1,33 @@
 """Reuse identical analysis inputs; preserve every existing immutable ID and hash."""
 from contextlib import closing
+import json
 from . import digest, packed
+
+
+def decode_saved(payload, expected, *, root):
+    """Verify and hydrate a fixed input without initializing or writing stores.
+
+    This internal reader preserves historical account contents exactly. Session
+    callers apply M08's projection after verifying the original snapshot hash.
+    Use ``partial(decode_saved, root=root)`` as the M06 snapshot reader.
+    """
+    value = json.loads(payload)
+    if digest(value) != expected:
+        raise ValueError('snapshot_integrity_failed')
+    if 'chart_price_ref' in value:
+        from market.prices import PriceStore
+        from market.history.chart import aggregate
+        ref = value.pop('chart_price_ref')
+        value['chart']['bars'] = aggregate(
+            PriceStore(ref['path'], root=root).read(ref['reference']), ref['frame'])
+        if digest(value['chart']) != value['component_hashes']['chart']:
+            raise ValueError('snapshot_chart_integrity_failed')
+    if set(value.get('accounts', {})) == {'account_store_ref'}:
+        from accounts.saved import ReadOnlyAccountStore
+        from runtime_paths import local_runtime_path
+        ref = value['accounts']['account_store_ref']
+        value['accounts'] = ReadOnlyAccountStore(local_runtime_path(ref['path'], root=root)).read(ref)
+    return value
 
 
 def input_hash(value):

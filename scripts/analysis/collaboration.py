@@ -86,9 +86,17 @@ def identity(snapshot):
 
 
 def validate_plan(plan, snapshot):
-    fields(plan, ('title', 'purpose', 'account_alias', 'allocation', 'conditions', 'scenarios'),
+    fields(plan, ('title', 'purpose', 'account_alias', 'allocation', 'conditions', 'scenarios', 'hypothesis'),
            ('title', 'purpose', 'account_alias', 'allocation', 'conditions', 'scenarios'))
     text(plan['title'], 200); text(plan['purpose'], 4000, True); text(plan['account_alias'], 200, True)
+    if 'hypothesis' in plan:
+        hypothesis = plan['hypothesis']
+        fields(hypothesis, ('verification_date', 'invalidation_statement', 'pre_verification_allocation'))
+        verification_date = day(hypothesis.get('verification_date'))
+        if verification_date is not None and date.fromisoformat(verification_date).isoformat() != verification_date:
+            raise ValueError('invalid_hypothesis_verification_date')
+        text(hypothesis.get('invalidation_statement'), 12000, True)
+        text(hypothesis.get('pre_verification_allocation'), 4000, True)
     allocation = plan['allocation']
     fields(allocation, ('quantity', 'basis'), ('quantity', 'basis'))
     decimal(allocation['quantity']); choice(allocation['basis'], ('initial', 'current_remaining', 'units'))
@@ -351,6 +359,13 @@ class Collaboration:
         if r['kind'] == 'discussion':
             summary = '\n'.join(f'- {k}: {r["sections"][k] if r["sections"][k] is not None else "미정"}' for k in SECTIONS)
             summary += '\n\n## 미정 질문\n' + '\n'.join('- ' + q for q in r['open_questions'])
+        elif r['kind'] == 'plan_version' and 'hypothesis' in r['plan']:
+            hypothesis = r['plan']['hypothesis']
+            labels = (('verification_date', '가설 검증일(실적 발표일)'),
+                      ('invalidation_statement', '반증 조건'),
+                      ('pre_verification_allocation', '검증 전 비중'))
+            summary = '\n'.join(f'- {label}: {hypothesis.get(k) if hypothesis.get(k) is not None else "미정"}'
+                                for k, label in labels)
         return (f"# {title}\n\n기록 {r['id']} · 분석 {r['case_id']} · v{r['revision']} · {r['status']}\n\n"
                 + summary + '\n\n## 논의 원문·근거·변경 이력\n' + r.get('body', '')
                 + '\n\n```json\n' + json.dumps(r, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + '\n```\n')

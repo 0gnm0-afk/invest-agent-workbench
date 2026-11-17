@@ -22,7 +22,28 @@ from analysis.collaboration import VERSION
 from analysis import Forbidden
 from drawings.store import WorkspaceStore, Conflict, defaults
 
-FIXTURE = json.loads((ROOT / 'tests/fixtures/collaboration-v1.json').read_text(encoding='utf-8'))
+# Self-contained synthetic input: M00 copies selected test modules only.
+FIXTURE = json.loads(r'''
+{
+  "contract_version": "collaboration.v1",
+  "synthetic": true,
+  "discussion": {
+    "title": "합성 회사의 보유 이유 논의",
+    "body": "사용자: 성장 논리가 유지되면 보유하되 하락 시 절반 축소를 검토하고 싶다. 에이전트: 어떤 봉의 확인가격과 어떤 물량의 절반인지 아직 정하지 않았다.",
+    "sections": {"business_evidence": "분석 가설: 신규 제품의 반복 매출 증가. 실제 기업 사실 아님.", "judgment_invalidation": "성장 논리 훼손은 정성 재검토 조건.", "purpose_plan": "보유 목적 논의 중", "responses": "하락 시 절반 축소 검토. 판정 시점과 수량 기준 미정."},
+    "open_questions": ["완료 일봉 기준인지, 최초 또는 잔여 물량의 절반인지?"],
+    "references": [{"kind": "utterance", "reference": "synthetic-session:turn-1", "text": "성장 논리가 유지되면 보유하되 하락 시 절반 축소를 검토하고 싶다.", "speaker": "user"}]
+  },
+  "plan": {
+    "title": "합성 USD 조건 대응 대안", "purpose": "매매", "account_alias": "synthetic-us",
+    "allocation": {"quantity": "10", "basis": "units"},
+    "conditions": [{"id": "c1", "kind": "price", "statement": "완료 일봉 종가가 90 USD 미만이면 최초 배정 물량 절반 축소", "action": "reduce", "evaluation": "daily_close", "operator": "lt", "price": "90", "currency": "USD", "quantity": {"value": "0.5", "basis": "initial_fraction"}, "priority": 1, "execution_price": "89", "drawing_ref": null}, {"id": "c2", "kind": "qualitative", "statement": "성장 논리 훼손 시 재검토", "action": "review", "evaluation": null, "operator": null, "price": null, "currency": null, "quantity": {"value": null, "basis": null}, "priority": 2, "execution_price": null, "drawing_ref": null}],
+    "scenarios": [{"id": "s1", "evaluation_at": "2026-10-30", "assumed_price": "80", "currency": "USD", "response": "plan", "price_path": [{"at": "2026-10-06", "price": "89"}, {"at": "2026-10-30", "price": "80"}], "fx_to_base": null, "fx_as_of": null, "cost": null}]
+  },
+  "risk_review": {"title": "합성 계산 미정 사항", "body": "FX와 비용은 계좌 논의에서 보완. 실제 최대손실 아님.", "calculation": null, "references": []}
+}
+
+''')
 
 
 class CollaborationTests(unittest.TestCase):
@@ -95,13 +116,17 @@ class CollaborationTests(unittest.TestCase):
         self.assertIsNone(value['current']);self.assertEqual(value['active_plans'],[]);self.assertEqual(len(value['legacy_records']),1)
 
     def test_draft_adoption_new_draft_replacement_and_revoke(self):
-        p1=self.plan()
+        first=deepcopy(FIXTURE['plan']); first['hypothesis']=dict(verification_date='2026-11-20',
+            invalidation_statement='반복 매출의 성장 이유가 훼손되면 재검토', pre_verification_allocation='전체 투자자산의 5% 이내')
+        p1=self.plan(plan=first)
         with self.assertRaises(ValueError):self.call('plan_input',dict(plan_record_id=p1['id'],mode='adopted'))
         preview=self.call('plan_input',dict(plan_record_id=p1['id'],mode='hypothetical'))
         self.assertIsNone(preview['adoption']); self.assertIn('scenario.s1.fx_to_base',preview['blockers'])
         d1=self.adopt(p1)['record']
-        p2=self.plan(plan_id=p1['plan_id'],expected_plan_version=1)
+        second=deepcopy(first); second['hypothesis'].update(verification_date=None, pre_verification_allocation='미국 주식 계좌 평가액의 약 3%')
+        p2=self.plan(plan_id=p1['plan_id'],expected_plan_version=1,plan=second)
         self.assertEqual(self.read()['active_plans'][0]['record']['id'],p1['id'])
+        self.assertEqual(self.read()['active_plans'][0]['record']['plan']['hypothesis'],first['hypothesis'])
         self.assertEqual(p2['previous_record_id'],p1['id'])
         self.assertEqual(self.call('plan_input',dict(plan_record_id=p1['id'],mode='adopted'))['adoption']['id'],d1['id'])
         self.adopt(p2)
@@ -110,6 +135,75 @@ class CollaborationTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.call('plan_input',dict(plan_record_id=p1['id'],mode='adopted'))
         self.adopt(p2,'revoke');self.assertEqual(self.read()['active_plans'],[])
         self.assertEqual(self.s.item(self.cid,p1['id']),p1)
+
+    def test_hypothesis_roundtrip_and_legacy_hashes(self):
+        legacy=self.plan()
+        legacy_path=self.root/legacy['markdown_path']
+        legacy_bytes=legacy_path.read_bytes()
+        with closing(self.store.connect()) as db:
+            legacy_row=db.execute('SELECT * FROM analysis_items WHERE id=?',(legacy['id'],)).fetchone()
+            snapshot_rows=db.execute('SELECT * FROM analysis_snapshots').fetchall()
+        hypothesis=dict(verification_date='2028-02-29',
+            invalidation_statement='  반복 매출이 늘어도\n고객의 재구매 이유가 사라지면 재검토한다.  ',
+            pre_verification_allocation='  전체 투자자산(현금 포함)의 5% 이내\n실적 전에는 추가하지 않음  ')
+        plan=deepcopy(FIXTURE['plan']);plan['hypothesis']=hypothesis
+        result=self.call('plan_save',{**self.envelope(),'plan_id':legacy['plan_id'],
+            'expected_plan_version':1,'plan':plan,'references':[]})
+        self.assertTrue(result['verified']);record=result['record']
+        reopened=AnalysisService(self.store,self.hist,self.fin,lambda:self.fail('unexpected capture'),self.root,initialize=False)
+        loaded=reopened.dispatch('collaboration_read',{'analysis_key':self.cid},self.origin)
+        self.assertEqual(loaded['plans'][0]['plan'],plan)
+        self.assertEqual(record['plan_sha256'],digest(plan))
+        packet=self.call('plan_input',dict(plan_record_id=record['id'],mode='hypothetical'))
+        self.assertEqual(packet['plan_record']['plan']['hypothesis'],hypothesis)
+        self.assertEqual(record['plan']['allocation'],legacy['plan']['allocation'])
+        self.assertEqual(record['blockers'],legacy['blockers'])
+        markdown=(self.root/record['markdown_path']).read_bytes()
+        self.assertEqual(hashlib.sha256(markdown).hexdigest(),record['markdown_sha256'])
+        rendered=markdown.decode('utf-8')
+        for label in ('가설 검증일(실적 발표일)','반증 조건','검증 전 비중'):
+            self.assertIn(label,rendered)
+        for value in hypothesis.values():self.assertIn(value,rendered)
+        self.assertEqual(legacy_path.read_bytes(),legacy_bytes)
+        self.assertEqual(self.s.item(self.cid,legacy['id']),legacy)
+        self.assertNotIn('hypothesis',legacy['plan'])
+        with closing(self.store.connect()) as db:
+            self.assertEqual(db.execute('SELECT * FROM analysis_items WHERE id=?',(legacy['id'],)).fetchone(),legacy_row)
+            self.assertEqual(db.execute('SELECT * FROM analysis_snapshots').fetchall(),snapshot_rows)
+
+    def test_hypothesis_validation_and_null_semantics(self):
+        from analysis.collaboration import validate_plan
+        snap=self.s.snapshot(self.cid,self.sid)
+        invalid=[None,[],{'unknown':'x'}, {'verification_date':'2026-02-29'},
+                 {'verification_date':'2026-W01-1'}, {'verification_date':'2026-1-01'},
+                 {'verification_date':123}, {'invalidation_statement':False},
+                 {'invalidation_statement':{'price':90}}, {'invalidation_statement':'x'*12001},
+                 {'pre_verification_allocation':0.05}, {'pre_verification_allocation':True},
+                 {'pre_verification_allocation':[]}, {'pre_verification_allocation':'x'*4001}]
+        for value in invalid:
+            with self.subTest(value_type=type(value).__name__,keys=list(value) if isinstance(value,dict) else None):
+                plan=deepcopy(FIXTURE['plan']);plan['hypothesis']=value
+                with self.assertRaises(ValueError):self.plan(plan=plan)
+        self.assertEqual(self.read()['revision'],0)
+        for value in ({},{'verification_date':None,'invalidation_statement':None,'pre_verification_allocation':None},
+                      {'invalidation_statement':'','pre_verification_allocation':''},
+                      {'verification_date':'2000-01-01','invalidation_statement':'x'*12000,'pre_verification_allocation':'x'*4000}):
+            plan=deepcopy(FIXTURE['plan']);plan['hypothesis']=value
+            self.assertEqual(validate_plan(plan,snap),plan)
+            saved=self.plan(plan=plan)
+            self.assertEqual(self.call('plan_input',dict(plan_record_id=saved['id'],mode='hypothetical'))['plan_record']['plan'],plan)
+        legacy=deepcopy(FIXTURE['plan'])
+        self.assertEqual(validate_plan(legacy,snap),legacy)
+        self.assertNotIn('hypothesis',self.plan()['plan'])
+
+    def test_hypothesis_stale_version_and_failed_readback_not_verified(self):
+        plan=deepcopy(FIXTURE['plan']);plan['hypothesis']={'pre_verification_allocation':'계좌 평가액의 3%'}
+        first=self.plan(plan=plan)
+        with self.assertRaises(Conflict):
+            self.plan(plan_id=first['plan_id'],expected_plan_version=0,plan=plan)
+        self.assertEqual(self.read()['revision'],1)
+        with patch.object(self.s.collaboration,'item',return_value=None),self.assertRaisesRegex(ValueError,'record_readback_failed'):
+            self.plan(plan=plan)
 
     def test_roles_forgery_and_legacy_are_not_adoption(self):
         args={**self.envelope(),**deepcopy(FIXTURE['discussion'])}

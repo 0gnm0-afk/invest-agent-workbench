@@ -11,16 +11,37 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from analysis import Forbidden
+from analysis import Forbidden, digest
 from analysis.direct import call, SelectedHistories, SelectedArchive
 from analysis.direct_accounts import saved_accounts
 from analysis.service import AnalysisService
+from accounts import saved as account_saved
 from accounts.store import AccountStore
 from drawings.store import WorkspaceStore, Conflict
-from market.prices import PriceStore
+from market.prices import PriceStore, saved_bars
 from market.history.chart import aggregate
 
-FIXTURE = json.loads((Path(__file__).parent / 'fixtures/collaboration-v1.json').read_text(encoding='utf-8'))
+# Inline synthetic fixture so the M00 source-only copy needs no data files.
+FIXTURE = json.loads(r'''
+{
+  "contract_version": "collaboration.v1",
+  "synthetic": true,
+  "discussion": {
+    "title": "합성 회사의 보유 이유 논의",
+    "body": "사용자: 성장 논리가 유지되면 보유하되 하락 시 절반 축소를 검토하고 싶다. 에이전트: 어떤 봉의 확인가격과 어떤 물량의 절반인지 아직 정하지 않았다.",
+    "sections": {"business_evidence": "분석 가설: 신규 제품의 반복 매출 증가. 실제 기업 사실 아님.", "judgment_invalidation": "성장 논리 훼손은 정성 재검토 조건.", "purpose_plan": "보유 목적 논의 중", "responses": "하락 시 절반 축소 검토. 판정 시점과 수량 기준 미정."},
+    "open_questions": ["완료 일봉 기준인지, 최초 또는 잔여 물량의 절반인지?"],
+    "references": [{"kind": "utterance", "reference": "synthetic-session:turn-1", "text": "성장 논리가 유지되면 보유하되 하락 시 절반 축소를 검토하고 싶다.", "speaker": "user"}]
+  },
+  "plan": {
+    "title": "합성 USD 조건 대응 대안", "purpose": "매매", "account_alias": "synthetic-us",
+    "allocation": {"quantity": "10", "basis": "units"},
+    "conditions": [{"id": "c1", "kind": "price", "statement": "완료 일봉 종가가 90 USD 미만이면 최초 배정 물량 절반 축소", "action": "reduce", "evaluation": "daily_close", "operator": "lt", "price": "90", "currency": "USD", "quantity": {"value": "0.5", "basis": "initial_fraction"}, "priority": 1, "execution_price": "89", "drawing_ref": null}, {"id": "c2", "kind": "qualitative", "statement": "성장 논리 훼손 시 재검토", "action": "review", "evaluation": null, "operator": null, "price": null, "currency": null, "quantity": {"value": null, "basis": null}, "priority": 2, "execution_price": null, "drawing_ref": null}],
+    "scenarios": [{"id": "s1", "evaluation_at": "2026-10-30", "assumed_price": "80", "currency": "USD", "response": "plan", "price_path": [{"at": "2026-10-06", "price": "89"}, {"at": "2026-10-30", "price": "80"}], "fx_to_base": null, "fx_as_of": null, "cost": null}]
+  },
+  "risk_review": {"title": "합성 계산 미정 사항", "body": "FX와 비용은 계좌 논의에서 보완. 실제 최대손실 아님.", "calculation": null, "references": []}
+}
+''')
 
 
 class DirectAnalysisTests(unittest.TestCase):
@@ -135,6 +156,148 @@ class DirectAnalysisTests(unittest.TestCase):
         self.assertEqual(selected.listings, {'SYNTH': {'name': 'One'}})
         self.assertEqual(selected.coverage, {'SYNTH': {'bars': 4}})
 
+    def test_current_read_uses_price_store_only(self):
+        histories = SelectedHistories(self.root)
+        with patch('analysis.direct.saved_bars', wraps=saved_bars) as read, \
+             patch.object(histories.prices, 'archive_entry', wraps=histories.prices.archive_entry) as archive:
+            first = histories.select('US:SYNTH')
+            self.assertIs(histories.select('US:SYNTH'), first)
+        read.assert_called_once_with('US:SYNTH', root=self.root)
+        archive.assert_called_once_with('US', 'SYNTH')
+        # Direct analysis owns no price SQL, including archive metadata lookup.
+        source = (Path(__file__).resolve().parents[1] / 'scripts/analysis/direct.py').read_text(encoding='utf-8')
+        self.assertNotIn('.execute(', source)
+        with patch('analysis.direct.saved_bars', side_effect=AssertionError('current price lookup')):
+            value = self.invoke('read', {'analysis_key': self.cid, 'snapshot_id': self.sid, 'section': 'chart'})
+        self.assertEqual(value['chart']['bars'], self.bars)
+
+    def test_saved_price_adapter_matches_previous_sql_and_fixed_reference(self):
+        def previous_select(stock_key):
+            # Frozen pre-M03 adapter oracle, over a synthetic store only.
+            market, symbol = stock_key.split(':', 1)
+            sid = self.prices.find(dict(market=market, symbol=symbol))
+            with closing(self.prices.connect()) as db:
+                db.execute('BEGIN')
+                identity, metadata = map(json.loads, db.execute(
+                    'SELECT identity,metadata FROM price_series WHERE id=?', (sid,)).fetchone())
+                observed = json.loads(db.execute('SELECT metadata FROM price_observations WHERE series_id=? ORDER BY id DESC LIMIT 1', (sid,)).fetchone()[0])
+                bars = [dict(zip(('date', 'open', 'high', 'low', 'close', 'volume'), row)) for row in db.execute(
+                    'SELECT day,open,high,low,close,volume FROM prices WHERE series_id=? ORDER BY day', (sid,))]
+            entry = self.prices.archive_entry(market, symbol)
+            listing, quality = entry['listings'][symbol], entry['coverage'][symbol]
+            excluded = set(quality['invalid_ohlc']) | (set(quality['non_sessions']) if market == 'US' else set())
+            stock = {**listing, **metadata, **observed, **identity,
+                     'bars': [b for b in bars if b['date'] not in excluded],
+                     'name': observed.get('name') or metadata.get('name') or listing.get('name') or symbol,
+                     'isin_code': identity.get('isin') or listing.get('isinCode'),
+                     'listing_exchange_family': observed.get('listing_exchange_family') or listing.get('listing_exchange')}
+            stock['history'] = {'quality': {'excluded_dates': sorted(excluded)}}
+            stock['bars_ref'] = self.prices.pin(stock)
+            return stock
+
+        for market, symbol, currency, isin in [('US', 'SYNTH', 'USD', 'US0000000001'), ('KR', '000001.KS', 'KRW', 'KR0000000001')]:
+            with self.subTest(market=market):
+                stock = {**self.stock, 'market': market, 'symbol': symbol, 'currency': currency, 'isin_code': isin}
+                self.prices.put(stock, source='initial-' + market, kind='series')
+                updated = {**stock, 'name': 'Newest observation', 'bars': deepcopy(self.bars)}
+                updated['bars'][-1]['close'] = 106.
+                self.prices.put(updated, source='corrected-' + market, kind='series')
+                catalog = dict(source='synthetic-archive', config={'end': '2026-09-23'},
+                               listings={symbol: {'name': 'Listing name', 'isinCode': isin, 'listing_exchange': 'synthetic-exchange'}},
+                               coverage={symbol: {'invalid_ohlc': ['2026-09-21'], 'non_sessions': ['2026-09-22']}}, references={})
+                self.prices.set_meta('archive_' + market, catalog)
+                key = market + ':' + symbol
+                expected = previous_select(key)
+                before = self.prices.path.read_bytes()
+                actual = SelectedHistories(self.root).select(key)
+                self.assertEqual(actual, expected)
+                self.assertEqual(self.prices.path.read_bytes(), before)
+                old_ref = actual['bars_ref']
+                changed = deepcopy(updated)
+                changed['bars'][-1]['close'] = 107.
+                self.prices.put(changed, source='later-' + market, kind='series')
+                self.assertEqual(saved_bars(key, root=self.root, reference=old_ref)['bars'], actual['bars'])
+                catalog['listings'][symbol]['isinCode'] = 'DIFFERENT'
+                self.prices.set_meta('archive_' + market, catalog)
+                with self.assertRaisesRegex(ValueError, 'saved_listing_identity_changed'):
+                    SelectedHistories(self.root).select(key)
+        with self.assertRaisesRegex(ValueError, 'saved_price_identity_missing_or_ambiguous'):
+            SelectedHistories(self.root).select('US:ABSENT')
+        with self.assertRaisesRegex(ValueError, 'exact_stock_key_required'):
+            SelectedHistories(self.root).select('SYNTH')
+
+    def test_account_wrapper_uses_m08_allowlist_for_arbitrary_nested_fields(self):
+        stamp = '2026-09-18T00:00:00+00:00'
+        secret = 'synthetic-private-marker'
+        source = dict(as_of=stamp, attempted_at=stamp, query_state='partial', accounts_complete=False,
+                      account_number=secret, unexpected_response={'nested': [secret]}, lease=secret,
+                      accounts=[dict(alias='nh-synthetic', provider='nh', as_of=stamp, holdings_complete=False,
+                                     lots=[{'original': secret}], raw_json={'nested': secret},
+                                     cash={'USD': '123.4500', 'unexpected': secret},
+                                     positions=[dict(market='US', symbol='SYNTH', currency='USD', quantity='0.2500', price='105.00',
+                                                     account_number=secret, original_lot={'nested': [secret]})])],
+                      providers={'nh': dict(as_of=stamp, query_state='partial', raw_ref={'sha256': secret}, token=secret)})
+        original = deepcopy(source)
+        with patch.object(account_saved, 'saved_accounts', return_value=source) as read, \
+             patch.object(account_saved, 'session_projection', wraps=account_saved.session_projection) as project:
+            result = saved_accounts(self.root)
+        read.assert_called_once_with(self.root)
+        project.assert_called_once_with(source)
+        self.assertEqual(source, original)
+        self.assertEqual(result['as_of'], stamp)
+        self.assertEqual(result['query_state'], 'partial')
+        position = result['accounts'][0]['positions'][0]
+        self.assertEqual((position['quantity'], position['price']), ('0.2500', '105.00'))
+        self.assertNotIn(secret, json.dumps(result))
+
+    def test_account_wrapper_provider_states_are_read_only(self):
+        for providers, state in [((), 'not_requested'), (('nh',), 'received'), (('meritz',), 'received'),
+                                 (('nh', 'meritz'), 'partial'), (('nh',), 'failed')]:
+            with self.subTest(providers=providers, state=state), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                store = AccountStore(root / 'runtime/accounts.sqlite3')
+                raw_hashes = set()
+                stamp, attempt = '2026-09-18T00:00:00+00:00', '2026-09-19T00:00:00+00:00'
+                for provider in providers:
+                    snapshot = dict(provider='NH PLUG' if provider == 'nh' else 'Meritz Open API', as_of=stamp,
+                                    accounts_complete=True, accounts=[dict(alias=provider + '-synthetic', holdings_complete=True,
+                                        positions=[dict(market='US', symbol='SYNTH', currency='USD', quantity='1.2500', price='105.00',
+                                                        original_lots=[{'data': 'private-lot'}])])])
+                    request = store.begin(provider, 'success', 'mcp')
+                    receipt = store.complete(provider, 'success', request['lease'], snapshot=snapshot,
+                        metadata=dict(query_state='received', attempted_at=stamp), raw={'synthetic': 'raw-broker-private'})
+                    raw_hashes.add(receipt['raw_ref']['sha256'])
+                    if state in ('partial', 'failed') and provider == providers[-1]:
+                        request = store.begin(provider, 'failure', 'mcp')
+                        store.complete(provider, 'failure', request['lease'], metadata=dict(
+                            query_state='failed', attempted_at=attempt, reason='transport_failed'))
+                # Fixture setup ends before the exact file comparison. Real WAL
+                # read consistency is covered by the snapshot decoder test.
+                if store.path.exists():
+                    with closing(sqlite3.connect(store.path)) as db:
+                        db.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+                        self.assertEqual(db.execute('PRAGMA journal_mode=DELETE').fetchone()[0], 'delete')
+                before = {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+                original_read = account_saved.ReadOnlyAccountStore.read
+                def read_snapshot(instance, ref):
+                    self.assertNotIn(ref['sha256'], raw_hashes)
+                    return original_read(instance, ref)
+                with patch.object(account_saved.ReadOnlyAccountStore, 'read', read_snapshot), \
+                     patch.object(AccountStore, 'save', side_effect=AssertionError('account write')), \
+                     patch.object(AccountStore, 'begin', side_effect=AssertionError('account observation begin')), \
+                     patch.object(AccountStore, 'complete', side_effect=AssertionError('account observation complete')):
+                    result = saved_accounts(root)
+                self.assertEqual(result['query_state'], state)
+                self.assertEqual(result['as_of'], stamp if providers else None)
+                if providers:
+                    self.assertEqual(result['accounts'][0]['positions'][0]['quantity'], '1.2500')
+                if state in ('partial', 'failed'):
+                    self.assertEqual(result['attempted_at'], attempt)
+                    self.assertFalse(result['accounts'][-1]['holdings_complete'])
+                self.assertNotIn('private', json.dumps(result))
+                after = {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+                self.assertEqual(before, after)
+
     def test_saved_accounts_preserve_failed_attempt_and_never_read_raw(self):
         store = AccountStore(self.root / 'runtime/accounts.sqlite3')
         snapshot = dict(provider='NH PLUG', as_of='2026-09-18T00:00:00+00:00', accounts_complete=True,
@@ -160,7 +323,7 @@ class DirectAnalysisTests(unittest.TestCase):
         for provider, label, rate in (('nh', 'NH PLUG', '1400'), ('meritz', 'Meritz', '1500')):
             snapshot = dict(provider=label, as_of=times[provider], accounts_complete=True,
                             base_currency='KRW', fx_to_base={'KRW': '1', 'USD': rate},
-                            accounts=[{'alias': 'synthetic-' + provider, 'positions': [],
+                            accounts=[{'alias': provider + '-synthetic', 'positions': [],
                                        'holdings_complete': True, 'cash_complete': True}])
             request = store.begin(provider, 'synthetic-success', 'mcp')
             store.complete(provider, 'synthetic-success', request['lease'], snapshot=snapshot,
@@ -174,21 +337,71 @@ class DirectAnalysisTests(unittest.TestCase):
             result = saved_accounts(self.root)
         self.assertEqual(before, store.path.read_bytes())
         accounts = {account['alias']: account for account in result['accounts']}
-        self.assertEqual(set(accounts), {'synthetic-nh', 'synthetic-meritz'})
+        self.assertEqual(set(accounts), {'nh-synthetic', 'meritz-synthetic'})
         self.assertEqual(result['as_of'], times['nh'])
         self.assertEqual(result['query_state'], 'partial')
         self.assertNotIn('snapshot_ref', result)
         self.assertNotIn('USD', result['valuation']['fx_to_base'])
-        self.assertEqual(accounts['synthetic-nh']['fx_to_base']['USD'], '1400')
-        self.assertEqual(accounts['synthetic-meritz']['fx_to_base']['USD'], '1500')
-        self.assertEqual(accounts['synthetic-nh']['as_of'], times['nh'])
-        self.assertEqual(accounts['synthetic-meritz']['as_of'], times['meritz'])
-        self.assertTrue(accounts['synthetic-nh']['holdings_complete'])
-        self.assertFalse(accounts['synthetic-meritz']['holdings_complete'])
+        self.assertEqual(accounts['nh-synthetic']['fx_to_base']['USD'], '1400')
+        self.assertEqual(accounts['meritz-synthetic']['fx_to_base']['USD'], '1500')
+        self.assertEqual(accounts['nh-synthetic']['as_of'], times['nh'])
+        self.assertEqual(accounts['meritz-synthetic']['as_of'], times['meritz'])
+        self.assertTrue(accounts['nh-synthetic']['holdings_complete'])
+        self.assertFalse(accounts['meritz-synthetic']['holdings_complete'])
         self.assertEqual(result['providers']['meritz']['query_state'], 'failed')
         self.assertEqual(result['providers']['meritz']['attempted_at'], attempted)
         original = store.read(store.latest('meritz')['snapshot_ref'])
         self.assertTrue(original['accounts'][0]['holdings_complete'])
+
+    def test_historical_account_exports_project_without_changing_original_hashes(self):
+        private = 'historical-private-broker-marker'
+        account_alias = 'SYNTH_ACCOUNT_2a33349e7e60'
+        accounts = dict(as_of='2026-09-18T00:00:00+00:00', accounts_complete=True,
+                        raw_response={'private': private}, accounts=[dict(alias=account_alias,
+                            account_number=private, holdings_complete=True, positions=[dict(
+                                market='US', symbol='SYNTH', currency='USD', quantity='1.2500', price='105.00',
+                                raw_lots=[{'private': private}], broker_response={'private': private})])])
+        self.service.view = lambda: ({'accounts': accounts, 'market': {'state': 'saved_only'}}, {'US:SYNTH': self.stock})
+        snap = self.service.capture(self.service.case(self.cid))
+        sid = snap['id']
+        plan = self.invoke('plan_save', dict(analysis_key=self.cid, snapshot_id=sid, expected_revision=0,
+            contract_version='collaboration.v1', plan=deepcopy(FIXTURE['plan']), references=[], plan_id=None,
+            expected_plan_version=0))['record']
+        holding = self.service.dispatch('holding', dict(analysis_key=self.cid, snapshot_id=sid,
+            adopted_snapshot_id=sid, account_alias=account_alias, confirmed_by_user=True,
+            thesis='User-authored thesis preserved', invalidation='User-authored condition', confirmation='Synthetic fixture'),
+            'http://fixture', principal='browser')
+        before = {p.relative_to(self.root).as_posix(): p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
+        stored_hash = digest(snap)
+        with patch.object(SelectedHistories, 'select', side_effect=AssertionError('current prices')):
+            read = self.invoke('read', dict(analysis_key=self.cid, snapshot_id=sid, section='accounts'))
+            packet = self.invoke('plan_input', dict(analysis_key=self.cid, plan_record_id=plan['id'], mode='hypothetical'))
+            linked = self.invoke('holding_links', {})
+            detail = self.invoke('detail', {'analysis_key': self.cid})
+            collaboration = self.invoke('collaboration_read', {'analysis_key': self.cid})
+        for value in (read, packet, linked, detail, collaboration):
+            self.assertNotIn(private, json.dumps(value))
+            self.assertNotIn(account_alias, json.dumps(value))
+            self.assertEqual(value['account_projection'], 'session_allowlist')
+            self.assertEqual(value['hashes_refer_to'], 'stored_original')
+        self.assertEqual(read['accounts']['accounts'][0]['positions'][0]['quantity'], '1.2500')
+        self.assertEqual(packet['snapshot']['accounts'], read['accounts'])
+        self.assertEqual(packet['snapshot_sha256'], stored_hash)
+        self.assertEqual(packet['plan_sha256'], plan['plan_sha256'])
+        self.assertEqual(packet['plan_record'], plan)  # User-authored alias is unchanged.
+        self.assertEqual(packet['snapshot']['component_hashes'], snap['component_hashes'])
+        self.assertNotEqual(digest(packet['snapshot']), stored_hash)  # Explicit projection, original hash basis.
+        for collection in (linked['links'], detail['items'], collaboration['legacy_records']):
+            projected = next(record for record in collection if record['id'] == holding['id'])
+            self.assertEqual(projected['thesis'], holding['thesis'])
+            self.assertIsNone(projected['account_alias'])
+            self.assertEqual(projected['observed_position']['quantity'], '1.2500')
+        self.assertEqual(self.service.snapshot(self.cid, sid), snap)
+        self.assertEqual(self.service.item(self.cid, holding['id']), holding)
+        self.assertEqual(self.service.item(self.cid, plan['id']), plan)
+        self.assertEqual(digest(self.service.snapshot(self.cid, sid)), stored_hash)
+        after = {p.relative_to(self.root).as_posix(): p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
+        self.assertEqual(before, after)
 
 
 if __name__ == '__main__':

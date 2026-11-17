@@ -8,6 +8,14 @@ window.WorkbenchCollaboration = (() => {
     return value.split('.').map(x=>esc(terms[x]||x)).join(' · ');
   }
   const money = (x, currency) => x == null ? '미정' : currency ? esc(WorkbenchFormat.money(x, currency)) + ' ' + esc(currency) : esc(x) + ' (통화 미정)';
+  function hypothesisHTML(plan) {
+    const h = plan.hypothesis || {};
+    const text = value => value == null ? '미정' : esc(value).replaceAll('\n','<br>');
+    return `<p><strong>가설 검증일(실적 발표일)</strong><br>${text(h.verification_date)}</p>
+      <p><strong>반증 조건</strong><br>${text(h.invalidation_statement)}</p>
+      <p><strong>검증 전 비중</strong><br>${text(h.pre_verification_allocation)}</p>
+      <p>검증 전 비중은 분모를 함께 적으세요(예: 총 투자자산의 5% 이내). 사용자 원문 그대로 보존하며 숫자·수량으로 환산하지 않습니다.</p>`;
+  }
   function planHTML(r) {
     const p = r.plan, currency = r.identity.currency;
     if (r.monitoring_only === true) {
@@ -15,12 +23,14 @@ window.WorkbenchCollaboration = (() => {
       const refs = [...new Map(p.conditions.filter(c=>c.drawing_ref).map(c=>[c.drawing_ref.drawing_id,c.drawing_ref])).values()];
       const responses = [...new Set(p.conditions.map(c=>c.statement).filter(Boolean))];
       return `<h4>${esc(p.title)} · v${r.plan_version}</h4><p>목적 ${label(p.purpose)} · ${p.account_alias?'확인 계좌 '+esc(p.account_alias):'전체 계좌에서 실제 보유 확인'}</p>
+        ${hypothesisHTML(p)}
         ${refs.map(ref=>`<p>저장 작도 <strong>${esc(ref.drawing_id)}</strong> · v${ref.workspace_revision}<br>시간축 ${esc(ref.timeframe)} · 가격 기준 ${esc(ref.price_basis)} · 경계 ${p.conditions.filter(c=>c.drawing_ref?.drawing_id===ref.drawing_id).map(c=>esc(lineNames[c.drawing_ref.line]||c.drawing_ref.line)).join(' / ')}</p>`).join('')}
         <p><strong>확정할 대응</strong><br>${responses.map(esc).join('<br>')||'대응 기준 미정'}</p>
         <p>최신 완료 거래일 종가로 접근·도달·돌파·이탈을 구분합니다. 기울어진 경계는 해당 거래일의 선 값으로 비교합니다.</p>
         <details><summary>계획 ID · 고정 입력</summary><p>자료 ${esc(r.data_as_of.chart_last||'미확인')} · 입력 ${esc(r.snapshot_id)}<br>계획 ${esc(r.plan_id)} · 기록 ${esc(r.id)}<br>계획 SHA-256 ${esc(r.plan_sha256)}<br>입력 SHA-256 ${esc(r.snapshot_sha256)}</p><pre class="analysis-document">${esc(JSON.stringify(p,null,2))}</pre></details>`;
     }
     return `<h4>${esc(p.title)} · v${r.plan_version}</h4><p>목적 ${label(p.purpose)} · 계좌 ${esc(p.account_alias || '미정')} · 배정 ${esc(p.allocation.quantity ?? '미정')} ${label(p.allocation.basis)}</p>
+      ${hypothesisHTML(p)}
       ${p.conditions.map(c => `<p><strong>${label(c.action)}</strong> · ${esc(c.statement)}<br>${c.kind === 'qualitative' ? '정성 판단 필요' : `${label(c.evaluation)} · ${c.drawing_ref ? `고정 작도 ${esc(c.drawing_ref.drawing_id)} v${c.drawing_ref.workspace_revision} (${esc(c.drawing_ref.timeframe)}, ${esc(c.drawing_ref.line)}, ${esc(c.drawing_ref.price_basis)})` : money(c.price, c.currency)} ${label(c.operator)}`} · 적용 순서 ${esc(c.priority ?? '미정')}<br>수량 ${esc(c.quantity.value ?? '미정')} (${label(c.quantity.basis)}) · 가정 체결 ${money(c.execution_price,c.currency)}</p>`).join('') || '<p>조건 미정</p>'}
       ${p.scenarios.map(s => `<p>시나리오 ${esc(s.id)} · 평가 ${esc(s.evaluation_at || '미정')} · 가정 가격 ${money(s.assumed_price,s.currency)} · ${s.response === 'plan' ? '계획 대응' : s.response === 'none' ? '무대응' : '대응 미정'} · 환율 ${esc(s.fx_to_base ?? '미정')} (${esc(s.fx_as_of || '기준일 미정')}) · 총비용 ${money(s.cost,s.currency)}<br>가격 경로: ${s.price_path?.map(point=>`${esc(point.at)} → ${money(point.price,s.currency)}`).join(" · ") || "미정"}</p>`).join('')}
       <details><summary>고정 입력과 전체 계획</summary><p>계획 SHA-256 ${esc(r.plan_sha256)}<br>입력 SHA-256 ${esc(r.snapshot_sha256)}</p><pre class="analysis-document">${esc(JSON.stringify(r.plan,null,2))}</pre></details><p>자료 ${esc(r.data_as_of.chart_last || '미정')} · 입력 ${esc(r.snapshot_id)}<br>계획 ID ${esc(r.plan_id)} · 기록 ${esc(r.id)}</p>
@@ -47,7 +57,7 @@ window.WorkbenchCollaboration = (() => {
       const oldNote = state.host.querySelector('[name="note"]')?.value || '';
       state.revision = v.revision;
       const current = v.current, plans = v.plans, activePlans = v.active_plans;
-      state.host.querySelector('[data-content]').innerHTML = `<p><a class="button" href="${esc(links.resume_codex_url)}">후속 논의 이어가기</a> <button data-copy>이어갈 문맥 복사</button></p>
+      state.host.querySelector('[data-content]').innerHTML = `<p><button data-copy>세션에 붙여 넣을 문맥 복사</button></p>
         <p>기존 근거에서 대화를 이어갑니다. 아직 정하지 않은 내용도 남길 수 있습니다.</p>
         ${(v.unincorporated_notes || []).map(r=>`<p><strong>요약 이후 새 발언 · 다음 논의에서 확인</strong><br>${esc(r.body)}<br><small>${esc(r.id)}</small></p>`).join('')}
         ${current ? `<p>현재 요약 · ${esc(current.id)} · ${esc(current.created_at)}</p>${Object.entries(current.sections).filter(([,v]) => v !== null).map(([k,value]) => `<p><strong>${esc(labels[k])}</strong><br>${esc(value).replaceAll('\n','<br>')}</p>`).join('')}<h3>미정 질문</h3>${current.open_questions.map(q => '<p>' + esc(q) + '</p>').join('') || '<p>기록된 질문 없음</p>'}` : '<p>아직 후속 요약이 없습니다. 아래 기존 보고서와 발언을 바탕으로 논의를 시작할 수 있습니다.</p>'}

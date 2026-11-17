@@ -8,17 +8,16 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
-from urllib.parse import parse_qs, urlsplit
 
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from analysis.service import AnalysisService
-from analysis import packed
+from analysis import packed, digest
 from drawings.store import WorkspaceStore
 
 
-SKILL = 'stock-qualitative-analysis'
+SKILL = 'eps-research'
 ORIGIN = 'http://127.0.0.1:1234'
 
 
@@ -71,14 +70,13 @@ class AnalysisSkillLinkTests(unittest.TestCase):
         return self.service.dispatch('read', arguments, ORIGIN)
 
     def decoded_prompt(self, detail):
-        url = urlsplit(detail['links']['codex_url'])
-        self.assertEqual((url.scheme, url.netloc), ('codex', 'new'))
-        arguments = parse_qs(url.query)
-        self.assertEqual(arguments['path'], [str(self.root)])
-        self.assertEqual(arguments['prompt'], [detail['links']['prompt']])
-        return arguments['prompt'][0]
+        links = detail['links']
+        self.assertNotIn('codex_url', links)
+        self.assertNotIn('resume_codex_url', links)
+        self.assertNotIn('codex', json.dumps(links).lower())
+        return links['prompt']
 
-    def test_new_case_deeplink_requests_skill_and_report_for_same_key(self):
+    def test_new_case_context_requests_skill_and_report_for_same_key(self):
         prompt = self.decoded_prompt(self.detail)
         for token in ('$' + SKILL, self.cid, 'US:NVDA', 'analysis_read',
                       'snapshot_id', 'analysis_save_record'):
@@ -89,6 +87,23 @@ class AnalysisSkillLinkTests(unittest.TestCase):
         self.assertEqual(self.service.case(self.cid)['qualitative_skill'], SKILL)
         self.assertEqual(self.detail['items'], [])
         self.assertEqual(len(self.detail['snapshots']), 1)
+
+    def test_resume_context_preserves_key_and_hypothesis_contract(self):
+        links = self.detail['links']
+        prompt = links['resume_prompt']
+        for token in (self.cid, 'US:NVDA', 'eps-research', 'deep-research',
+                      'analysis_collaboration_read', 'analysis_save_plan',
+                      'plan.hypothesis', 'verification_date',
+                      'invalidation_statement', 'pre_verification_allocation',
+                      '분모', '사용자 원문 문자열', 'expected_revision'):
+            self.assertIn(token, prompt)
+        for prompt in (links['prompt'], prompt):
+            for prohibited in ('codex', 'stock-qualitative-analysis',
+                               'Telegram 검색', '36조합', 'analysis_cycle',
+                               '최대 2회 자체 검증'):
+                self.assertNotIn(prohibited, prompt)
+            self.assertIn('deep-research', prompt)
+            self.assertIn('대화로', prompt)
 
     def test_validation_case_does_not_request_real_analysis_or_report(self):
         detail = self.create(test_record=True)
@@ -113,20 +128,27 @@ class AnalysisSkillLinkTests(unittest.TestCase):
         self.assertNotIn('token', copied)
 
     def test_legacy_case_is_available_without_rewriting_saved_case(self):
-        legacy = {**self.case, 'qualitative_skill': None}
+        legacy = {**self.case, 'qualitative_skill': 'stock-qualitative-analysis'}
         serialized = packed(legacy)
         with closing(self.store.connect()) as db, db:
             db.execute('UPDATE analysis_cases SET payload=? WHERE id=?',
                        (serialized, self.cid))
+            payload = json.loads(db.execute('SELECT payload FROM analysis_snapshots WHERE id=?',
+                                            (self.sid,)).fetchone()[0])
+            payload['qualitative_skill'] = 'stock-qualitative-analysis'
+            db.execute('UPDATE analysis_snapshots SET payload=?,sha256=? WHERE id=?',
+                       (packed(payload), digest(payload), self.sid))
+            snapshot_rows = db.execute('SELECT * FROM analysis_snapshots').fetchall()
         snapshot_before = self.service.snapshot(self.cid, self.sid)
         detail = self.service.dispatch('detail', {'analysis_key': self.cid}, ORIGIN)
-        self.assertIsNone(detail['case']['qualitative_skill'])
+        self.assertEqual(detail['case']['qualitative_skill'], legacy['qualitative_skill'])
         self.assertEqual(detail['qualitative_skill'], SKILL)
         self.assertEqual(detail['qualitative_state'], 'ready')
         self.assertIn('$' + SKILL, self.decoded_prompt(detail))
         with closing(self.store.connect()) as db:
             saved = db.execute('SELECT payload FROM analysis_cases WHERE id=?',
                                (self.cid,)).fetchone()[0]
+            self.assertEqual(db.execute('SELECT * FROM analysis_snapshots').fetchall(), snapshot_rows)
         self.assertEqual(saved, serialized)
         self.assertEqual(self.service.snapshot(self.cid, self.sid), snapshot_before)
 
@@ -222,6 +244,8 @@ class AnalysisSkillLinkTests(unittest.TestCase):
         self.assertNotIn('links', stored)
         self.assertNotIn('document', stored)
         self.assertEqual(Path(saved['document']['path']), self.root / saved['markdown_path'])
+        self.assertNotIn('open_in_codex', saved['document'])
+        self.assertNotIn('codex', json.dumps(saved['document']).lower())
         self.assertEqual(stored, {key: value for key, value in saved.items()
                                   if key not in ('links', 'document')})
         history = self.service.dispatch('detail', {'analysis_key': self.cid},
