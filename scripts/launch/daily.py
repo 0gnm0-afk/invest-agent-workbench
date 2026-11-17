@@ -15,6 +15,7 @@ from atomic_io import atomic_write
 from workbench_paths import SCRIPTS
 from runtime_paths import local_runtime_path
 from launch.journal import error_frames
+from market.collection_receipts import read_collection_receipt
 from invest_agent.trading.store import instance_lock, BusyError
 
 
@@ -46,12 +47,13 @@ def attempt_id(record):
 
 
 class DailyLaunch:
-    def __init__(self, root, runner=None, planner=plan_for, *, accounts=True):
+    def __init__(self, root, runner=None, planner=plan_for, *, accounts=False):
         self.root = Path(root).resolve()
         self.folder = self.root / 'runtime/dashboard-daily'
         self.runner = runner or self.execute
         self.planner = planner
-        self.accounts = accounts
+        # Legacy callers may still supply/set accounts; it grants no permission.
+        self.accounts = False
 
     def read(self, day):
         path = self.folder / (day + '.json')
@@ -80,56 +82,23 @@ class DailyLaunch:
         return load_json_bytes(run_path)
 
     def collection_receipt(self, value, targets=None):
-        """Read current collection fields until M03 supplies C9.
-
-        completed is {market: {requested, completed, failed}}; failed is the
-        per-market failure count. Dates and all counts are required, never
-        inferred as a successful empty collection. sha256 pins run.json bytes.
-        """
-        run = self.checked_run(value)
-        if not run or not run.get('market_source'):
+        """Use M03's published C9; never reconstruct an older run as success."""
+        if not value:
             raise ValueError('collection_result_missing')
-        path = local_runtime_path(value, root=self.root)
-        manifest = load_json_bytes(path/'manifest.json')
-        quality = run.get('quality') or {}
-        counts = quality.get('markets')
-        dates = (run.get('data_times') or {}).get('session_dates')
-        # Older immutable runs keep collection details in their verified quality artifact.
-        if counts is None or dates is None:
-            quality_path = path/'quality.json'
-            expected = manifest['output_hashes'].get('quality.json')
-            if not expected or hashlib.sha256(read_bytes(quality_path)).hexdigest() != expected:
-                raise ValueError('collection_quality_hash_mismatch')
-            saved = load_json_bytes(quality_path)
-            exchanges = saved['exchanges']
-            counts = {market: {field: sum(row[field] for exchange, row in exchanges.items()
-                                         if (exchange == 'KOSPI') == (market == 'KR'))
-                               for field in ('requested', 'received', 'failed')}
-                      for market in ('KR', 'US')}
-            dates = {m: saved['completed_sessions'][m]['last'] for m in ('KR', 'US')}
-        requested_targets = targets or dates
-        completed, failed, statuses = {}, {}, []
-        for market in ('KR', 'US'):
-            row = counts[market]
-            requested, received, missing = (row[k] for k in ('requested', 'received', 'failed'))
-            if any(type(n) is not int or n < 0 for n in (requested, received, missing)) or received + missing != requested:
-                raise ValueError('collection_counts_invalid')
-            datetime.strptime(dates[market], '%Y-%m-%d')
-            completed[market] = {'requested': requested, 'completed': received, 'failed': missing}
-            failed[market] = missing
-            statuses.append('failed' if received == 0 else 'complete'
-                            if received == requested and dates[market] == requested_targets[market] else 'partial')
-        status = max(statuses, key={'complete': 0, 'partial': 1, 'failed': 2}.get)
-        mode = run.get('mode')
-        if mode not in ('live', 'recover', 'replay'):
-            raise ValueError('collection_mode_missing')
-        return {'target_trade_date': dict(requested_targets), 'completed': completed, 'failed': failed,
-                'status': status, 'provenance': {'provider': 'toss', 'run_id': path.name, 'mode': mode},
-                'sha256': manifest['output_hashes']['run.json']}
+        path = local_runtime_path(value, root=self.root).resolve()
+        if not path.is_relative_to(self.root / 'runtime'):
+            raise ValueError('run_outside_runtime')
+        receipt = read_collection_receipt(path)
+        if targets is not None and receipt['target_trade_date'] != targets:
+            raise ValueError('target_sessions_not_reached')
+        if receipt['provenance']['run_id'] != path.name:
+            raise ValueError('collection_run_id_mismatch')
+        return receipt
 
     def usable_run(self, value):
         try:
-            self.collection_receipt(value)
+            if self.collection_receipt(value)['status'] == 'failed':
+                return None
             return str(local_runtime_path(value, root=self.root).resolve())
         except (OSError, ValueError, KeyError, TypeError):
             return None
@@ -193,12 +162,18 @@ class DailyLaunch:
                         # even when an earlier dashboard launch failed or used older US bars.
                         retry = True
                 if retry and expected_attempt is not None:
-                    if not record or attempt_id(record) != expected_attempt or (record['state'] not in ('failed', 'interrupted', 'partial') and record.get('account_state') not in ('failed','partial')):
+                    eligible = bool(record and (record['state'] in ('failed', 'interrupted', 'partial') or
+                                    (record['state'] == 'succeeded' and not self.target_complete(record, {'targets': record.get('targets')}))))
+                    if not record or attempt_id(record) != expected_attempt or not eligible:
                         return {**(record or {'day':day,'state':'unavailable','targets':{}}), 'reused':True}
                 if record and not retry:
                     if record['state'] == 'running':
                         record.update(state='interrupted', error='previous_launch_interrupted', finished_at=utc_now().isoformat())
                         self.save(record)
+                    if record['state'] == 'succeeded' and not self.target_complete(record, {'targets': record.get('targets')}):
+                        # Preserve the historical attempt; missing current evidence is
+                        # not permission to recollect or to report fresh success.
+                        return {**record, 'state':'failed', 'error':'collection_result_missing', 'reused':True}
                     return {**record, 'reused':True}
                 if record:
                     archive = self.folder/'attempts'/(day+'-'+datetime.now(timezone.utc).strftime('%H%M%S%f')+'.json')
@@ -216,24 +191,28 @@ class DailyLaunch:
                     self.save(record)
                     run = self.runner({**plan,'prior_run':record['display_run']}, progress)
                     record.update(run=run.get('output'), state=run['state'], stage='finished', telegram_state=run.get('telegram_state'), trailing_state=run.get('trailing_state'), scenario_state=run.get('scenario_state'), account_attempted=run.get('account_attempted',False), account_state=run.get('account_state'), account_error=run.get('account_error'))
-                    if 'technical_state' in run:
-                        record['technical_state'] = run['technical_state']
+                    for key in ('technical_state', 'trailing_result', 'scenario_result'):
+                        if key in run:
+                            record[key] = run[key]
                     display = self.usable_run(run.get('output'))
                     if display:
                         record['display_run'] = display
-                        receipt = self.collection_receipt(display, plan['targets'])
-                        dates = (self.checked_run(display).get('data_times') or {}).get('session_dates')
-                        if dates is not None and dates != plan['targets']:
-                            record.update(state='failed', error='target_sessions_not_reached')
-                        elif receipt['status'] != 'complete' and record['state'] == 'succeeded':
-                            record['state'] = 'failed' if receipt['status'] == 'failed' else 'partial'
-                    if run['state'] == 'failed' and not record['error']:
+                    try:
+                        receipt = self.collection_receipt(run.get('output'), plan['targets'])
+                    except (OSError, ValueError, KeyError, TypeError) as exc:
+                        record.update(state='failed', error='target_sessions_not_reached'
+                                      if str(exc) == 'target_sessions_not_reached' else 'collection_result_missing')
+                    else:
+                        record['collection_receipt'] = receipt
+                        record['state'] = {'complete': 'succeeded', 'partial': 'partial', 'failed': 'failed'}[receipt['status']]
+                    if record['state'] == 'failed' and record['error'] != 'target_sessions_not_reached' and run.get('error'):
                         allowed_errors = ('market_authentication_http_403_ip_not_allowed',
                                           'market_http_403_ip_not_allowed',
                                           'market_authentication_http_403',
                                           'market_authentication_http_401',
                                           'market_http_401',
                                           'market_http_403',
+                                          'collection_result_missing',
                                           'market_listing_unavailable',
                                           'market_authentication_unavailable',
                                           'basis_document_changed_review_required',
@@ -242,8 +221,8 @@ class DailyLaunch:
                                           'basis_document_not_current')
                         record['error'] = next((code for code in allowed_errors
                                                 if code in run.get('error','')), 'market_pipeline_failed')
-                    if run['state'] in ('succeeded','partial') and not display:
-                        record.update(state='failed',error='collection_result_missing')
+                    if record['state'] == 'failed' and not record['error']:
+                        record['error'] = 'market_pipeline_failed'
                 except Exception as exc:
                     error = 'market_worker_failed' if str(exc) == 'market_worker_failed' else 'daily_update_unavailable'
                     record.update(state='failed',error=error, error_type=type(exc).__name__, error_frames=error_frames(exc))
@@ -296,54 +275,56 @@ class DailyLaunch:
                 process.wait()
                 if result is None or process.returncode not in (0,1,2):
                     raise RuntimeError('market_worker_failed')
-        if self.accounts:
-            progress({'stage':'accounts'})
-            result['account_attempted'] = True
-            try:
-                from accounts import refresh_account_snapshot
-                account = refresh_account_snapshot(self.root, request_id='daily:'+result['output'])
-                result['account_state'] = account['query_state']
-                result['account_error'] = account.get('reason')
-            except Exception:
-                result['account_state'] = 'failed'
-                result['account_error'] = 'account_refresh_internal_error'
-        if result.get('account_state') == 'failed':
-            result['trailing_state'] = 'unavailable'
-        elif result.get('state') in ('succeeded', 'partial'):
+        # A worker's overall state can include downstream work. C9 alone owns
+        # the collection outcome and admission to saved-input evaluation.
+        result['account_attempted'] = False
+        result['account_state'] = None
+        result['account_error'] = None
+        try:
+            receipt = self.collection_receipt(result.get('output'), plan['targets'])
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            result['state'] = 'failed'
+            if str(exc) == 'target_sessions_not_reached':
+                result['error'] = 'target_sessions_not_reached'
+            elif not result.get('error'):
+                result['error'] = 'collection_result_missing'
+            return result
+        result['state'] = {'complete': 'succeeded', 'partial': 'partial', 'failed': 'failed'}[receipt['status']]
+        if result['state'] in ('succeeded', 'partial'):
             try:
                 from alerts.trailing import refresh_saved
-                refresh_saved(self.root, result['output'], plan['targets'])
+                result['trailing_result'] = refresh_saved(self.root, result['output'], plan['targets'])
                 result['trailing_state'] = 'evaluated'
             except Exception:
                 result['trailing_state'] = 'unavailable'
-        if result.get('state') in ('succeeded', 'partial'):
             try:
                 from scenarios.monitor import refresh_saved as refresh_scenarios
-                scenario = refresh_scenarios(self.root, result['output'], plan['targets'],
-                                             account_failed=result.get('account_state') == 'failed')
+                scenario = refresh_scenarios(self.root, result['output'], plan['targets'])
+                result['scenario_result'] = scenario
                 result['scenario_state'] = 'evaluated' if any(m['active'] for m in scenario['monitors']) else 'not_configured'
             except Exception:
                 result['scenario_state'] = 'unavailable'
-        if result.get('state') in ('succeeded', 'partial'):
             try:
                 from signals.store import evaluate_saved as evaluate_technical
                 result['technical_state'] = evaluate_technical(self.root, plan['targets'])['state']
             except Exception:
                 result['technical_state'] = 'unavailable'
-        if self.accounts and any(result.get(key) == 'evaluated' for key in ('trailing_state', 'scenario_state', 'technical_state')):
             try:
                 from alerts.delivery import dispatch
                 result['telegram_state'] = dispatch(self.root, plan['targets'],
                                                     include_trailing=result.get('trailing_state') == 'evaluated',
-                                                    include_scenarios=result.get('scenario_state') == 'evaluated')['state']
+                                                    include_scenarios=result.get('scenario_state') == 'evaluated',
+                                                    include_technical=result.get('technical_state') == 'evaluated')['state']
             except Exception:
-                # Delivery failure must not change a successful market/account result.
+                # Delivery failure never changes the collection outcome.
                 result['telegram_state'] = 'unavailable'
         return result
 
     def public(self, record):
         result={k:record.get(k) for k in ('day','state','stage','targets','started_at','finished_at','error','reused','manual_retry','telegram_state','trailing_state','scenario_state','account_attempted','account_state','account_error')}
-        if 'technical_state' in record: result['technical_state'] = record['technical_state']
+        for key in ('technical_state', 'trailing_result', 'scenario_result', 'collection_receipt'):
+            if key in record:
+                result[key] = record[key]
         result['attempt_id'] = attempt_id(record)
         result['display_updated'] = False
         displayed, current = record.get('display_run'), record.get('run')

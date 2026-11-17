@@ -1,23 +1,60 @@
 """06:40 scheduling, durable receipts, and manual/scheduled collision tests."""
+import io
 import json
+import tempfile
 import sys
 import threading
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import Mock
+from contextlib import redirect_stdout
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
-import test_daily_launch as fixtures
+import hashlib
+from market.collection_receipts import collection_receipt, ROLE
 from launch.daily import DailyLaunch, plan_for
 from launch.scheduled import run_scheduled, exit_code
+from launch.journal import RunJournal
+import launch.scheduled as scheduled
 
-NOW = fixtures.NOW
+NOW = datetime(2026,9,30,8,tzinfo=timezone.utc)
+
+
+class LaunchFixture:
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name);self.calls=[]
+        self.targets={'KR':'2026-09-29','US':'2026-09-29'}
+        self.plan=lambda now:{'day':now.astimezone(__import__('zoneinfo').ZoneInfo('Asia/Seoul')).date().isoformat(),'cutoff':'2026-09-29','evaluated_at':now.isoformat(),'targets':self.targets}
+        self.gate=DailyLaunch(self.root,self.runner,self.plan)
+    def tearDown(self):self.temp.cleanup()
+    def result(self,name,state='succeeded',targets=None,screen=True):
+        # screen is a legacy fixture argument: False now means no published C9.
+        folder=self.root/'runtime'/name;folder.mkdir(parents=True,exist_ok=True)
+        run={'output':str(folder),'state':state,'stages':{'report':'completed'},'market_source':str(folder/'source')}
+        payload={'run.json':run}
+        if screen:
+            run.update(mode='live', data_times={'session_dates':targets or self.targets},
+                       quality={'markets':{m:{'requested':2,'received':1 if state=='partial' else 2,
+                                              'failed':1 if state=='partial' else 0} for m in ('KR','US')}})
+        hashes={}
+        for file,value in payload.items():
+            body=json.dumps(value).encode();(folder/file).write_bytes(body);hashes[file]=hashlib.sha256(body).hexdigest()
+        if screen:
+            body=json.dumps(collection_receipt(run, hashes['run.json'])).encode()
+            (folder/ROLE).write_bytes(body);hashes[ROLE]=hashlib.sha256(body).hexdigest()
+        (folder/'manifest.json').write_text(json.dumps({'output_hashes':hashes}))
+        (self.root/'runtime/latest.json').write_text(json.dumps({'output':str(folder)}))
+        return run
+    def runner(self,plan,progress):
+        self.calls.append(plan);progress({'stage':'quality'});return self.result('run-'+str(len(self.calls)))
+
+
 
 
 class Scheduled(unittest.TestCase):
     def setUp(self):
-        self.fx = fixtures.Launch()
+        self.fx = LaunchFixture()
         self.fx.setUp()
         self.gate = self.fx.gate
 
@@ -71,9 +108,9 @@ class Scheduled(unittest.TestCase):
         self.assertTrue(self.gate.once(NOW,scheduled=True)['reused'])
         self.assertEqual(len(self.fx.calls),2)
 
-    def test_tampered_screen_not_reused_as_success(self):
+    def test_tampered_collection_run_not_reused_as_success(self):
         result=self.gate.once(NOW)
-        (Path(result['run'])/'priority-review.json').write_text('{}')
+        (Path(result['run'])/'run.json').write_text('{}')
         self.assertFalse(self.gate.once(NOW,scheduled=True)['reused'])
         self.assertEqual(len(self.fx.calls),2)
 
@@ -120,6 +157,91 @@ class Scheduled(unittest.TestCase):
         self.assertEqual(winter['targets']['US'],'2026-12-01')
         self.assertEqual(weekend['targets']['US'],'2026-10-02')
 
+
+class Diagnostics(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root/'config.json').write_text(json.dumps({
+            'engine': str(self.root), 'mother': str(self.root),
+        }), encoding='utf-8')
+        self.stdout = io.StringIO()
+        for target, value in (('launch.scheduled.ROOT', self.root),
+                              ('launch.scheduled.getpass.getuser', Mock(return_value='fixture-user'))):
+            scope = patch(target, value)
+            scope.start()
+            self.addCleanup(scope.stop)
+
+    def test_check_uses_synthetic_config_without_collection(self):
+        plan = {'day': '2026-09-30', 'cutoff': '2026-09-29',
+                'targets': {'KR': '2026-09-29', 'US': '2026-09-29'}}
+        with patch.object(sys, 'argv', ['scheduled_market.py', '--check']), \
+                patch.object(scheduled, 'plan_for', return_value=plan), \
+                patch.object(scheduled, 'DailyLaunch') as daily, \
+                patch('market.daily.run') as collect, redirect_stdout(self.stdout):
+            self.assertEqual(scheduled.main(), 0)
+        daily.assert_not_called()
+        collect.assert_not_called()
+        result = json.loads(self.stdout.getvalue())
+        self.assertEqual(result['state'], 'check_passed')
+        self.assertEqual(result['user'], 'fixture-user')
+        self.assertEqual(result['network_calls'], 0)
+        self.assertEqual(result['plan'], plan)
+        self.assertEqual(json.loads((self.root/'runtime/morning-schedule/latest-check.json').read_text()), result)
+        self.assertFalse((self.root/'runtime/dashboard-daily').exists())
+
+    def test_scheduled_entry_uses_no_account_query_and_preserves_partial_exit(self):
+        record = {'state': 'partial', 'run': None, 'scheduled_day': '2026-09-30'}
+        with patch.object(sys, 'argv', ['scheduled_market.py']), \
+                patch.object(scheduled, 'DailyLaunch') as daily, redirect_stdout(self.stdout):
+            daily.return_value.once.return_value = record
+            daily.return_value.public.return_value = {'state': 'partial', 'account_attempted': False}
+            self.assertEqual(scheduled.main(), 2)
+        daily.assert_called_once_with(self.root, accounts=False)
+        daily.return_value.once.assert_called_once()
+        self.assertTrue(daily.return_value.once.call_args.kwargs['scheduled'])
+        result = json.loads(self.stdout.getvalue())
+        self.assertEqual(result['state'], 'partial')
+        self.assertFalse(result['account_attempted'])
+
+    def test_check_failure_records_type_without_secret_text(self):
+        secret = 'synthetic-token-and-account-never-log'
+        with patch.object(sys, 'argv', ['scheduled_market.py', '--check']), \
+                patch.object(scheduled, 'plan_for', side_effect=ValueError(secret)), \
+                patch.object(scheduled, 'DailyLaunch') as daily, redirect_stdout(self.stdout):
+            self.assertEqual(scheduled.main(), 1)
+        daily.assert_not_called()
+        result = json.loads(self.stdout.getvalue())
+        self.assertEqual(result['error'], 'scheduled_job_failed')
+        self.assertEqual(result['error_type'], 'ValueError')
+        self.assertTrue(result['error_frames'])
+        for path in (self.root/'runtime/morning-schedule').glob('*.json'):
+            self.assertNotIn(secret, path.read_text())
+        self.assertNotIn(secret, self.stdout.getvalue())
+
+    def test_journal_exit_interrupt_and_secret_exception_remain_distinct(self):
+        instant = '2026-09-30T00:00:00+00:00'
+        secret = 'synthetic-credential-never-log'
+        with patch('launch.journal.timestamp', return_value=instant):
+            for code, state in ((0, 'succeeded'), (2, 'partial'), (1, 'failed')):
+                with RunJournal(self.root, 'fixture', interval=60) as journal:
+                    journal.complete(code)
+                result = json.loads(journal.path.read_text())
+                self.assertEqual(result['state'], state)
+                self.assertEqual(result['exit_code'], code)
+                self.assertEqual(result['finished_at'], instant)
+                self.assertFalse(journal.thread.is_alive())
+            for exception, state in ((KeyboardInterrupt(secret), 'interrupted'),
+                                     (RuntimeError(secret), 'failed'), (SystemExit(2), 'partial')):
+                with self.assertRaises(type(exception)):
+                    with RunJournal(self.root, 'fixture', interval=60) as journal:
+                        raise exception
+                result = json.loads(journal.path.read_text())
+                self.assertEqual(result['state'], state)
+                self.assertEqual(result['finished_at'], instant)
+                self.assertNotIn(secret, journal.path.read_text())
+                self.assertFalse(journal.thread.is_alive())
 
 if __name__ == '__main__':
     unittest.main()

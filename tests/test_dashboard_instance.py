@@ -57,59 +57,66 @@ class Instance(unittest.TestCase):
         self.assertEqual(len(files), 1)
         self.assertLessEqual(files[0].stat().st_size, 65536)
 
-    def test_desktop_pipe_reuses_real_detached_server_and_restart_keeps_file_count(self):
+    def test_loopback_server_reuse_checks_identity_without_launching(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        requests = []
+        identity = dict(workspace=str(self.root), instance_id='fixture', protocol=1,
+                        state='ready', offline=False)
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *_):
+                pass
+            def do_GET(self):
+                requests.append(self.path)
+                payload = json.dumps(identity).encode()
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+            def do_POST(self):
+                raise AssertionError('saved_reopen_must_not_launch')
+        with patch('socket.getfqdn', return_value='127.0.0.1'), patch('urllib.request.getproxies', return_value={}):
+            server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            url = 'http://127.0.0.1:' + str(server.server_port)
+            instance.publish(self.root, dict(self.value, url=url, dashboard_url=url, instance_id='fixture'))
+            try:
+                for arguments in ([], ['--saved-accounts']):
+                    result = instance.reuse(self.root, instance.existing(self.root), arguments)
+                    self.assertTrue(result['reused'])
+                    self.assertEqual(result['url'], url)
+                self.assertEqual(requests, ['/api/instance', '/api/instance'])
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(2)
+            self.assertFalse(thread.is_alive())
+
+    def test_desktop_fixture_command_closes_handshake_pipe(self):
+        import io
         import subprocess
         from contextlib import redirect_stdout
-        import io
-        scripts = Path(__file__).resolve().parents[1]/'scripts'
-        (self.root/'scripts').mkdir()
-        code = ("import sys, json\nfrom pathlib import Path\n"
-                + "sys.path.insert(0, " + repr(str(scripts)) + ")\n"
-                + "import launch.startup as s\ns.ROOT = Path(" + repr(str(self.root)) + ")\n"
-                + "def builder(arguments, ready, state):\n"
-                + "    value=json.loads((s.ROOT/'runtime/dashboard/server.json').read_text())\n"
-                + "    s.atomic_write(ready, json.dumps({'url': value['url']}))\n"
-                + "s.run_dashboard=builder\ns.main()\n")
-        (self.root/'scripts/dashboard_startup.py').write_text(code, encoding='utf-8')
-        processes = []
-        real_popen = subprocess.Popen
-        def popen(*args, **kwargs):
-            child = real_popen(*args, **kwargs)
-            processes.append(child)
-            return child
-        def files():
-            return sorted(str(p.relative_to(self.root)) for p in (self.root/'runtime').rglob('*') if p.is_file())
-        try:
-            with patch.object(startup, 'ROOT', self.root), patch.object(subprocess, 'Popen', side_effect=popen), redirect_stdout(io.StringIO()):
-                first = startup.desktop(['--offline', '--saved-accounts'])
-                for _ in range(8):
-                    result = startup.desktop(['--offline', '--saved-accounts'])
-                    self.assertTrue(result['reused'])
-                    self.assertEqual(result['pid'], first['pid'])
-                    processes[-1].wait(timeout=5)
-                before = files()
-                self.assertEqual(len(before), 3)  # lease, current shell, current data readiness
-                processes[0].terminate()
-                processes[0].wait(timeout=5)
-                second = startup.desktop(['--offline', '--saved-accounts'])
-                self.assertNotEqual(second['pid'], first['pid'])
-                # Ensure the second builder has published before comparing files.
-                for _ in range(100):
-                    if (self.root/'runtime/dashboard/data-ready.json').exists():
-                        break
-                    import time
-                    time.sleep(.01)
-                self.assertEqual(files(), before)
-        finally:
-            for child in processes:
-                if child.poll() is None:
-                    child.terminate()
-                child.wait(timeout=5)
+        from types import SimpleNamespace
+        value = dict(url=self.value['url'], reused=True)
+        stream = io.BytesIO((json.dumps(value) + '\n').encode())
+        child = SimpleNamespace(stdout=stream)
+        with patch.object(startup, 'ROOT', self.root), patch.object(subprocess, 'Popen', return_value=child) as popen, redirect_stdout(io.StringIO()):
+            result = startup.desktop(['--offline', '--saved-accounts'])
+        self.assertEqual(result, value)
+        self.assertTrue(stream.closed)
+        command = popen.call_args.args[0]
+        self.assertEqual(command[1:], ['-B', '-u', str(self.root/'scripts/dashboard_startup.py'),
+                                      '--detached', '--offline', '--saved-accounts'])
+        self.assertEqual(popen.call_args.kwargs['cwd'], self.root)
+        self.assertEqual(popen.call_args.kwargs['creationflags'], getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        self.assertEqual(popen.call_args.kwargs['stdin'], subprocess.DEVNULL)
 
     def test_daily_flags_reach_existing_server_but_saved_reopen_is_read_only(self):
         with patch.object(instance, 'request', return_value={'workspace':str(self.root),'token':'local'}) as request:
-            instance.reuse(self.root, self.value, ['--saved-accounts'])
-            request.assert_not_called()
+            for arguments in ([], ['--saved-accounts']):
+                instance.reuse(self.root, self.value, arguments)
+                request.assert_not_called()
             instance.reuse(self.root, self.value, ['--daily-refresh','--retry-market','--saved-accounts'])
             self.assertEqual(request.call_args.args[1:3], ('/api/launch',dict(daily_refresh=True,retry_market=True,saved_accounts=True)))
 
@@ -127,8 +134,9 @@ class Instance(unittest.TestCase):
         logs = list((self.root/'runtime/dashboard').glob('launch-error.log'))
         self.assertEqual(len(logs), 1)
         diagnostic = logs[0].read_text(encoding='utf-8')
-        self.assertIn('Traceback (most recent call last)', diagnostic)
-        self.assertIn('ValueError: reuse_fixture_failure', diagnostic)
+        self.assertEqual(json.loads(diagnostic)['error_type'], 'ValueError')
+        self.assertTrue(json.loads(diagnostic)['error_frames'])
+        self.assertNotIn('reuse_fixture_failure', diagnostic)
         self.assertFalse(list((self.root/'runtime/dashboard').glob('*.json')))
 
     def test_pythonw_lease_failure_uses_explicit_receipt_log_before_serve(self):
@@ -144,7 +152,9 @@ class Instance(unittest.TestCase):
                         stream.close()
         build.assert_not_called()
         self.assertFalse(receipt.exists())
-        self.assertIn('OSError: lease_fixture_failure', (self.root/'runtime/dashboard/launch-error.log').read_text(encoding='utf-8'))
+        diagnostic = (self.root/'runtime/dashboard/launch-error.log').read_text(encoding='utf-8')
+        self.assertEqual(json.loads(diagnostic)['error_type'], 'OSError')
+        self.assertNotIn('lease_fixture_failure', diagnostic)
 
     def test_slow_loading_probe_waits_for_existing_owner(self):
         loading = dict(self.value,state='loading',dashboard_url=None)
@@ -161,9 +171,26 @@ class Instance(unittest.TestCase):
 
     def test_stale_or_other_workspace_receipt_is_not_reused(self):
         instance.publish(self.root, {**self.value,'instance_id':'current'})
-        with patch.object(instance,'request',return_value={'workspace':str(self.root),'instance_id':'old','protocol':1}):
-            with self.assertRaisesRegex(ValueError, 'incompatible'):
-                instance.existing(self.root)
+        for status in ({'workspace':str(self.root),'instance_id':'old','protocol':1},
+                       {'workspace':str(self.root/'other'),'instance_id':'current','protocol':1},
+                       {'workspace':str(self.root),'instance_id':'current','protocol':2}):
+            with self.subTest(status=status), patch.object(instance,'request',return_value=status):
+                with self.assertRaisesRegex(ValueError, 'incompatible'):
+                    instance.existing(self.root)
+
+    def test_offline_refresh_and_retry_without_refresh_are_rejected(self):
+        with patch.object(instance, 'request') as request:
+            with self.assertRaisesRegex(ValueError, 'offline_cannot_refresh'):
+                instance.reuse(self.root, dict(self.value, offline=True), ['--offline', '--daily-refresh'])
+            with self.assertRaisesRegex(ValueError, 'retry_market_requires'):
+                instance.reuse(self.root, self.value, ['--retry-market'])
+        request.assert_not_called()
+
+    def test_daily_without_saved_accounts_still_requests_saved_observations(self):
+        with patch.object(instance, 'request', return_value={'workspace':str(self.root),'token':'local'}) as request:
+            instance.reuse(self.root, self.value, ['--daily-refresh'])
+        self.assertEqual(request.call_args.args[1:3], ('/api/launch',dict(daily_refresh=True,retry_market=False,saved_accounts=True)))
+
 
 
 if __name__ == '__main__':

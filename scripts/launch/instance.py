@@ -73,8 +73,13 @@ def reuse(root, value, arguments):
         raise ValueError('dashboard_startup_failed: inspect the latest startup log and retry after it exits')
     daily = '--daily-refresh' in arguments
     retry = '--retry-market' in arguments
-    # A saved-only reopen is read-only. A daily launch must still reach the daily gate.
-    if daily or retry or (not offline and '--saved-accounts' not in arguments):
+    if retry and not daily:
+        raise ValueError('retry_market_requires_daily_refresh')
+    if offline and (daily or retry):
+        raise ValueError('offline_cannot_refresh_market')
+    # Reopening only observes the existing instance, including without legacy flags.
+    # Only an explicit market request reaches the daily gate.
+    if daily:
         for _ in range(480):
             if value['state'] == 'ready':
                 break
@@ -93,6 +98,6 @@ def reuse(root, value, arguments):
         if health.get('workspace') != str(Path(root)):
             raise ValueError('incompatible_dashboard')
         request(value['dashboard_url'], '/api/launch',
-                dict(daily_refresh=daily, retry_market=retry, saved_accounts='--saved-accounts' in arguments), health['token'])
+                dict(daily_refresh=daily, retry_market=retry, saved_accounts=True), health['token'])
     return dict(url=value.get('dashboard_url') or value['url'], state=value['state'],
                 output=None, reused=True, pid=value['pid'])
