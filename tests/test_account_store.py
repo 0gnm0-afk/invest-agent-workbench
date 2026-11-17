@@ -1,6 +1,7 @@
 from contextlib import closing
 import json
 from pathlib import Path
+import sqlite3
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -9,8 +10,7 @@ from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from accounts.store import AccountStore, hydrate
-from accounts import account_view, publish_receipt
-from atomic_io import load_bom
+from accounts import account_view
 
 
 class AccountStoreTests(unittest.TestCase):
@@ -76,47 +76,69 @@ class AccountStoreTests(unittest.TestCase):
 
     def test_memory_views_and_repeated_refresh_request_do_not_create_receipt_files(self):
         from accounts import refresh_account_snapshot
+        receipt = self.complete(self.store.begin('nh', 'one-observation', 'mcp'))
         calls = []
-        def read(path, inputs, continuation=None):
-            calls.append(path)
-            return ({'Output_0':[{'acct_type':'01','acct_no':'SYNTH_ACCOUNT_254aa248acb4'}], 'rsp_msg':'OK'} if path=='/n2/acctinfo'
-                    else {'Output_0':{},'Output_1':[],'rsp_msg':'OK'}), {'cts_flag':'N'}
-        (self.root/'config.json').write_text(json.dumps({'mother':str(self.root/'mother')}))
-        with patch.dict(sys.modules, {'nh_api':SimpleNamespace(read=read,NHError=RuntimeError)}):
+        def read(*args, **kwargs):
+            calls.append(args)
+            self.fail('Unexpected broker read')
+        with closing(sqlite3.connect(self.store.path)) as db:
+            counts = [db.execute('SELECT count(*) FROM '+t).fetchone()[0] for t in ('account_objects','account_queries')]
+            schema = db.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY name').fetchall()
+        def file_contents():
+            # SQLite mode=ro may create a shared-memory index and an empty WAL.
+            # Existing WAL transactions, the DB and all exports remain protected.
+            result = {}
+            for path in self.root.rglob('*'):
+                if not path.is_file() or path.name.endswith('-shm'):
+                    continue
+                content = path.read_bytes()
+                if not content and path.name.endswith('-wal'):
+                    continue
+                result[str(path.relative_to(self.root))] = content
+            return result
+        files = file_contents()
+        original = self.store.path.read_bytes()
+        with patch.dict(sys.modules, {'nh_api':SimpleNamespace(read=read,NHError=RuntimeError)}), \
+             patch.object(AccountStore, 'begin', side_effect=AssertionError('Unexpected begin')), \
+             patch.object(AccountStore, 'save', side_effect=AssertionError('Unexpected save')):
             first = refresh_account_snapshot(self.root, request_id='one-observation')
-            with closing(self.store.connect()) as db:
-                counts = [db.execute('SELECT count(*) FROM '+t).fetchone()[0] for t in ('account_objects','account_queries')]
-            files = sorted(str(p.relative_to(self.root)) for p in self.root.rglob('*') if p.is_file())
+            self.assertEqual(first['as_of'], self.snapshot['as_of'])
+            self.assertEqual(first['attempted_at'], receipt['attempted_at'])
             for _ in range(20):
                 again = refresh_account_snapshot(self.root, request_id='one-observation')
                 saved = account_view({'mother':str(self.root/'mother')}, self.root/'runtime/dashboard/view',
                                      refresh=False, persist_receipt=False)
                 self.assertEqual(saved['accounts'], first['accounts'])
                 self.assertEqual(again['as_of'], first['as_of'])
-            with closing(self.store.connect()) as db:
+            with closing(sqlite3.connect(self.store.path.as_uri() + '?mode=ro', uri=True)) as db:
                 self.assertEqual([db.execute('SELECT count(*) FROM '+t).fetchone()[0] for t in ('account_objects','account_queries')], counts)
-            self.assertEqual(sorted(str(p.relative_to(self.root)) for p in self.root.rglob('*') if p.is_file()), files)
-        self.assertEqual(len(calls), 3)
+                self.assertEqual(db.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY name').fetchall(), schema)
+            self.assertEqual(file_contents(), files)
+        self.assertEqual(self.store.path.read_bytes(), original)
+        self.assertEqual(calls, [])
         self.assertFalse((self.root/'runtime/dashboard').exists())
 
-    def test_api_adapter_and_saved_dashboard_write_references(self):
-        calls=[]
-        def read(path, inputs, continuation=None):
-            calls.append(path)
-            return ({'Output_0':[{'acct_type':'01','acct_no':'SYNTH_ACCOUNT_254aa248acb4'}],'rsp_msg':'조회가 완료되었습니다.'} if path=='/n2/acctinfo'
-                    else {'Output_0':{},'Output_1':[],'rsp_msg':'OK'}),{'cts_flag':'N'}
+    def test_legacy_views_keep_saved_observation_without_writing_references(self):
+        receipt = self.complete(self.store.begin('nh', 'session-1', 'mcp'))
+        def read(*args, **kwargs):
+            self.fail('Unexpected broker read')
         modules={'nh_api':SimpleNamespace(read=read,NHError=RuntimeError)}
         outputs=[self.root/'runtime/dashboard'/name for name in ('one','two','three')]
-        for out in outputs:out.mkdir(parents=True)
         config={'mother':str(self.root/'mother')}
-        with patch.dict(sys.modules,modules):
-            first=account_view(config,outputs[0],request_id='daily-1');publish_receipt(outputs[0],first)
-            second=account_view(config,outputs[1],request_id='daily-1');publish_receipt(outputs[1],second)
-            saved=account_view(config,outputs[2],refresh=False);publish_receipt(outputs[2],saved)
-        self.assertEqual(len(calls),3)  # acctinfo + KR/US balances, not three refreshes.
+        with patch.dict(sys.modules,modules), \
+             patch.object(AccountStore, 'begin', side_effect=AssertionError('Unexpected begin')), \
+             patch.object(AccountStore, 'save', side_effect=AssertionError('Unexpected save')):
+            first=account_view(config,outputs[0],request_id='daily-1')
+            second=account_view(config,outputs[1],request_id='daily-1')
+            saved=account_view(config,outputs[2],refresh=False)
         self.assertEqual(first['as_of'],second['as_of']);self.assertEqual(saved['as_of'],first['as_of'])
-        self.assertEqual(load_bom(outputs[2]/'account-view.json')['accounts'],first['accounts'])
-        self.assertNotIn('positions',(outputs[2]/'account-snapshot.private.json').read_text(encoding='utf-8'))
+        self.assertEqual(saved['as_of'], self.snapshot['as_of'])
+        self.assertEqual(saved['attempted_at'], receipt['attempted_at'])
+        self.assertEqual([(a['alias'], a['positions']) for a in saved['accounts']],
+                         [(a['alias'], a['positions']) for a in self.snapshot['accounts']])
+        self.assertEqual(self.store.read(receipt['snapshot_ref']), self.snapshot)
+        self.assertEqual(saved['source_mode'], 'shared_saved')
+        self.assertFalse((self.root/'runtime/dashboard').exists())
 
 
 if __name__ == '__main__':unittest.main()

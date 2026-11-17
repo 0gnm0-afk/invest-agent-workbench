@@ -14,8 +14,7 @@ from accounts.brokers import (body, nh_pages, nh_requests, normalize_nh, normali
                               meritz_next, query_state)
 from accounts.saved import merge_saved
 from accounts.store import AccountStore
-from accounts import collect_balances, account_view, publish_receipt
-from atomic_io import load_bom
+from accounts import account_view
 
 
 STAMP = '2026-11-01T01:00:00+00:00'
@@ -211,17 +210,18 @@ class SavedProviderIntegration(unittest.TestCase):
         self.assertEqual(failed['providers']['meritz']['query_state'],'failed')
         self.assertTrue(self.store.read(self.store.latest('meritz')['snapshot_ref'])['accounts'][0]['holdings_complete'])
 
-    def test_saved_account_view_and_receipt_include_both_without_network(self):
+    def test_saved_account_view_includes_both_without_network_or_exports(self):
         self.complete('nh',normalize_nh(nh_observation()))
         self.complete('meritz',normalize_meritz(meritz_observation()))
-        out=self.root/'runtime/dashboard/synthetic';out.mkdir(parents=True)
+        out=self.root/'runtime/dashboard/synthetic'
         from types import SimpleNamespace
         modules={'nh_api':SimpleNamespace(read=lambda *args:self.fail('Unexpected broker read'),NHError=RuntimeError)}
-        with patch.dict(sys.modules,modules):
+        with patch.dict(sys.modules,modules), \
+             patch.object(AccountStore,'begin',side_effect=AssertionError('Unexpected begin')), \
+             patch.object(AccountStore,'save',side_effect=AssertionError('Unexpected save')):
             view=account_view({'mother':str(self.root/'mother')},out,refresh=False)
-            publish_receipt(out,view)
-        self.assertEqual(len(load_bom(out/'account-snapshot.private.json')['accounts']),2)
-        self.assertEqual(len(load_bom(out/'account-view.json')['accounts']),2)
+        self.assertEqual(len(view['accounts']),2)
+        self.assertFalse(out.parent.exists())
         self.assertEqual(view['providers']['meritz']['as_of'],STAMP)
 
     def test_raw_response_storage_rejects_auth_headers_and_embedded_json(self):
@@ -230,19 +230,27 @@ class SavedProviderIntegration(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'credentials_forbidden'):
                 self.store.save(value)
 
-    def test_failed_nh_refresh_still_keeps_saved_meritz_and_source_times(self):
+    def test_failed_nh_attempt_still_keeps_saved_meritz_and_source_times(self):
         nh=normalize_nh(nh_observation());self.complete('nh',nh)
         self.complete('meritz',normalize_meritz(meritz_observation()))
-        out=self.root/'runtime/dashboard/failed';out.mkdir(parents=True)
+        claim=self.store.begin('nh','failed-session','mcp')
+        failure=self.store.complete('nh','failed-session',claim['lease'],
+            metadata={'query_state':'failed','reason':'synthetic_transport'})
+        out=self.root/'runtime/dashboard/failed'
         from types import SimpleNamespace
-        def fail(*args): raise RuntimeError('synthetic_transport')
-        with patch.dict(sys.modules,{'nh_api':SimpleNamespace(read=fail,NHError=RuntimeError)}):
+        def fail(*args): self.fail('Unexpected broker read')
+        with patch.dict(sys.modules,{'nh_api':SimpleNamespace(read=fail,NHError=RuntimeError)}), \
+             patch.object(AccountStore,'begin',side_effect=AssertionError('Unexpected begin')), \
+             patch.object(AccountStore,'save',side_effect=AssertionError('Unexpected save')):
             result=account_view({'mother':str(self.root/'mother')},out,refresh=True,request_id='fail')
         self.assertEqual(result['query_state'],'partial')
         self.assertEqual(result['providers']['nh']['query_state'],'failed')
+        self.assertEqual(result['providers']['nh']['attempted_at'],failure['attempted_at'])
         self.assertEqual(len(result['accounts']),2)
         self.assertFalse(result['accounts'][0]['holdings_complete'])
         self.assertEqual(result['accounts'][0]['as_of'],STAMP)
+        self.assertEqual(self.store.read(self.store.latest('nh')['snapshot_ref']),nh)
+        self.assertFalse(out.parent.exists())
 
     def test_cli_observation_complete_stores_raw_and_failure_closes_lease(self):
         from accounts import record
