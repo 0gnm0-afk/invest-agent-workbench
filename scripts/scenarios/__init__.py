@@ -40,7 +40,8 @@ def dispatch(service, op, args, origin, principal, session):
             raise Conflict('confirmed_drawing_revision_changed')
         # Only recorded and user-adopted response text enters the deterministic alert.
         responses = list(dict.fromkeys(c['statement'] for c in references if c.get('statement')))
-        # 조 3 뒤 전환 대상: M06 C3 exact adopted-revision drawing reader.
+        # M05 verified this immutable adopted snapshot; register rechecks the
+        # current saved revision through M06 in the monitor's transaction.
         drawing = next(d for d in snap['workspace']['state']['drawings'] if d['id'] == args['drawing_id'])
         mapping = {'low':'lower', 'high':'upper', 'entry':'entry', 'stop':'stop', 'target':'target', 'line':'line'}
         if drawing['kind'] == 'channel':
