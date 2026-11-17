@@ -1,8 +1,58 @@
 """Apply immutable, directly verified Finviz refreshes to exact saved identities."""
 import atomic_io as artifact_io
 from pathlib import Path
-from urllib.parse import urlparse
-from sectors.finviz import parse_alias_quote
+from urllib.parse import parse_qs, urlparse
+from datetime import datetime
+from bs4 import BeautifulSoup
+
+
+def stamp(value):
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        raise ValueError('timezone_required')
+    return dt
+
+
+def classification_age_issue(observed, applied):
+    """Direct taxonomy evidence does not expire; impossible dates still block."""
+    try:
+        return 'future_observation' if stamp(observed) > stamp(applied) else None
+    except (TypeError, ValueError):
+        return 'invalid_classification_timestamp'
+
+
+def classification_freshness(records, applied):
+    dates = [d for r in records for d in
+             [r.get('observed_at'), *r.get('context_observed_at', []),
+              r['classification_as_of']+'T00:00:00+09:00' if r.get('classification_as_of') else None] if d]
+    observed = [r['observed_at'] for r in records if r.get('observed_at')]
+    as_of = [r['classification_as_of'] for r in records if r.get('classification_as_of')]
+    invalid = any(classification_age_issue(d, applied) for d in dates)
+    age = max(((stamp(applied)-stamp(d)).total_seconds()/86400 for d in dates), default=None) if not invalid else None
+    return dict(state='unverified' if invalid or age is None else 'refresh_due' if age > 7 else 'recent',
+                oldest_observed_at=min(observed, key=stamp) if observed and not invalid else None,
+                latest_observed_at=max(observed, key=stamp) if observed and not invalid else None,
+                source_as_of=min(as_of) if as_of else None, max_age_days=age, evaluated_at=applied)
+
+def parse_alias_quote(data, symbol, provider_symbol, exchange):
+    """Accept aliases only when Finviz itself links the exact source ticker/exchange."""
+    soup=BeautifulSoup(data,'html.parser')
+    if not soup.title or not soup.title.get_text().startswith(symbol+' - '):
+        raise ValueError('alias_quote_symbol_unconfirmed')
+    sectors,industries,exchanges,identities=set(),set(),set(),set()
+    for a in soup.select('a[href]'):
+        url=urlparse(a['href'])
+        for f in parse_qs(url.query).get('f',[''])[0].split(','):
+            if f.startswith('sec_'):sectors.add(a.get_text(' ',strip=True))
+            if f.startswith('ind_'):industries.add(a.get_text(' ',strip=True))
+            if f.startswith('exch_'):exchanges.add({'exch_nasd':'NASDAQ','exch_nyse':'NYSE'}.get(f,f))
+        if url.scheme=='https' and url.hostname=='www.google.com' and url.path.startswith('/finance/quote/'):
+            identities.add(url.path.removeprefix('/finance/quote/'))
+    if identities!={provider_symbol+':'+exchange} or exchanges!={exchange}:
+        raise ValueError('alias_quote_identity_unconfirmed')
+    if len(sectors)!=1 or len(industries)!=1:raise ValueError('alias_quote_classification_conflict')
+    return {'symbol':symbol,'provider_symbol':provider_symbol,'exchange':exchange,
+            'sector':sectors.pop(),'industry':industries.pop(),'name':soup.title.get_text()}
 
 
 def apply(groups, snapshot, checked, inputs, applied, age_issue, allowed_sectors):

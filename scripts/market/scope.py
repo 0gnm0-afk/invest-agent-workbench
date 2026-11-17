@@ -1,6 +1,6 @@
 """Explicit user-approved market exclusions; never infer consent from a failure."""
 from workbench_paths import ROOT, SCRIPTS
-from invest_agent.trading.runner import atomic_write
+from atomic_io import atomic_write
 from invest_agent.trading.store import instance_lock
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -149,24 +149,3 @@ def refresh_coverage(snapshot):
                      not any(str(r.get('market_cap_quality','')).startswith('unavailable') for r in active)))
     cov['active_scope_complete'] = bool(complete)
     cov['market_wide'] = False if snapshot.get('scope_exclusions') else cov['market_wide']
-
-
-def analysis_pending(screen, snapshot):
-    """Short, otherwise valid new histories are analysis waiting, not missing quotes."""
-    series = {(r['market'],r['symbol']):r for r in snapshot['series']}
-    rows = []
-    for row in screen['rows']:
-        reasons = row.get('universe',{}).get('universe_rejection_reasons',[])
-        item = series.get((row['market'],row['symbol']))
-        allowed = {'unavailable_insufficient_liquidity_bars', 'market_cap_below_minimum'}
-        if (row['state'] != 'unavailable' or 'unavailable_insufficient_liquidity_bars' not in reasons
-                or not set(reasons) <= allowed or not item):
-            continue
-        days = [b['date'] for b in item['bars']]
-        sessions = snapshot['sessions'][row['market']]
-        if not days or not 0 < len(days) < 20 or days[-1] != sessions[-1] or days != [d for d in sessions if d >= days[0]]:
-            continue
-        rows.append({'market':row['market'],'symbol':row['symbol'],'reason':'new_listing_history_accumulating',
-                     'available_bars':len(days),'liquidity_required_bars':20,
-                     'known_rejections':[r for r in reasons if r != 'unavailable_insufficient_liquidity_bars']})
-    return rows

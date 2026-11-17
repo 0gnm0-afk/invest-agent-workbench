@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import atomic_io
-import sectors.adr as adr
+import market.adr as adr
 import market.providers.nh_auth as nh_market_auth
 import market.providers.nh_client as market
 import nh_auth
@@ -39,7 +39,7 @@ class AtomicPublication(unittest.TestCase):
 
     @unittest.skipUnless(os.name=='nt','Windows sharing semantics')
     def test_real_windows_read_handle_reproduces_old_error_and_new_writer_recovers(self):
-        from invest_agent.trading.runner import atomic_write as old_write
+        from atomic_io import atomic_write as old_write
         kernel=ctypes.WinDLL('kernel32',use_last_error=True)
         kernel.CreateFileW.argtypes=[ctypes.c_wchar_p,ctypes.c_uint32,ctypes.c_uint32,ctypes.c_void_p,ctypes.c_uint32,ctypes.c_uint32,ctypes.c_void_p]
         kernel.CreateFileW.restype=ctypes.c_void_p

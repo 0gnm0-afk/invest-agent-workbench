@@ -3,7 +3,6 @@ import argparse
 import base64
 from contextlib import closing
 from datetime import datetime, timezone
-from decimal import Decimal
 import json
 import os
 from pathlib import Path
@@ -15,7 +14,7 @@ import urllib.request
 from urllib.parse import quote
 
 from invest_agent.trading.report_format import money
-from invest_agent.trading.runner import atomic_write
+from atomic_io import atomic_write
 from invest_agent.trading.store import instance_lock, BusyError
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -80,51 +79,6 @@ def api(config, method, payload):
     return result['result']
 
 
-def action_text(action, currency):
-    from invest_agent.trading.report_format import money
-    kind = action.get('kind'); step = action.get('step')
-    label = '최종 손절 예외' if kind == 'stop' else ('매수' if kind == 'buy' else '매도') + (f' {step}차' if step else '')
-    ratio = action.get('ratio'); quantity = action.get('planned_quantity')
-    size = []
-    if ratio is not None:
-        ratio_text = format(Decimal(str(ratio)), 'f')
-        size.append((ratio_text.rstrip('0').rstrip('.') if '.' in ratio_text else ratio_text) + '%')
-    if quantity is not None: size.append(f'예정 {quantity}주')
-    text = label + (' · ' + ' / '.join(size) if size else '')
-    if action.get('confirmation_price') is not None:
-        text += ' · 확인가격 ' + money(action['confirmation_price'], currency) + ' ' + currency
-    trigger = action.get('trigger') or {}
-    labels = {'gt':'초과', 'gte':'이상', 'lt':'미만', 'lte':'이하', 'cross_above':'상향 돌파', 'cross_below':'하향 이탈'}
-    if trigger.get('kind') == 'price': text += ' ' + labels.get(trigger.get('comparator', trigger.get('operator')), '판정 미정')
-    elif trigger.get('kind') in ('trailing', 'ma5', 'ma10'):
-        text += ' · ' + {'trailing':'트레일링선', 'ma5':'5일선', 'ma10':'10일선'}[trigger['kind']]
-        text += ' ' + labels.get(trigger.get('comparator', trigger.get('operator')), '판정 미정')
-    else: text += ' · 조건은 사용자 판단 필요'
-    return text
-
-
-def context_text(event):
-    lines = []
-    for context in event.get('cycle_context', []):
-        lines.append('승인한 매매 사이클 · 다음 계획 (' + {'buying':'매수 진행', 'holding':'보유', 'selling':'매도 진행'}.get(context['phase'], context['phase']) + ')')
-        for action in context['actions']:
-            lines.append(action_text(action, event['currency']))
-        lines.append('접근 경고와 계획 조건 충족은 다를 수 있습니다. 계획 비율·예정 수량이며 실제 체결은 별도 기록합니다.')
-    return '\n'.join(lines)
-
-
-def cycle_message(event):
-    from invest_agent.trading.report_format import money
-    return '\n'.join(['🔔 투자에이전트 | 승인 매매 사이클 조건 확인',
-        f"종목: {event.get('name') or event['symbol']} ({event['symbol']} · {event['market']})",
-        f"기준: {event['date']} 최신 완료 거래일 종가",
-        '종가: ' + money(event['close'], event['currency']) + ' ' + event['currency'],
-        '다음 계획: ' + action_text(event['action'], event['currency']),
-        f"승인 계획 v{event['plan_version']} · 조건 충족은 실제 체결이 아닙니다.",
-        '매매 사이클: ' + (event.get('detail_url') or 'PC 투자 대시보드 → 종목별 매매 사이클'),
-        '완료 종가 기준 · 실제 거래 기록 후 단계 변경 · 자동 주문 없음'])
-
-
 def technical_message(event):
     purpose = '매수 검토' if event['purpose'] == 'buy' else '매도 검토'
     combination = '복합 조건' if event['rule_id'] in ('macd_rsi60', 'cci_recovery') else '개별 조건'
@@ -142,12 +96,7 @@ def technical_message(event):
 def message(e):
     if e['kind'] == 'technical':
         return technical_message(e)
-    if e['kind'] == 'trade_cycle':
-        return cycle_message(e)
-    body = base_message(e)
-    if e.get('cycle_context'):
-        body += '\n\n' + context_text(e)
-    return body
+    return base_message(e)
 
 
 def base_message(e):
@@ -211,8 +160,6 @@ def current_detail_link(root, event):
     try:
         origin=json.loads((Path(root)/'runtime/dashboard/analysis-endpoint.json').read_text(encoding='utf-8-sig')).get('url')
         if not isinstance(origin,str) or not re.fullmatch(r'http://127\.0\.0\.1:[0-9]{1,5}',origin): return event.get('detail_url')
-        if event.get('kind') == 'trade_cycle':
-            return origin+'/#cycle?id='+quote(event['cycle_id'],safe='')
         route=origin+'/#stock/'+quote(event['market'],safe='')+'/'+quote(event['symbol'],safe='')
         return route+('?analysis='+quote(event['case_id'],safe='') if event.get('case_id') else '')
     except (OSError,ValueError,KeyError): return event.get('detail_url')
@@ -245,7 +192,7 @@ def scenario_message(e):
     return '\n'.join(lines)
 
 
-def dispatch(root=ROOT, targets=None, *, config=None, sender=None, include_trailing=True, include_scenarios=True, include_cycles=True, include_technical=True):
+def dispatch(root=ROOT, targets=None, *, config=None, sender=None, include_trailing=True, include_scenarios=True, include_technical=True):
     root = Path(root)
     folder = root/'runtime/telegram-delivery'
     folder.mkdir(parents=True, exist_ok=True)
@@ -267,15 +214,7 @@ def dispatch(root=ROOT, targets=None, *, config=None, sender=None, include_trail
                 if (event.get('test_record') or not monitor or not monitor['active'] or monitor.get('issue')
                         or monitor['revision'] != event['monitor_revision']):
                     continue
-                # Preserve the monitor's account scope when matching an approved cycle.
                 events.append({**event, 'account':monitor.get('account_alias')})
-            from cycles.alerts import delivery_events
-            cycle_context_failed = False
-            try:
-                events = delivery_events(root, events, targets, include_cycles=include_cycles)
-            except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
-                # A bad new cycle record must not suppress an existing price warning.
-                cycle_context_failed = True
             technical_failed = False
             if include_technical:
                 try:
@@ -318,7 +257,6 @@ def dispatch(root=ROOT, targets=None, *, config=None, sender=None, include_trail
                         break  # Avoid flooding a failing/rate-limited endpoint.
                 counts = dict(db.execute('SELECT state,count(*) FROM deliveries GROUP BY state'))
             result = dict(state='attention' if counts.get('failed') or counts.get('unknown') else 'ready', counts=counts, checked_at=utc())
-            if cycle_context_failed: result['trade_cycle_state'] = 'unavailable'
             if technical_failed: result['technical_state'] = 'unavailable'
             atomic_write(folder/'latest.json', json.dumps(result))
             return result

@@ -244,7 +244,7 @@ def apply_groups(groups, snapshot, inputs, applied=None):
         proof = [{'source':'Stock Analysis','url':doc['url'],'path':doc['path'],
             'sha256':doc['sha256'],'observed_at':doc['observed_at'],'identity_method':value['identity_method']}
             for doc in found['documents']]
-        from sectors.observation import classification_freshness
+        from market.classification_refresh import classification_freshness
         freshness = classification_freshness(proof, applied or max(p['observed_at'] for p in proof))
         result.append({**row, 'group_state':'matched', 'group_code':value['sector'], 'group_name':value['sector'],
             'group_taxonomy':'US_SECTOR_STOCKANALYSIS', 'reason':None, 'industry':value['industry'],

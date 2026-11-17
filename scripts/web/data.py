@@ -1,4 +1,4 @@
-"""Read-only view adapter. No market collection. Cached sector and downtrend projections on verified saved inputs."""
+"""Read-only view adapter over verified saved market inputs. No market collection."""
 import json
 import sys
 import unicodedata
@@ -25,79 +25,26 @@ def saved_market(root=ROOT, run_dir=None):
     result = {'state': run['state'], 'run_id': run_dir.name, 'processing_state': run['processing_state'],
               'data_times': run.get('data_times', {}), 'quality': run.get('quality', {}),
               'approved_exclusions': run.get('approved_exclusions', []), 'analysis_pending': run.get('analysis_pending', []),
-              'finished_at': run.get('finished_at'), 'coverage': run.get('sector_coverage'),
-              'entries': [], 'sectors': [], 'stocks': {}, 'errors': [], 'session_dates': {},
-              'candidate_count': None, 'entry_candidate_count': None}
-    review = {'markets': {'KR': {'entries': []}, 'US': {'entries': []}}}
-    observation = {}
-    try:
-        review = artifact('priority-review.json')
-        if review.get('schema') != 4 or review.get('strategy') != 'pdf_momentum':
-            raise ValueError('current_pdf_watch_schema_required')
-        result.update(session_dates=review['session_dates'], candidate_count=review['candidate_count'],
-                      entry_candidate_count=review['entry_candidate_count'], limitations=review['limitations'])
-        result['entries'] = [e for m in review['markets'].values() for e in m['entries']]
-    except (OSError, ValueError, KeyError) as exc:
-        result['errors'].append('screening_unavailable:' + type(exc).__name__)
-    try:
-        signals = artifact('sectors/signals.json')
-        observation = artifact('sectors/observation.json')
-        observations = {(s['market'], s['group_code']): s for s in observation['observations']}
-        for s in signals['sectors']:
-            o = observations.get((s['market'], s['group_code']), {})
-            result['sectors'].append({k: s.get(k) for k in
-                ('market', 'group_code', 'group_name', 'current', 'history', 'leaders', 'weak_contributors',
-                 'transitions', 'candidates', 'state_since')} | {'horizons': o.get('horizons', {})})
-    except (OSError, ValueError, KeyError) as exc:
-        result['errors'].append('sectors_unavailable:' + type(exc).__name__)
+              'finished_at': run.get('finished_at'),
+              'stocks': {}, 'errors': [], 'session_dates': {}}
     source = Path(run['market_source']) / 'snapshot.json'
     from market.price_files import PriceFiles
     from market.prices import PriceStore,default_path
     source_hash = manifest['input_hashes'].get(str(source))
     snapshot = PriceFiles(PriceStore(default_path(root))).market_snapshot(source,source_hash)
-    # Keep all saved symbols accessible from sector leaders and actual holdings.
+    # Keep all saved symbols accessible through search and actual holdings.
     for s in snapshot['series']:
         result['stocks'][s['market'] + ':' + s['symbol']] = {
             k: s.get(k) for k in ('market', 'symbol', 'name', 'currency', 'provider', 'price_basis',
                                   'collected_at', 'bars', 'bars_ref', *SEARCH_METADATA_FIELDS)}
-    from sectors.focus import cached, screen_groups
-    from invest_agent.trading.store import BusyError
-    try:
-        groups = artifact('sectors/groups.json')
-        config = load(root/'config.json') if (root/'config.json').exists() else {}
-        if config.get('sector_manifest'):
-            from sectors.projection import cached as project
-            projected = project(root, run_dir, config, source.parent, observation, review, snapshot=snapshot)
-            groups = projected['groups']
-            horizons = {(s['market'],s['group_code']):s['horizons'] for s in projected['observation']['observations']}
-            result['sectors'] = [dict(s,horizons=horizons[(s['market'],s['group_code'])]) for s in projected['signals']['sectors']]
-            result['coverage'] = projected['observation']['coverage']
-            result['classification_policy'] = projected['policy']
-        result['focus'] = cached(root, run_dir, snapshot, groups, result['sectors'], source_hash, config.get('sector_focus'))
-    except (OSError, ValueError, KeyError, TypeError, BusyError) as exc:
-        result['focus'] = {'items': [], 'markets': {}, 'error': '자료 또는 캐시 확인 필요 ('+type(exc).__name__+')'}
+    result['session_dates'] = run.get('data_times', {}).get('session_dates') or {
+        market: sessions[-1] for market, sessions in snapshot.get('sessions', {}).items() if sessions}
     # Describe incomplete inputs separately from successful calculation stages.
     result['quality_gaps'] = {
         'price_history': result['quality'].get('quality_issue_series'),
         'market_cap': (sum(str(row.get('market_cap_quality', '')).startswith('unavailable')
                            for row in snapshot['universe']) if 'universe' in snapshot else None),
-        'classification': (sum(c['unmatched'] for c in result['coverage'].values())
-                           if result.get('coverage') and all('unmatched' in c for c in result['coverage'].values()) else None),
     }
-    downtrend_options = load(root/'config.json').get('priority_review',{}).get('watchlist',{}).get('downtrend_approach') if (root/'config.json').exists() else None
-    if downtrend_options is not None and review.get('schema') == 4:
-        from screening.projection import cached as trendline_projection
-        try:
-            projected_review = trendline_projection(root,artifact('screen.json'),snapshot,review,source_hash,downtrend_options)
-            result['entries'] = [e for g in projected_review['markets'].values() for e in g['entries']]
-            result['candidate_count'] = projected_review['candidate_count']
-            result['entry_candidate_count'] = projected_review['entry_candidate_count']
-            result['trendline_policy'] = projected_review['config']['trendline_policy']
-            result['downtrend_settings'] = projected_review['config']['watchlist']['downtrend_approach']
-        except (OSError, ValueError, KeyError, TypeError, BusyError) as exc:
-            result['errors'].append('recent_trendlines_unavailable:' + type(exc).__name__)
-            result.update(entries=[],candidate_count=None,entry_candidate_count=None,trendline_policy='unavailable')
-    result['screen_groups'] = screen_groups(result['entries'], snapshot.get('universe', []))
     return result
 
 
@@ -173,8 +120,7 @@ def build(root=ROOT, refresh=True, *, market_run=None, daily_update=None, persis
         market = saved_market(root, market_run)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         market = {'state': 'unavailable', 'errors': ['saved_market_unavailable:' + type(exc).__name__],
-                  'entries': [], 'sectors': [], 'stocks': {}, 'session_dates': {}, 'quality': {},
-                  'candidate_count': None, 'entry_candidate_count': None}
+                  'stocks': {}, 'session_dates': {}, 'quality': {}}
     accounts = account_view(config, output, refresh, persist_receipt=persist_view)
     if (daily_update or {}).get('account_state') == 'failed':
         accounts.update(query_state='failed', reason='daily_account_refresh_failed')

@@ -132,7 +132,7 @@ class Persistence(unittest.TestCase):
         self.store.record(watch,self.evaluation,close=100)
         messages=[]
         options=dict(config={'enabled_at':'2000-01-01','chat':'fixture'}, sender=lambda text: (messages.append(text) or {'message_id':1}),
-                     include_trailing=False,include_scenarios=False,include_cycles=False)
+                     include_trailing=False,include_scenarios=False)
         dispatch(self.root,self.targets,**options)
         dispatch(self.root,self.targets,**options)
         self.assertEqual(len(messages),1)
@@ -170,7 +170,7 @@ class Persistence(unittest.TestCase):
             calls.append(text)
             raise DeliveryError('unknown','fixture_timeout')
         options=dict(config={'enabled_at':'2000-01-01','chat':'fixture'},sender=sender,
-                     include_trailing=False,include_scenarios=False,include_cycles=False)
+                     include_trailing=False,include_scenarios=False)
         dispatch(self.root,self.targets,**options);dispatch(self.root,self.targets,**options)
         self.assertEqual(len(calls),1)
 

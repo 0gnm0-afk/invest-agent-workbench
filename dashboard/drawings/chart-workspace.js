@@ -1,7 +1,7 @@
 window.WorkbenchWorkspace = (() => {
   const clone=x=>JSON.parse(JSON.stringify(x));
   const safe=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  let active=null,candleSnapEnabled=true,autoTrendlinesVisible=true;
+  let active=null,candleSnapEnabled=true;
   async function closeActive() {
     if(!active)return true;
     const current=active;
@@ -52,7 +52,7 @@ window.WorkbenchWorkspace = (() => {
       <button data-tool="riskreward" title="손익비: 진입·손절·목표 3점" aria-label="손익비"><span aria-hidden="true">▥</span><span>손익비</span></button>
       <span class="tool-divider"></span><button data-action="snap" aria-pressed="${candleSnapEnabled}" class="${candleSnapEnabled?'selected':''}" title="봉의 시가·고가·저가·종가 중 가까운 가격과 실제 발생일에 붙습니다. Alt로 자유 선택.">봉 스냅</button><button data-action="undo" title="Ctrl+Z">실행 취소</button><button data-action="redo" title="Ctrl+Shift+Z">다시 실행</button><button data-action="delete">선택 삭제</button><button data-action="save" class="primary">저장</button>
       <span class="save-state" role="status" aria-live="polite"></span></div>
-      <p class="drawing-hint"></p><div class="chart-controls"><label><input type="checkbox" class="auto-trendlines-toggle" ${autoTrendlinesVisible?'checked':''}>자동 추세선 · trendln · 최근 일봉 60개</label><span class="auto-trendlines-status" role="status"></span><details class="averages-control"><summary>이동평균선 · ${frameName} SMA</summary><div class="average-list"></div><form class="average-add"><label>추가 기간 <input name="period" type="number" min="1" max="500" value="30" required aria-label="추가 SMA 기간"></label><button>추가</button><small>1~500봉 · 최대 7개 · 종가 기준</small></form><p class="average-status" role="status"></p></details><details class="drawing-control"><summary>작도 목록·정밀 편집 <span class="drawing-count"></span></summary><div class="drawing-list"></div><div class="drawing-editor"></div></details></div>`;
+      <p class="drawing-hint"></p><div class="chart-controls"><details class="averages-control"><summary>이동평균선 · ${frameName} SMA</summary><div class="average-list"></div><form class="average-add"><label>추가 기간 <input name="period" type="number" min="1" max="500" value="30" required aria-label="추가 SMA 기간"></label><button>추가</button><small>1~500봉 · 최대 7개 · 종가 기준</small></form><p class="average-status" role="status"></p></details><details class="drawing-control"><summary>작도 목록·정밀 편집 <span class="drawing-count"></span></summary><div class="drawing-list"></div><div class="drawing-editor"></div></details></div>`;
     const q=s=>host.querySelector(s),qa=s=>host.querySelectorAll(s);
     if(!packet.drawing_kinds?.includes('riskreward')){q('[data-tool="riskreward"]').disabled=true;q('[data-tool="riskreward"]').title='손익비 저장을 사용하려면 대시보드를 새로 실행하세요.';}
     const pointLabel=(d,i)=>d.kind==='riskreward'?['진입','손절','목표'][i]:d.kind==='channel'?['기준선 시작','기준선 끝','평행선'][i]:'점 '+(i+1);
@@ -156,21 +156,6 @@ window.WorkbenchWorkspace = (() => {
     function beforeUnload(e){if(dirty()){e.preventDefault();e.returnValue='';}}
     chart=WorkbenchCharts.create(plot,[{type:'candles',currency,label:currency,options:{title:''},data:bars.map(b=>({time:b.date,open:b.open,high:b.high,low:b.low,close:b.close})).concat(drawingBars.slice(bars.length).map(b=>({time:b.date})))},{type:'volume',label:'거래량',pane:1,data:bars.map(b=>({time:b.date,...(b.volume==null?{}:{value:b.volume}),color:b.close>=b.open?'#298463':'#994653'})),options:{title:'',priceFormat:{type:'volume'}}}],{height:plot.clientHeight,headroom:.12,lastBars:126,onReady:(c,refs)=>{price=refs[0].ref;}});
     chart.timeScale().setVisibleLogicalRange({from:Math.max(0,bars.length-126),to:bars.length-1+25});
-    const autoRefs=[];
-    const autoPacket=stock.auto_trendlines;
-    for(const line of autoPacket?.lines||[]) {
-      const broken=!!line.first_close_break_date,color=broken?'#9aa4b2':line.side==='resistance'?'#e7a448':'#36b8a1';
-      for(const [segment,style] of [['solid',0],['extension',2]]) {
-        if(!line[segment]?.length)continue;
-        const ref=chart.addSeries(LightweightCharts.LineSeries,{color,lineWidth:2,lineStyle:style,title:'',visible:autoTrendlinesVisible,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false,autoscaleInfoProvider:()=>null,priceFormat:{type:'custom',minMove:currency==='KRW'?1:.01,formatter:v=>WorkbenchFormat.money(v,currency)}});
-        ref.setData(line[segment]);autoRefs.push(ref);
-      }
-    }
-    const autoStatus=q('.auto-trendlines-status');
-    autoStatus.textContent=!autoPacket?'자동 추세선 자료 없음 · 서버 재실행 필요':autoPacket.state==='invalid_history'?'가격 자료 확인 필요':autoPacket.lines.length?autoPacket.lines.map(l=>(l.screening?'선별 저항':l.side==='resistance'?'저항':'지지')+' '+WorkbenchFormat.money(l.value_latest,currency)+(l.first_close_break_date?' · 최근 종가 돌파/이탈':'')+' · '+l.touch_count+'개 고저점 회귀').join(' / '):'조건에 맞는 고저점 3개 이상의 회귀선 없음';
-    autoStatus.title='일봉 기준 · '+(autoPacket?.as_of||'미확인')+' · trendln 0.1.18 · 확정 고점/저점 회귀 · 점선은 오른쪽 연장'+(frame==='1d'?'':' · 주/월봉에는 각 봉의 마지막 실제 거래일 값 투영');
-    autoStatus.title+=(autoPacket?.lines||[]).map(l=>'\n'+(l.side==='resistance'?'저항':'지지')+' 회귀점: '+(l.fit_points||[]).map(p=>p.date+' '+WorkbenchFormat.money(p.price,currency)).join(', ')).join('');
-    q('.auto-trendlines-toggle').onchange=e=>{autoTrendlinesVisible=e.target.checked;autoRefs.forEach(ref=>ref.applyOptions({visible:autoTrendlinesVisible}));};
     const detachPan=WorkbenchCharts.enableFreePan(plot,chart,price);
     const detachHoldings=window.WorkbenchTrailing?.attachStock({series:price,host:plot.parentElement,market,symbol,currency,isCurrent});
     const detachEvents=window.WorkbenchEvents?.attach({chart,series:price,plot,bars:drawingBars,frame,packet:stock.price_events});

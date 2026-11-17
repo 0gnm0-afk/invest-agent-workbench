@@ -6,10 +6,8 @@ import argparse
 import asyncio
 import json
 import os
-import sqlite3
 import sys
 from collections.abc import Sequence
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 DEFAULT_MCP_URL = "https://korea-stock-analyzer-mcp-production.up.railway.app/mcp"
@@ -59,34 +57,6 @@ def _parser() -> argparse.ArgumentParser:
         default=os.getenv("KOREA_STOCK_MCP_URL", DEFAULT_MCP_URL),
         help="Streamable HTTP endpoint for Korea Stock MCP",
     )
-    for name in ("run", "resume", "status"):
-        command = subcommands.add_parser(name, help=f"{name.capitalize()} the persistent morning pipeline")
-        command.add_argument("--instance", type=Path, required=True)
-        if name == "run":
-            inputs = command.add_mutually_exclusive_group(required=True)
-            inputs.add_argument("--fixture", type=Path, help="Explicit synthetic input")
-            inputs.add_argument("--screen-config", type=Path, help="Read-only public market screening configuration")
-            inputs.add_argument("--account-snapshot", type=Path, help="Synthetic or exported account JSON; no broker API calls")
-            inputs.add_argument("--morning-config", type=Path, help="One report combining market, holdings and sourced valuation inputs")
-            command.add_argument("--refresh", action="store_true", help="Create a new morning revision and recollect rather than reuse today's matching run")
-            command.add_argument("--mode", choices=("morning",), default="morning")
-            command.add_argument("--markets", nargs="+", choices=("KR", "US"), default=["KR", "US"])
-            command.add_argument("--report-date", default=datetime.now(timezone(timedelta(hours=9))).date().isoformat())
-        else:
-            command.add_argument("run_id", nargs="?" if name == "status" else None)
-        if name != "status":
-            command.add_argument("--stop-after", choices=("snapshot", "summary", "market", "portfolio", "valuation"), help="Stop safely at a checkpoint to exercise resume")
-        else:
-            command.add_argument("--json", action="store_true", help="Status is always machine-readable JSON")
-    plan=subcommands.add_parser("plan",help="Record user plans and local tranche events; never submit orders")
-    actions=plan.add_subparsers(dest="plan_action",required=True)
-    for name in ("record","event","status","policy-event","policy-status"):
-        action=actions.add_parser(name)
-        action.add_argument("--instance",type=Path,required=True)
-        if name in ("status", "policy-status"):
-            action.add_argument("plan_id",nargs="?")
-        else:
-            action.add_argument("--input",type=Path,required=True)
     backup=subcommands.add_parser('backup',help='Archive and verify the instance DB and referenced artifacts')
     backup.add_argument('--instance',type=Path,required=True)
     restore=subcommands.add_parser('restore',help='Verify an archive and restore to a new directory only')
@@ -126,58 +96,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         except Exception as exc:  # noqa: BLE001 -- Boundary records failures and isolates optional provider/component errors.
             print(json.dumps({'error':str(exc),'type':type(exc).__name__},ensure_ascii=False),file=sys.stderr)
-            return 1
-    if args.command=="plan":
-        from .trading.plans import PlanLedger
-        from .trading.runner import writable_store
-        try:
-            if args.plan_action in ("status", "policy-status") and not (args.instance/"state.sqlite3").is_file():
-                raise ValueError("No instance database")
-            with writable_store(args.instance.resolve()) as store:
-                ledger=PlanLedger(store)
-                if args.plan_action in ("policy-event", "policy-status"):
-                    from .trading.risk_ledger import RiskLedger
-                    policy = RiskLedger(store)
-                    if args.plan_action == "policy-event":
-                        result = policy.execute_command(json.loads(args.input.read_text(encoding="utf-8-sig")))
-                    else:
-                        result = {"spec_version": "R1-R4/1.0", "authority": "local_user_plan_no_orders",
-                                  "positions": policy.entities("position"), "monitors": policy.entities("monitor"),
-                                  "sell_plans": policy.entities("sell_plan"), "candidates": policy.entities("candidate"),
-                                  "buy_plans": policy.entities("buy_plan"), "strategy_groups": policy.entities("strategy"),
-                                  "risk_configs": policy.entities("risk_config"), "equity_snapshots": policy.entities("equity_snapshot"),
-                                  "audit": policy.audit()}
-                elif args.plan_action=="status":
-                    result=ledger.status(args.plan_id) if args.plan_id else {"plans":ledger.list_plans()}
-                else:
-                    data=json.loads(args.input.read_text(encoding="utf-8-sig"))
-                    result=ledger.record(data) if args.plan_action=="record" else ledger.record_event(data)
-            print(json.dumps(result,ensure_ascii=False,indent=2))
-            return 0
-        except (ValueError,KeyError,TypeError,OSError,RuntimeError,sqlite3.Error) as exc:
-            print(json.dumps({"error":str(exc),"type":type(exc).__name__},ensure_ascii=False),file=sys.stderr)
-            return 1
-    if args.command in ("run", "resume", "status"):
-        from .trading.runner import PipelineRunner
-        try:
-            runner = PipelineRunner(args.instance)
-            if args.command == "run":
-                if args.refresh and not args.morning_config:
-                    raise ValueError("--refresh is only supported with --morning-config")
-                result = (runner.run_morning(args.morning_config,args.report_date,args.stop_after,args.refresh) if args.morning_config else
-                          runner.run_account(args.account_snapshot,args.report_date,args.stop_after) if args.account_snapshot else
-                          runner.run_market(args.screen_config, args.report_date, args.stop_after) if args.screen_config
-                          else runner.run(args.fixture, args.report_date, args.markets, args.stop_after))
-            elif args.command == "resume":
-                result = runner.resume(args.run_id, args.stop_after)
-            else:
-                result = runner.status(args.run_id)
-            print(json.dumps(result, ensure_ascii=False, indent=2))
-            if result.get('backup',{}).get('state')=='unavailable':
-                return 2  # Report/run state remains separate from backup failure.
-            return 0 if args.command == "status" or result["state"] == "succeeded" else (2 if result["state"] in ("interrupted", "partial") else 1)
-        except (ValueError, OSError, RuntimeError, KeyError, sqlite3.Error) as exc:
-            print(json.dumps({"error": str(exc), "type": type(exc).__name__}, ensure_ascii=False), file=sys.stderr)
             return 1
     if args.command == "fetch-data":
         payload = asyncio.run(_fetch_data(args))

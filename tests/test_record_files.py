@@ -10,8 +10,11 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import atomic_io
-import market.daily as daily
-from launch.daily import DailyLaunch
+# pandas probes WMI/registry through platform.machine on Windows. This
+# synthetic suite needs only the pinned AMD64 ABI, never host metadata.
+with patch("platform.machine", return_value="AMD64"):
+    import market.daily as daily
+    from launch.daily import DailyLaunch
 from market.prices import PriceStore
 from records.files import MARKER, publish_thin, compact_run
 from records.prices import completed_weeks_v1
@@ -60,7 +63,9 @@ class RecordFileIntegrationTests(unittest.TestCase):
         context.update(daily_bars=self.bars, weekly_bars=completed_weeks_v1(self.bars, self.bars[-1]['date']))
         self.values = {
             'run.json': {'state': 'partial', 'processing_state': 'completed_with_exceptions',
-                         'finished_at': '2026-10-16T22:00:00+00:00', 'market_source': str(self.source.parent)},
+                         'finished_at': '2026-10-16T22:00:00+00:00', 'market_source': str(self.source.parent),
+                         'mode': 'replay', 'quality': {'markets': {m: {'requested': 1, 'received': 1, 'failed': 0} for m in ('KR', 'US')}},
+                         'data_times': {'session_dates': {'KR': '2026-10-16', 'US': '2026-10-16'}}},
             'screen.json': {'rows': [{'market': 'US', 'symbol': 'AAA', 'technical_context': context}]},
             'priority-review.json': {'schema': 4, 'candidate_count': 1},
             'quality.json': {'data_complete': False, 'memo': '원문 보존'},
@@ -200,8 +205,7 @@ class RecordFileIntegrationTests(unittest.TestCase):
         latest = self.root / 'runtime/latest.json'
         prior = b'{"output":"previous-saved-run","state":"partial"}'
         latest.write_bytes(prior)
-        with patch.object(daily, 'ROOT', self.root), patch.object(daily, 'code_hashes', return_value={}), \
-             patch.object(daily, 'seed_check', side_effect=ValueError('fixture invalid seed')), \
+        with patch.object(daily, 'ROOT', self.root), patch.object(daily, 'code_hashes', side_effect=ValueError('fixture invalid inputs')), \
              patch.object(daily, 'collect') as collector, \
              patch('records.store.publish_run', side_effect=OSError('fixture record write failed')):
             with self.assertRaisesRegex(OSError, 'fixture record write failed'):

@@ -131,7 +131,7 @@ class TossMarketPipelineTests(unittest.TestCase):
         self.assertIn('HELD', {row['symbol'] for row in result['series']})
 
     def test_callback_rejects_session_change_and_old_yahoo_seed_before_auth(self):
-        from invest_agent.trading.morning import CollectorUnavailableError
+        from market.toss_collection import CollectorUnavailableError
         self.calendar.side_effect = [self.days + ['2026-09-14'], self.days]
         with patch('market.providers.toss_client.TossMarketClient') as client:
             callback = h.make_collector(self.root)

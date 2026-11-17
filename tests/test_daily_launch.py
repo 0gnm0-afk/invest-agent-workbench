@@ -39,7 +39,10 @@ class Launch(unittest.TestCase):
         folder=self.root/'runtime'/name;folder.mkdir(parents=True,exist_ok=True)
         run={'output':str(folder),'state':state,'stages':{'report':'completed'},'market_source':str(folder/'source')}
         payload={'run.json':run}
-        if screen:payload['priority-review.json']={'session_dates':targets or self.targets}
+        if screen:
+            run.update(mode='live', data_times={'session_dates':targets or self.targets},
+                       quality={'markets':{m:{'requested':2,'received':1 if state=='partial' else 2,
+                                              'failed':1 if state=='partial' else 0} for m in ('KR','US')}})
         hashes={}
         for file,value in payload.items():
             body=json.dumps(value).encode();(folder/file).write_bytes(body);hashes[file]=hashlib.sha256(body).hexdigest()
@@ -47,7 +50,7 @@ class Launch(unittest.TestCase):
         (self.root/'runtime/latest.json').write_text(json.dumps({'output':str(folder)}))
         return run
     def runner(self,plan,progress):
-        self.calls.append(plan);progress({'stage':'stock_screen'});return self.result('run-'+str(len(self.calls)))
+        self.calls.append(plan);progress({'stage':'quality'});return self.result('run-'+str(len(self.calls)))
     def test_receipt_retries_temporary_windows_file_lock(self):
         from launch.daily import atomic_write
         with patch('launch.daily.atomic_write',side_effect=[PermissionError(),None]) as writer:
@@ -57,17 +60,6 @@ class Launch(unittest.TestCase):
     def test_first_executes_second_and_new_gate_reuse(self):
         a=self.gate.once(NOW);b=self.gate.once(NOW);c=DailyLaunch(self.root,self.runner,self.plan).once(NOW)
         self.assertFalse(a['reused']);self.assertTrue(b['reused']);self.assertTrue(c['reused']);self.assertEqual(len(self.calls),1)
-    def test_cycle_state_survives_receipt_publication_and_reuse(self):
-        self.assertNotIn('trade_cycle_state', self.gate.once(NOW))
-        for state in ('evaluated', 'deferred', 'unavailable'):
-            with self.subTest(state=state):
-                self.gate.runner = lambda plan, progress: {**self.result('cycle-'+state), 'trade_cycle_state':state}
-                result = self.gate.once(NOW, retry=True)
-                persisted = self.gate.read(self.plan(NOW)['day'])
-                self.assertEqual(result['trade_cycle_state'], state)
-                self.assertEqual(persisted['trade_cycle_state'], state)
-                self.assertEqual(self.gate.public(persisted)['trade_cycle_state'], state)
-                self.assertEqual(self.gate.once(NOW)['trade_cycle_state'], state)
     def test_next_kst_day_runs_once(self):
         self.gate.once(NOW);self.gate.once(datetime(2026,9,30,16,tzinfo=timezone.utc));self.assertEqual(len(self.calls),2)
     def test_explicit_retry_only_archives_receipt(self):
@@ -119,7 +111,7 @@ class Launch(unittest.TestCase):
         a=self.gate.once(NOW);self.assertEqual(a['state'],'failed');self.assertEqual(a['error'],'target_sessions_not_reached')
     def test_missing_screen_cannot_claim_success(self):
         self.gate.runner=lambda p,c:self.result('missing',screen=False)
-        self.assertEqual(self.gate.once(NOW)['error'],'screening_result_missing')
+        self.assertEqual(self.gate.once(NOW)['error'],'collection_result_missing')
     def test_hash_tamper_and_outside_run_rejected(self):
         result=self.result('ok');(Path(result['output'])/'run.json').write_text('{}')
         self.assertIsNone(self.gate.usable_run(result['output']))
@@ -153,7 +145,7 @@ class Launch(unittest.TestCase):
     def test_daily_pipeline_prior_seed_not_shadowed_by_latest_file(self):
         import market.daily as daily_market
         prior=self.result('prior')
-        with patch.object(daily_market,'ROOT',self.root), patch.object(daily_market,'code_hashes',return_value={}), patch.object(daily_market,'seed_check',return_value=({},{})), patch.object(daily_market,'collect',side_effect=ValueError('stop_before_network')) as collector:
+        with patch.object(daily_market,'ROOT',self.root), patch.object(daily_market,'code_hashes',return_value={}), patch.object(daily_market,'collect',side_effect=ValueError('stop_before_network')) as collector:
             daily_market.run({'engine':str(self.root)},session_cutoff='2026-09-29',evaluated_at=NOW.isoformat(),prior_result=prior['output'])
         self.assertEqual(collector.call_args.kwargs['prior_source'],prior['market_source'])
         self.assertEqual(collector.call_args.kwargs['session_cutoff'],'2026-09-29')

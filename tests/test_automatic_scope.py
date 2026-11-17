@@ -4,7 +4,7 @@ from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import atomic_io as artifact_io
 import market.scope as a
-from sectors.classification_refresh import refresh_classification_source
+from market.classification_refresh import refresh_classification_source
 import market.scope as m
 
 class AutomaticScopeTests(unittest.TestCase):
@@ -70,7 +70,7 @@ class AutomaticScopeTests(unittest.TestCase):
         import market.repair as repair
         from market.price_files import PriceFiles
         from market.prices import PriceStore
-        from sectors.adr import derive
+        from market.adr import derive
         from test_prices import series
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);source=root/'source';source.mkdir()

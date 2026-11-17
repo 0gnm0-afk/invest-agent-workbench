@@ -9,7 +9,7 @@ from pathlib import Path
 from invest_agent.trading.contracts import digest
 from invest_agent.trading.market import check_bars, validate_profile, usable_tail
 from invest_agent.trading.market_provider import completed_sessions
-from invest_agent.trading.runner import atomic_write
+from atomic_io import atomic_write
 from invest_agent.trading.store import instance_lock
 from market.providers.toss_candles import daily_series
 from launch.daily import capped_sessions
@@ -23,6 +23,11 @@ from records.checkpoints import save_checkpoint
 from atomic_io import read_bytes
 
 COLLECTOR_ID = 'toss_openapi_kr_us_v1'
+
+
+
+class CollectorUnavailableError(RuntimeError):
+    """The required runtime collector is missing or differs from frozen inputs."""
 
 
 def failure_code(exc):
@@ -60,7 +65,6 @@ def collector_version():
 
 
 def make_collector(root):
-    from invest_agent.trading.morning import CollectorUnavailableError
     from market.providers.toss_client import TossMarketClient
     client = None
 

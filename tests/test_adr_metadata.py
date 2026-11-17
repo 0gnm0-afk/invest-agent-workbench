@@ -6,8 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-import sectors.adr as adr
-import sectors.user_classification as user_classification
+import market.adr as adr
 import market.scope as market_scope
 
 ROW={'market':'US','symbol':'ABC','isin_code':'USABC123','listing_exchange_family':'NYSE','security_type':'DEPOSITARY_RECEIPT'}
@@ -86,19 +85,6 @@ class AdrMetadata(unittest.TestCase):
 
 
 class RequestedOtherAndExclusions(unittest.TestCase):
-    def test_new_or_changed_common_only_other_keeps_original_reason(self):
-        policy={'schema':1,'approved_on':'2026-10-04','approval':'old user','records':[],
-            'unmatched_common_stock_other':{'enabled':True,'approved_on':'2026-10-06','approval':'current user',
-            'reasons':['new_listing_classification_not_acquired','classification_not_acquired_for_current_identity']}}
-        for reason in policy['unmatched_common_stock_other']['reasons']:
-            row=dict(market='US',symbol='ABC',isin_code='USABC123',exchange='NYSE',group_state='unmatched',reason=reason)
-            for typ in ['STOCK','DEPOSITARY_RECEIPT']:
-                value=user_classification.apply([row],{'user_classification':policy,'universe':[{**ROW,'security_type':typ}]})[0]
-                self.assertEqual(value['group_state'],'matched' if typ=='STOCK' else 'unmatched')
-                if typ=='STOCK':
-                    self.assertEqual(value['group_name'],'기타');self.assertEqual(value['user_classification_previous'],row)
-                    self.assertEqual(value['evidence'][0]['approved_on'],'2026-10-06')
-
     def test_six_failures_are_excluded_only_for_current_isin(self):
         with patch('market.scope.read_registry',return_value=([],b'')), patch('market.exclusions.read_records',return_value=([],b'')):
             policy=market_scope.load()
@@ -115,7 +101,7 @@ class OfflineAdrBoundary(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);source=root/'source'
             with patch.object(daily,'ROOT',root), patch.object(daily,'code_hashes',return_value={}), \
-                    patch.object(daily,'seed_check',return_value=({},{})), patch.object(daily,'source_check'), \
+                    patch.object(daily,'source_check'), \
                     patch.object(daily.artifact_io,'load',return_value={}), patch.object(daily.artifact_io,'sha',return_value='fixture'), \
                     patch.object(daily.nh_fallback,'recover',return_value=(source,dict(attempted=0,adopted=0,unrecovered=0),{})), \
                     patch.object(daily,'audit',side_effect=ValueError('stop_after_adr_stage')), \

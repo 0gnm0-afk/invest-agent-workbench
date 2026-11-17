@@ -8,7 +8,7 @@ import sys
 import time
 from zoneinfo import ZoneInfo
 from uuid import uuid4
-from atomic_io import load_json_bytes, read_bytes, available
+from atomic_io import load_json_bytes, read_bytes
 
 from invest_agent.trading.market_provider import completed_sessions
 from atomic_io import atomic_write
@@ -79,17 +79,58 @@ class DailyLaunch:
             raise ValueError('run_hash_mismatch')
         return load_json_bytes(run_path)
 
+    def collection_receipt(self, value, targets=None):
+        """Read current collection fields until M03 supplies C9.
+
+        completed is {market: {requested, completed, failed}}; failed is the
+        per-market failure count. Dates and all counts are required, never
+        inferred as a successful empty collection. sha256 pins run.json bytes.
+        """
+        run = self.checked_run(value)
+        if not run or not run.get('market_source'):
+            raise ValueError('collection_result_missing')
+        path = local_runtime_path(value, root=self.root)
+        manifest = load_json_bytes(path/'manifest.json')
+        quality = run.get('quality') or {}
+        counts = quality.get('markets')
+        dates = (run.get('data_times') or {}).get('session_dates')
+        # Older immutable runs keep collection details in their verified quality artifact.
+        if counts is None or dates is None:
+            quality_path = path/'quality.json'
+            expected = manifest['output_hashes'].get('quality.json')
+            if not expected or hashlib.sha256(read_bytes(quality_path)).hexdigest() != expected:
+                raise ValueError('collection_quality_hash_mismatch')
+            saved = load_json_bytes(quality_path)
+            exchanges = saved['exchanges']
+            counts = {market: {field: sum(row[field] for exchange, row in exchanges.items()
+                                         if (exchange == 'KOSPI') == (market == 'KR'))
+                               for field in ('requested', 'received', 'failed')}
+                      for market in ('KR', 'US')}
+            dates = {m: saved['completed_sessions'][m]['last'] for m in ('KR', 'US')}
+        requested_targets = targets or dates
+        completed, failed, statuses = {}, {}, []
+        for market in ('KR', 'US'):
+            row = counts[market]
+            requested, received, missing = (row[k] for k in ('requested', 'received', 'failed'))
+            if any(type(n) is not int or n < 0 for n in (requested, received, missing)) or received + missing != requested:
+                raise ValueError('collection_counts_invalid')
+            datetime.strptime(dates[market], '%Y-%m-%d')
+            completed[market] = {'requested': requested, 'completed': received, 'failed': missing}
+            failed[market] = missing
+            statuses.append('failed' if received == 0 else 'complete'
+                            if received == requested and dates[market] == requested_targets[market] else 'partial')
+        status = max(statuses, key={'complete': 0, 'partial': 1, 'failed': 2}.get)
+        mode = run.get('mode')
+        if mode not in ('live', 'recover', 'replay'):
+            raise ValueError('collection_mode_missing')
+        return {'target_trade_date': dict(requested_targets), 'completed': completed, 'failed': failed,
+                'status': status, 'provenance': {'provider': 'toss', 'run_id': path.name, 'mode': mode},
+                'sha256': manifest['output_hashes']['run.json']}
+
     def usable_run(self, value):
         try:
-            run = self.checked_run(value)
-            if not run or not run.get('market_source'):
-                return None
-            path = local_runtime_path(value, root=self.root)
-            manifest = load_json_bytes(path/'manifest.json')
-            review = path/'priority-review.json'
-            if not available(review) or hashlib.sha256(read_bytes(review)).hexdigest() != manifest['output_hashes'].get('priority-review.json'):
-                return None
-            return str(path.resolve())
+            self.collection_receipt(value)
+            return str(local_runtime_path(value, root=self.root).resolve())
         except (OSError, ValueError, KeyError, TypeError):
             return None
 
@@ -112,15 +153,13 @@ class DailyLaunch:
         return None
 
     def target_complete(self, record, plan):
-        """Only a verified successful screen for both target sessions can be reused."""
+        """Reuse only a verified complete collection for both target sessions."""
         if record.get('state') != 'succeeded' or record.get('targets') != plan['targets']:
             return False
-        run_path = self.usable_run(record.get('run'))
-        if not run_path:
+        try:
+            return self.collection_receipt(record.get('run'), plan['targets'])['status'] == 'complete'
+        except (OSError, ValueError, KeyError, TypeError):
             return False
-        run = self.checked_run(run_path)
-        review = load_json_bytes(Path(run_path)/'priority-review.json')
-        return run.get('state') == 'succeeded' and review.get('session_dates') == plan['targets']
 
     def once(self, now=None, retry=False, expected_attempt=None, *, scheduled=False):
         now = now or utc_now()
@@ -179,14 +218,15 @@ class DailyLaunch:
                     record.update(run=run.get('output'), state=run['state'], stage='finished', telegram_state=run.get('telegram_state'), trailing_state=run.get('trailing_state'), scenario_state=run.get('scenario_state'), account_attempted=run.get('account_attempted',False), account_state=run.get('account_state'), account_error=run.get('account_error'))
                     if 'technical_state' in run:
                         record['technical_state'] = run['technical_state']
-                    if 'trade_cycle_state' in run:
-                        record['trade_cycle_state'] = run['trade_cycle_state']
                     display = self.usable_run(run.get('output'))
                     if display:
                         record['display_run'] = display
-                        review = load_json_bytes(Path(display)/'priority-review.json')
-                        if review.get('session_dates') != plan['targets']:
-                            record.update(state='failed',error='target_sessions_not_reached')
+                        receipt = self.collection_receipt(display, plan['targets'])
+                        dates = (self.checked_run(display).get('data_times') or {}).get('session_dates')
+                        if dates is not None and dates != plan['targets']:
+                            record.update(state='failed', error='target_sessions_not_reached')
+                        elif receipt['status'] != 'complete' and record['state'] == 'succeeded':
+                            record['state'] = 'failed' if receipt['status'] == 'failed' else 'partial'
                     if run['state'] == 'failed' and not record['error']:
                         allowed_errors = ('market_authentication_http_403_ip_not_allowed',
                                           'market_http_403_ip_not_allowed',
@@ -203,7 +243,7 @@ class DailyLaunch:
                         record['error'] = next((code for code in allowed_errors
                                                 if code in run.get('error','')), 'market_pipeline_failed')
                     if run['state'] in ('succeeded','partial') and not display:
-                        record.update(state='failed',error='screening_result_missing')
+                        record.update(state='failed',error='collection_result_missing')
                 except Exception as exc:
                     error = 'market_worker_failed' if str(exc) == 'market_worker_failed' else 'daily_update_unavailable'
                     record.update(state='failed',error=error, error_type=type(exc).__name__, error_frames=error_frames(exc))
@@ -286,26 +326,16 @@ class DailyLaunch:
                 result['scenario_state'] = 'unavailable'
         if result.get('state') in ('succeeded', 'partial'):
             try:
-                from cycles.alerts import refresh_saved as refresh_cycles
-                cycles = refresh_cycles(self.root, result['output'], plan['targets'],
-                                        account_failed=result.get('account_state') == 'failed')
-                if cycles['states']:
-                    result['trade_cycle_state'] = ('evaluated' if any(s['status'] == 'evaluated' for s in cycles['states']) else 'deferred')
-            except Exception:
-                result['trade_cycle_state'] = 'unavailable'
-        if result.get('state') in ('succeeded', 'partial'):
-            try:
                 from signals.store import evaluate_saved as evaluate_technical
                 result['technical_state'] = evaluate_technical(self.root, plan['targets'])['state']
             except Exception:
                 result['technical_state'] = 'unavailable'
-        if self.accounts and any(result.get(key) == 'evaluated' for key in ('trailing_state', 'scenario_state', 'trade_cycle_state', 'technical_state')):
+        if self.accounts and any(result.get(key) == 'evaluated' for key in ('trailing_state', 'scenario_state', 'technical_state')):
             try:
                 from alerts.delivery import dispatch
                 result['telegram_state'] = dispatch(self.root, plan['targets'],
                                                     include_trailing=result.get('trailing_state') == 'evaluated',
-                                                    include_scenarios=result.get('scenario_state') == 'evaluated',
-                                                    **({'include_cycles':result['trade_cycle_state'] == 'evaluated'} if 'trade_cycle_state' in result else {}))['state']
+                                                    include_scenarios=result.get('scenario_state') == 'evaluated')['state']
             except Exception:
                 # Delivery failure must not change a successful market/account result.
                 result['telegram_state'] = 'unavailable'
@@ -314,7 +344,6 @@ class DailyLaunch:
     def public(self, record):
         result={k:record.get(k) for k in ('day','state','stage','targets','started_at','finished_at','error','reused','manual_retry','telegram_state','trailing_state','scenario_state','account_attempted','account_state','account_error')}
         if 'technical_state' in record: result['technical_state'] = record['technical_state']
-        if 'trade_cycle_state' in record: result['trade_cycle_state'] = record['trade_cycle_state']
         result['attempt_id'] = attempt_id(record)
         result['display_updated'] = False
         displayed, current = record.get('display_run'), record.get('run')

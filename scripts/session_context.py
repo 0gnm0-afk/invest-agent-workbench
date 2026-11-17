@@ -17,43 +17,11 @@ def _read(path, query, args=()):
 
 
 def _payloads(path, table, where='', args=(), limit=50):
-    allowed = {'analysis_cases', 'analysis_items', 'scenario_monitors', 'scenario_monitor_events', 'trade_cycles'}
+    allowed = {'analysis_cases', 'analysis_items', 'scenario_monitors', 'scenario_monitor_events'}
     if table not in allowed:
         raise ValueError('unsupported_context_table')
     rows = _read(path, 'SELECT payload FROM ' + table + ' ' + where + ' ORDER BY rowid DESC LIMIT ?', (*args, limit))
     return [json.loads(row['payload']) for row in rows]
-
-
-def _cycles(path, stock_key, offset, limit):
-    page = {'total': 0, 'offset': offset, 'next_offset': None}
-    if not path.is_file():
-        return [], page
-    with closing(sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True)) as db:
-        db.execute('BEGIN')
-        if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='trade_cycles'").fetchone():
-            return [], page
-        page['total'] = db.execute('SELECT count(*) FROM trade_cycles WHERE stock_key=?', (stock_key,)).fetchone()[0]
-        if offset + limit < page['total']:
-            page['next_offset'] = offset + limit
-        rows = db.execute('SELECT id FROM trade_cycles WHERE stock_key=? ORDER BY rowid DESC LIMIT ? OFFSET ?',
-                          (stock_key, limit, offset)).fetchall()
-        from cycles.ledger import TradeCycleStore
-        summaries = []
-        for (cycle_id,) in rows:
-            cycle = TradeCycleStore._read(db, cycle_id)
-            adopted = cycle['adopted']
-            summaries.append({
-                'cycle_id': cycle_id, 'stock_key': cycle['stock_key'], 'revision': cycle['revision'],
-                'draft_version': cycle['draft_version'], 'created_at': cycle['created_at'],
-                'draft_title': cycle['draft']['plan']['title'],
-                'adopted': None if adopted is None else {
-                    'version': adopted['version'], 'combination_id': adopted['combination_id'],
-                    'adopted_at': adopted['adopted_at'], 'title': adopted['plan']['title']},
-                'fill_count': len(cycle['fills']), 'state': cycle['state'], 'next_steps': cycle['next_steps'],
-                'verified': True, 'view': 'current_summary',
-                'full_record': {'tool': 'analysis_cycle_read', 'arguments': {'cycle_id': cycle_id}},
-            })
-    return summaries, page
 
 
 def saved_context(stock_key, *, root=ROOT, offset=0, limit=30):
@@ -98,11 +66,6 @@ def saved_context(stock_key, *, root=ROOT, offset=0, limit=30):
         result['signals'] = _payloads(db, 'scenario_monitor_events', "WHERE json_extract(payload,'$.stock_key')=?", (stock_key,), 30)
     except (sqlite3.Error, ValueError, KeyError) as exc:
         result['errors'].append({'component': 'saved_analysis', 'error_type': type(exc).__name__})
-    result['cycles'] = []
-    try:
-        result['cycles'], result['cycles_page'] = _cycles(db, stock_key, offset, limit)
-    except (sqlite3.Error, ValueError, KeyError) as exc:
-        result['errors'].append({'component': 'cycles', 'error_type': type(exc).__name__})
     try:
         market, symbol = stock_key.split(':', 1)
         prices = root / 'runtime/ohlcv.sqlite3'
@@ -119,5 +82,5 @@ def saved_context(stock_key, *, root=ROOT, offset=0, limit=30):
     except (ImportError, sqlite3.Error, ValueError) as exc:
         result['errors'].append({'component': 'technical_signals', 'error_type': type(exc).__name__})
     result['account_note'] = 'Historical accounts are not current balances. Use official broker read tools when current balances are needed.'
-    result['found'] = bool(result.get('cases') or result.get('prices') or result.get('cycles'))
+    result['found'] = bool(result.get('cases') or result.get('prices'))
     return result

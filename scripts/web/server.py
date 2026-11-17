@@ -74,7 +74,7 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
             except ValueError:
                 return self.send(b'{"error":"invalid_timeframe"}', status=400)
             if path == '/health':
-                return self.send(json.dumps({'app': 'invest-workbench', 'token': token, 'analysis_protocol': 1, 'price_events_protocol': 1, 'pivot_rule': 'weekly-swing-2', 'collaboration_protocol': 1, 'scenario_monitor_protocol': 1, 'trade_cycle_protocol': 1, 'report_reading_protocol': 2, 'offline': offline, 'workspace': str(ROOT)}).encode(), cookie=self.headers.get('Sec-Fetch-Site') == 'same-origin')
+                return self.send(json.dumps({'app': 'invest-workbench', 'token': token, 'analysis_protocol': 1, 'price_events_protocol': 1, 'pivot_rule': 'weekly-swing-2', 'collaboration_protocol': 1, 'scenario_monitor_protocol': 1, 'report_reading_protocol': 2, 'offline': offline, 'workspace': str(ROOT)}).encode(), cookie=self.headers.get('Sec-Fetch-Site') == 'same-origin')
             if path == '/api/daily-update':
                 return self.send(json.dumps(daily_status() if daily_status else {'enabled':False}, ensure_ascii=False).encode('utf-8'))
             if path == '/api/market-exclusions':
@@ -139,11 +139,6 @@ def handler_for(data, stocks, assets, token, workspace_path=None, *, views=None,
                 value = histories.view(stocks[key], frame)
                 daily = value if frame == '1d' else histories.view(stocks[key], '1d')
                 value['price_events'] = price_events(daily, financials.read(key))
-                from screening.trendlines import overlay
-                entry = next((e for e in data.get('market',{}).get('entries',[]) if e['market']+':'+e['symbol']==key),{})
-                signals = entry.get('route_signals',{})
-                line = signals.get('downtrend_approach',{}).get('trendline') or signals.get('sperandeo',{}).get('resistance_trendline')
-                value['auto_trendlines'] = overlay(daily['bars'],value['bars'],screening_line=line)
                 return self.send(json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8'))
             if path.startswith('/api/stock/'):
                 key = urllib.parse.unquote(path[len('/api/stock/'):])

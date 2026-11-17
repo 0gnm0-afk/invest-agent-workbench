@@ -272,7 +272,7 @@ class WorkspaceStore:
 
 
 def moving_averages(stock, periods):
-    from invest_agent.trading.momentum_entry import sma
+    from statistics import mean
     if len(periods) > 7 or any(type(n) is not int or not 1 <= n <= 500 for n in periods):
         raise ValueError('invalid_period')
     bars = stock.get('bars', [])
@@ -282,6 +282,6 @@ def moving_averages(stock, periods):
         for i, bar in enumerate(bars):
             window = bars[max(0, i + 1 - n):i + 1]
             valid = len(window) == n and all(type(b.get('close')) in (int, float) and math.isfinite(b['close']) for b in window)
-            data.append({'time': bar['date'], **({'value': sma(bars, n, i + 1)} if valid else {})})
+            data.append({'time': bar['date'], **({'value': mean(b['close'] for b in window)} if valid else {})})
         result[str(n)] = data
     return result

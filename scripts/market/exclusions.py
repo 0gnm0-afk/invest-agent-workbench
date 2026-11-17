@@ -16,7 +16,7 @@ import threading
 import time
 from uuid import uuid4
 
-from invest_agent.trading.runner import atomic_write
+from atomic_io import atomic_write
 from invest_agent.trading.store import instance_lock, BusyError
 
 from workbench_paths import ROOT

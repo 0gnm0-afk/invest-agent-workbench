@@ -8,12 +8,12 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import atomic_io
-from market.daily import seed_check
 from records.classification import BASELINE, BASELINE_INPUTS, REFRESH_AUTHORITIES, REFRESH_INPUTS, migrate
 from records.store import RecordStore
-from sectors.basis import CONTRACT, FAQ_URL, load_basis
-from sectors.classification_refresh import apply
-from sectors.observation import age_issue
+CONTRACT = "toss_daily_faq_observed_20260925"
+FAQ_URL = "https://openapi.tossinvest.com/openapi-docs/faq.md"
+from market.classification_refresh import apply
+from market.classification_refresh import classification_age_issue as age_issue
 
 
 class ClassificationRecordsTests(unittest.TestCase):
@@ -96,9 +96,8 @@ class ClassificationRecordsTests(unittest.TestCase):
             path.unlink()
         self.assertEqual([r['state'] for r in migrate(self.root)], ['existing'] * 7)
         self.assertTrue(atomic_io.available(self.basis))
-        self.assertEqual(seed_check(self.settings)[0]['schema'], 1)
-        self.assertEqual(load_basis(self.basis.parent, atomic_io.checked, atomic_io.load, {},
-                                    self.applied, age_issue)['contract'], CONTRACT)
+        self.assertEqual(atomic_io.checked_saved(self.settings['sector_manifest'], self.settings['sector_manifest_sha256'])['schema'], 1)
+        self.assertEqual(atomic_io.load(self.basis)['contract'], CONTRACT)
         self.assertEqual(apply([], {'classification_refresh': self.reference}, atomic_io.checked,
                                {}, self.applied, age_issue, []), [])
         self.assertIsNone(self.store.lookup(self.runtime / 'source/identity.json'))

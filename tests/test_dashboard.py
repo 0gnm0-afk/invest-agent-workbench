@@ -36,10 +36,11 @@ class StoredData(unittest.TestCase):
         connection.close()
         self.run = self.root / 'runtime/run'
         self.source = self.root / 'runtime/source/snapshot.json'
-        d.write(self.source, {'series': [{'market': 'US', 'symbol': 'ABC', 'bars': []}]})
+        d.write(self.source, {'sessions': {'US': ['2026-09-24']},
+                              'series': [{'market': 'US', 'symbol': 'ABC', 'bars': []}]})
         d.write(self.root / 'runtime/latest.json', {'output': str(self.run), 'state': 'failed'})
         files = {
-            'run.json': {'state': 'failed', 'processing_state': 'failed', 'quality': {'state': 'partial'}, 'market_source': str(self.source.parent)},
+            'run.json': {'state': 'failed', 'processing_state': 'failed', 'quality': {'state': 'partial', 'received': 0}, 'market_source': str(self.source.parent)},
             'priority-review.json': {'schema': 4, 'strategy': 'pdf_momentum', 'session_dates': {'US': '2026-09-24'}, 'candidate_count': 0, 'entry_candidate_count': 0, 'limitations': [], 'markets': {'US': {'entries': []}}},
             'sectors/signals.json': {'sectors': []}, 'sectors/observation.json': {'observations': []}}
         for name, data in files.items():
@@ -51,12 +52,13 @@ class StoredData(unittest.TestCase):
 
     def test_zero_is_valid_and_failed_is_preserved(self):
         value = d.saved_market(self.root)
-        self.assertEqual((value['state'], value['quality']['state'], value['candidate_count'], value['entry_candidate_count']), ('failed','partial',0,0))
+        self.assertEqual((value['state'], value['quality']['state'], value['quality']['received']), ('failed', 'partial', 0))
+        self.assertNotIn('candidate_count', value)
         self.assertEqual(value['errors'], [])
 
     def test_missing_quality_details_are_unknown_not_zero(self):
         self.assertEqual(d.saved_market(self.root)['quality_gaps'],
-                         dict(price_history=None, market_cap=None, classification=None))
+                         dict(price_history=None, market_cap=None))
 
     def test_quality_details_preserve_partial_and_failure(self):
         source = d.load(self.source)
@@ -72,7 +74,7 @@ class StoredData(unittest.TestCase):
         manifest['output_hashes']['run.json'] = d.sha(self.run/'run.json')
         (self.run/'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
         value = d.saved_market(self.root)
-        self.assertEqual(value['quality_gaps'], dict(price_history=4, market_cap=1, classification=2))
+        self.assertEqual(value['quality_gaps'], dict(price_history=4, market_cap=1))
         self.assertEqual(value['state'], 'failed')
         self.assertEqual(value['quality']['state'], 'partial')
 
@@ -101,24 +103,30 @@ class StoredData(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'hash_mismatch'):
             d.saved_market(self.root)
 
+    # Preserve the M00 manifest IDs while checking that retired artifacts are ignored.
     def test_missing_screen_is_not_zero(self):
         (self.run / 'priority-review.json').unlink()
         value = d.saved_market(self.root)
-        self.assertIsNone(value['candidate_count'])
-        self.assertTrue(value['errors'])
+        self.assertNotIn('candidate_count', value)
+        self.assertEqual(value['errors'], [])
+        self.assertIn('US:ABC', value['stocks'])
+        self.assertEqual(value['session_dates'], {'US': '2026-09-24'})
 
     def test_missing_sector_does_not_hide_screen(self):
         (self.run / 'sectors/signals.json').unlink()
         value = d.saved_market(self.root)
-        self.assertEqual(value['candidate_count'], 0)
-        self.assertTrue(value['errors'])
+        self.assertNotIn('sectors', value)
+        self.assertEqual(value['errors'], [])
+        self.assertIn('US:ABC', value['stocks'])
 
     def test_unsupported_screen_does_not_reactivate_legacy(self):
         f = self.run / 'priority-review.json'
         v = d.load(f); v['strategy'] = 'taver'; f.write_text(json.dumps(v))
         m = d.load(self.run / 'manifest.json');m['output_hashes'][f.name] = d.sha(f)
         (self.run / 'manifest.json').write_text(json.dumps(m))
-        self.assertIsNone(d.saved_market(self.root)['candidate_count'])
+        value = d.saved_market(self.root)
+        self.assertNotIn('candidate_count', value)
+        self.assertEqual(value['errors'], [])
 
     def test_latest_outside_runtime_is_rejected(self):
         (self.root / 'runtime/latest.json').write_text(json.dumps({'output': str(self.root.parent)}))

@@ -17,7 +17,6 @@ from market.history.saved import DBHistory
 OPERATIONS = frozenset({
     'list', 'detail', 'read', 'report_document', 'propose', 'record', 'holding_links', 'refresh',
     'collaboration_read', 'discussion_save', 'plan_save', 'plan_input', 'monitor_list',
-    'cycle_list', 'cycle_read', 'cycle_agent_input', 'cycle_calculate', 'cycle_save_draft',
 })
 RETIRED = frozenset({'risk_overview', 'risk_calculate', 'risk_save', 'risk_review_save', 'calculate'})
 
@@ -160,7 +159,7 @@ def call(op, arguments, *, root, role='collaboration'):
         raise ValueError('object_required')
     if op not in OPERATIONS:
         raise Forbidden('operation_not_exposed_to_session_mcp')
-    if role == 'risk' and op not in {'list', 'detail', 'holding_links', 'read', 'cycle_list', 'cycle_read', 'monitor_list', 'collaboration_read', 'plan_input'}:
+    if role == 'risk' and op not in {'list', 'detail', 'holding_links', 'read', 'monitor_list', 'collaboration_read', 'plan_input'}:
         raise Forbidden('risk_cannot_write_collaboration_or_legacy_records')
     if role == 'risk' and op == 'read' and not arguments.get('snapshot_id'):
         raise Forbidden('risk_read_requires_frozen_snapshot')
@@ -175,7 +174,4 @@ def call(op, arguments, *, root, role='collaboration'):
                 if str(exc) != 'saved_price_identity_missing_or_ambiguous':
                     raise
     result = service.dispatch(op, arguments, '', principal=role)
-    if op == 'cycle_read':
-        result['links'] = {'dashboard_url': None, 'transport': 'local_db',
-                           'reopen_tool': {'name': 'analysis_cycle_read', 'arguments': {'cycle_id': arguments['cycle_id']}}}
     return result

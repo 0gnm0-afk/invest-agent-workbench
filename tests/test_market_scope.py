@@ -6,8 +6,9 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import market.scope as m
 from market.providers.toss_universe import discover
 from test_toss_universe import FakeToss
-import sectors.classification_refresh as refresh
-from atomic_io import checked; from sectors.observation import classification_age_issue, SECTORS
+import market.classification_refresh as refresh
+from atomic_io import checked; from market.classification_refresh import classification_age_issue
+from market.adr import SECTORS
 
 class ScopeTests(unittest.TestCase):
     def setUp(self):
@@ -106,18 +107,6 @@ class ScopeTests(unittest.TestCase):
             with self.assertRaises(ValueError):m.load(p)
             data=self.policy();data['records']*=2;p.write_text(json.dumps(data))
             with self.assertRaises(ValueError):m.load(p)
-
-    def test_new_listing_waiting_does_not_hide_gaps_or_other_failures(self):
-        screen={'rows':[{'market':'US','symbol':'NEW','state':'unavailable','universe':{'universe_rejection_reasons':['unavailable_insufficient_liquidity_bars']}}]}
-        snapshot={'series':[{'market':'US','symbol':'NEW','bars':[{'date':'2026-09-30'},{'date':'2026-10-01'}]}], 'sessions':{'US':['2026-09-29','2026-09-30','2026-10-01']}}
-        self.assertEqual(len(m.analysis_pending(screen,snapshot)),1)
-        screen['rows'][0]['universe']['universe_rejection_reasons'].insert(0,'market_cap_below_minimum')
-        self.assertEqual(m.analysis_pending(screen,snapshot)[0]['known_rejections'],['market_cap_below_minimum'])
-        snapshot['series'][0]['bars'][0]['date']='2026-09-29'
-        self.assertFalse(m.analysis_pending(screen,snapshot))
-        snapshot['series'][0]['bars'][0]['date']='2026-09-30'
-        screen['rows'][0]['universe']['universe_rejection_reasons'].append('unavailable_market_cap')
-        self.assertFalse(m.analysis_pending(screen,snapshot))
 
     def test_selected_chart_cannot_refetch_approved_exclusion(self):
         from market.history.chart import HistoryStore

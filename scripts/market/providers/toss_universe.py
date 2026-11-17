@@ -7,7 +7,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from invest_agent.trading.contracts import digest
-from invest_agent.trading.runner import atomic_write
+from atomic_io import atomic_write
 from market.quality import quote_time_state, adr_cap_unavailable
 from market.scope import match as excluded_record
 
