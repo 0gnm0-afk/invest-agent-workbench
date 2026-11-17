@@ -121,9 +121,10 @@ class Evidence:
                 'rate_headers': {p: [json.loads(v) for v in sorted(values)] for p, values in self.limits.items()}}
 
 
-def run(root, config_path=None, prior_source=None, *, session_cutoff=None, evaluated_at=None):
+def run(root, config_path=None, prior_source=None, *, session_cutoff=None, evaluated_at=None, project_root=None):
     root = Path(root).resolve()
-    runtime = ROOT / 'runtime'
+    project_root = Path(project_root or ROOT).resolve()
+    runtime = project_root / 'runtime'
     if not root.is_relative_to(runtime.resolve()):
         raise ValueError('Market outputs must stay inside private runtime')
     with instance_lock(root):
@@ -151,8 +152,8 @@ def run(root, config_path=None, prior_source=None, *, session_cutoff=None, evalu
             config = {'profile': source['profile'], 'markets': ['KR', 'US'],
                       'scope': 'market_only_toss_provided_universe', 'universe_mode': 'exchange_listings',
                       'limit_per_exchange': None}
-            config['ohlcv_path'] = str(default_path())
-            seed_store = PriceStore(config['ohlcv_path'])
+            config['ohlcv_path'] = str(default_path(root=project_root))
+            seed_store = PriceStore(config['ohlcv_path'], root=project_root)
             if seed_store.meta('archive_import_complete',False):
                 from contextlib import closing
                 with closing(seed_store.connect()) as db:
@@ -208,8 +209,8 @@ def run(root, config_path=None, prior_source=None, *, session_cutoff=None, evalu
                                prior_series=prior_rows,
                                prior_source={'path': frozen['prior_source'],
                                              'sha256': frozen['prior_snapshot_sha256']}
-                               if prior_rows else None)
-            store = PriceStore(frozen['config']['ohlcv_path'])
+                               if prior_rows else None, project_root=project_root)
+            store = PriceStore(frozen['config']['ohlcv_path'], root=project_root)
             write_json(attempt / 'snapshot.json', freeze_snapshot(snapshot, attempt/'snapshot.json', store))
             reloaded = load(attempt / 'snapshot.json')  # Each referenced series verifies identity/count/hash.
             for error in snapshot['errors']:

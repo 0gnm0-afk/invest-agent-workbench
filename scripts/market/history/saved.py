@@ -194,13 +194,14 @@ class SavedMarketHistories:
         from market.prices import PriceStore, default_path
         root = Path(root)
         path = default_path(root.parent) if (root.parent/'config.json').exists() else root/'ohlcv.sqlite3'
-        store = PriceStore(path)
+        project = root.parent if root.name == 'runtime' else root
+        store = PriceStore(path, root=project)
         # No partial migration may silently replace the verified legacy archive.
         ready = store.meta('archive_import_complete', False)
         self.markets = {m: DBHistory(store, m) if ready else
                         SavedHistory(root / (m.lower() + '-history/active.json'), m) for m in ('US', 'KR')}
         from market.scope import load, match
-        policy = load()
+        policy = load(root=project)
         self.stocks = {k: v for history in self.markets.values() for k, v in history.stocks.items()
                        if not match(v, policy)}
 

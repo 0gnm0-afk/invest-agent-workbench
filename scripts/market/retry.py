@@ -2,7 +2,6 @@
 import atomic_io as artifact_io
 from copy import deepcopy
 from pathlib import Path
-import shutil
 import socket
 from unittest.mock import patch
 
@@ -91,7 +90,7 @@ def seal(source, snapshot):
 
 
 def apply_retry(root, registry_path, job_id):
-    import market.daily as daily_market, market.repair as repair_market_scope, market.nh_fallback as nh_fallback
+    import market.daily as daily_market, market.repair as repair_market_scope
     root=Path(root)
     with instance_lock(root/'runtime/dashboard-daily'),instance_lock(root/'runtime'):
         value,_=review.registry(registry_path);job=value['jobs'][-1]
@@ -118,29 +117,22 @@ def apply_retry(root, registry_path, job_id):
                 if not row or row.get('isin_code')!=issue.get('isin_code') or row.get('listing_exchange_family')!=issue.get('exchange'):
                     raise ValueError('retry_identity_changed')
             review.update_job(registry_path,job_id,collection_started_at=review.now())
-            if job['provider']=='toss':
-                counter=0
-                def observer(row):
-                    nonlocal counter
-                    receipt={k:v for k,v in row.items() if k != 'payload'}
-                    if 'payload' in row: receipt['payload_sha256']=digest(row['payload'])
-                    counter+=1;write_json(source/'retry-evidence'/f'{counter:06}.json',receipt)
-                get=TossMarketClient(observer=observer)
-                snapshot,outcomes=toss_retry(snapshot,job['issues'],get)
-                write_json(source/'retry-results.json',outcomes)
-                seal(source,snapshot)
-            else:
-                recovered,_,_=nh_fallback.recover(source,source.parent/(source.name+'-nh'),config,
-                    prior_source=source,only_keys={key(r) for r in job['issues']},allow_auto_exclusions=False)
-                if (source/'basis').exists(): shutil.copytree(source/'basis',recovered/'basis')
-                source=recovered
-                seal(source,review.load(source/'snapshot.json'))
+            counter=0
+            def observer(row):
+                nonlocal counter
+                receipt={k:v for k,v in row.items() if k != 'payload'}
+                if 'payload' in row: receipt['payload_sha256']=digest(row['payload'])
+                counter+=1;write_json(source/'retry-evidence'/f'{counter:06}.json',receipt)
+            get=TossMarketClient(observer=observer)
+            snapshot,outcomes=toss_retry(snapshot,job['issues'],get)
+            write_json(source/'retry-results.json',outcomes)
+            seal(source,snapshot)
             review.update_job(registry_path,job_id,result_source=str(source))
         before=review.load(root/'runtime/latest.json')
         try:
             # Replay only: never turn a targeted retry into another whole-market collection.
             with patch.object(socket.socket,'connect',side_effect=AssertionError('retry_replay_network_forbidden')):
-                result=daily_market.run(config,source=source)
+                result=daily_market.run(config,source=source,root=root)
             if result.get('error') or result.get('stages',{}).get('report')!='completed':
                 raise ValueError('retry_calculation_failed')
         except BaseException:

@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import re
 import sqlite3
 
 from workbench_paths import ROOT
@@ -70,8 +71,19 @@ def validate(bars):
 
 
 class PriceStore:
-    def __init__(self, path=None):
-        self.path = local_runtime_path(path or default_path()).resolve()
+    def __init__(self, path=None, *, root=None):
+        self._root = Path(root) if root is not None else None
+        # An omitted root preserves the legacy default DB selection and the
+        # runtime resolver's current aliases; explicit roots remain isolated.
+        selected = path or (default_path(self._root) if self._root is not None else default_path())
+        self.path = local_runtime_path(selected, root=self._root).resolve()
+
+    @property
+    def root(self):
+        if self._root is not None:
+            return self._root
+        from runtime_paths import ROOT as runtime_root
+        return runtime_root
 
     def connect(self, *, write=False):
         if not write:
@@ -356,6 +368,86 @@ class PriceStore:
                            (str(source),kind)).fetchone()
         return (json.loads(row[0]),json.loads(row[1]),row[2]) if row else None
 
+    def read_bars(self, stock, *, cutoff=None, reference=None):
+        """Read one identity and a reproducible view without collecting or writing.
+
+        Missing/ambiguous identities raise; an existing empty series returns empty
+        bars. ``bars_ref`` pins exactly the returned range, including corrections.
+        Metadata and per-bar revisions let consumers retain their existing shapes.
+        """
+        if cutoff is not None and date.fromisoformat(cutoff).isoformat() != cutoff:
+            raise ValueError('invalid_price_cutoff')
+        if not self.path.is_file():
+            raise FileNotFoundError('saved_price_database_missing')
+        sid = reference['series_id'] if reference is not None else self.find(stock)
+        if sid is None:
+            raise ValueError('saved_price_identity_missing_or_ambiguous')
+        with closing(self.connect()) as db:
+            db.execute('BEGIN')
+            row = db.execute('SELECT identity,metadata FROM price_series WHERE id=?', (sid,)).fetchone()
+            if not row:
+                raise ValueError('ohlcv_reference_identity_mismatch')
+            ident, metadata = map(json.loads, row)
+            supplied_isin = stock.get('isin_code') or (stock.get('listing') or {}).get('isinCode')
+            if (any(stock.get(k) is not None and stock[k] != ident[k]
+                    for k in ('market', 'symbol', 'currency', 'price_basis'))
+                    or supplied_isin and ident['isin'] and supplied_isin != ident['isin']
+                    or stock.get('provider') and identity_provider(stock['provider']) != ident['provider']):
+                raise ValueError('ohlcv_reference_identity_mismatch')
+            observed = db.execute('SELECT metadata FROM price_observations WHERE series_id=? ORDER BY id DESC LIMIT 1',
+                                  (sid,)).fetchone()
+            observed = json.loads(observed[0]) if observed else {}
+            if reference is not None:
+                source_bars = self.read(reference, connection=db)
+                bars = [b for b in source_bars if cutoff is None or b['date'] <= cutoff]
+                revision = reference['revision']
+                revisions = None  # A composed/variant reference owns its revision semantics.
+                ref = dict(reference)
+                if cutoff is not None:
+                    # Resolve the full reference first, then pin the selected range.
+                    ref.update(first=bars[0]['date'] if bars else None,
+                               last=bars[-1]['date'] if bars else None, count=len(bars),
+                               sha256=digest(normalized(bars)), numeric_sha256=digest(normalized(bars)))
+                    if bars:
+                        ref['excluded_dates'] = sorted(set(ref.get('excluded_dates', [])) |
+                                                       {b['date'] for b in source_bars if b['date'] > cutoff})
+                    else:
+                        ref = {k: ref[k] for k in ('series_id', 'revision', 'identity', 'first', 'last',
+                                                   'count', 'sha256', 'numeric_sha256')}
+                    self.read(ref, connection=db)
+            else:
+                rows = db.execute('SELECT day,open,high,low,close,volume,revision FROM prices '
+                                  'WHERE series_id=? AND (? IS NULL OR day<=?) ORDER BY day',
+                                  (sid, cutoff, cutoff)).fetchall()
+                bars = [dict(zip(('date', *FIELDS), r[:6])) for r in rows]
+                revisions = {r[0]: r[6] for r in rows}
+                revision = max(revisions.values(), default=0)
+                ref = dict(series_id=sid, revision=revision, identity=ident,
+                           first=bars[0]['date'] if bars else None,
+                           last=bars[-1]['date'] if bars else None, count=len(bars),
+                           sha256=digest(normalized(bars)), numeric_sha256=digest(normalized(bars)))
+                self.read(ref, connection=db)
+        return dict(series_id=sid, identity=ident, metadata=metadata,
+                    observation_metadata=observed, bars=bars, bars_ref=ref,
+                    revisions=revisions, cutoff=cutoff)
+
+    def archive_entry(self, market, symbol):
+        """Read only one archive listing/coverage/reference for analysis consumers."""
+        name = 'series/' + hashlib.sha256(symbol.encode()).hexdigest() + '.json'
+        paths = ['$.source', '$.config', '$.listings.' + json.dumps(symbol),
+                 '$.coverage.' + json.dumps(symbol), '$.references.' + json.dumps(name)]
+        if not self.path.is_file():
+            return None
+        with closing(self.connect()) as db:
+            row = db.execute('SELECT ' + ','.join('json_extract(value,?)' for _ in paths)
+                             + ' FROM price_meta WHERE key=?', (*paths, 'archive_' + market)).fetchone()
+        if not row or not row[0]:
+            return None
+        return dict(source=row[0], config=json.loads(row[1]),
+                    listings={symbol: json.loads(row[2])} if row[2] is not None else {},
+                    coverage={symbol: json.loads(row[3])} if row[3] is not None else {},
+                    references={name: json.loads(row[4])} if row[4] is not None else {})
+
     def find(self, stock):
         """An explicit identity conflict never inherits another listing's bars."""
         with closing(self.connect()) as db:
@@ -376,6 +468,157 @@ class PriceStore:
         if len(exact) == 1:
             return exact[0]
         return candidates[0][0] if len(candidates) == 1 else None
+
+
+def _stock_key(stock_key):
+    if not isinstance(stock_key, str) or not re.fullmatch(r'(KR|US):[A-Z0-9.\-]{1,24}', stock_key):
+        raise ValueError('exact_stock_key_required')
+    return stock_key.split(':', 1)
+
+
+def saved_price_context(stock_key, *, root):
+    """C2 session shape; enumerate all saved identities, never choose one silently."""
+    market, symbol = _stock_key(stock_key)
+    store = PriceStore(default_path(root), root=root)
+    if not store.path.is_file():
+        return []
+    with closing(store.connect()) as db:
+        db.execute('BEGIN')
+        rows = db.execute("SELECT id,metadata FROM price_series WHERE json_extract(metadata,'$.market')=? "
+                          "AND json_extract(metadata,'$.symbol')=? ORDER BY id", (market, symbol)).fetchall()
+        result = []
+        for sid, metadata in rows:
+            last = db.execute('SELECT day,close,revision FROM prices WHERE series_id=? ORDER BY day DESC LIMIT 1',
+                              (sid,)).fetchone()
+            result.append(dict(metadata=json.loads(metadata), last_completed_saved_bar=
+                               dict(zip(('day', 'close', 'revision'), last)) if last else None))
+    return result
+
+
+def saved_bars(stock, *, root, cutoff=None, reference=None):
+    """C2 canonical/pinned bars; stock may be an exact key or identity dictionary."""
+    if isinstance(stock, str):
+        market, symbol = _stock_key(stock)
+        stock = dict(market=market, symbol=symbol)
+    return PriceStore(default_path(root), root=root).read_bars(stock, cutoff=cutoff, reference=reference)
+
+
+def _saved_snapshot_bytes(path, expected_hash, *, root, store):
+    from market.price_files import PriceFiles
+    from records.store import RecordStore, default_path as record_path
+    from runtime_paths import runtime_lookup_paths
+    source = Path(path)
+    path = local_runtime_path(source, root=root)
+    records = RecordStore(record_path(root))
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        raw = None
+        if records.path.is_file():
+            for candidate in runtime_lookup_paths(source, root=root):
+                raw = records.read(candidate, expected_hash)
+                if raw is not None:
+                    break
+        if raw is None:
+            raw = PriceFiles(store).recover(path)
+    else:
+        if len(raw) <= 8192 and b'"record_artifact_ref"' in raw:
+            marker = json.loads(raw.decode('utf-8-sig'))
+            if isinstance(marker, dict) and set(marker) == {'record_artifact_ref'}:
+                reference = marker['record_artifact_ref']
+                if (not isinstance(reference, dict)
+                        or local_runtime_path(reference.get('source_path', ''), root=root).resolve() != path.resolve()):
+                    raise ValueError('record_reference_path_mismatch')
+                if local_runtime_path(reference['path'], root=root).resolve() != records.path:
+                    raise ValueError('record_reference_database_mismatch')
+                raw = records.read({**reference, 'path': str(records.path)}, expected_hash)
+    if not expected_hash or raw is None or hashlib.sha256(raw).hexdigest() != expected_hash:
+        raise ValueError('saved_artifact_hash_mismatch')
+    return raw
+
+
+def _physical_snapshot_series(path, expected_hash, keys):
+    """Keep the legacy indent=2 universe reader bounded to one series at a time."""
+    path = Path(path)
+    try:
+        stream = path.open('rb')
+    except FileNotFoundError:
+        return None
+    with stream:
+        # A small records pointer hashes the recovered original, not this marker.
+        header = stream.read(8193)
+        if len(header) <= 8192 and b'"record_artifact_ref"' in header:
+            marker = json.loads(header.decode('utf-8-sig'))
+            if isinstance(marker, dict) and set(marker) == {'record_artifact_ref'}:
+                return None
+        stream.seek(0)
+        if not expected_hash or hashlib.file_digest(stream, 'sha256').hexdigest() != expected_hash:
+            raise ValueError('saved_artifact_hash_mismatch')
+    found, ended, item, result = False, False, [], {}
+    with path.open(encoding='utf-8-sig') as stream:
+        for line in stream:
+            label = line.rstrip()
+            if label == '  "ohlcv_store": {':
+                return None  # Small frozen metadata needs its declared price store.
+            if not found:
+                if label == '  "series": [':
+                    found = True
+                elif label in ('  "series": [],', '  "series": []'):
+                    found = ended = True
+                continue
+            if ended:
+                continue  # A declared OHLCV store may follow the series member.
+            if label in ('  ],', '  ]'):
+                ended = True
+                continue
+            item.append(line)
+            if label in ('    },', '    }'):
+                series = json.loads(''.join(item).rstrip().rstrip(','))
+                key = series['market'] + ':' + series['symbol']
+                if key in keys:
+                    if key in result:
+                        raise ValueError('duplicate_market_series')
+                    result[key] = series
+                item = []
+    if found and (not ended or item):
+        raise ValueError('snapshot_series_format_unconfirmed')
+    return result if found else None
+
+
+def saved_snapshot_series(path, expected_hash, keys, *, root):
+    """Verify original snapshot bytes, then hydrate requested series only.
+
+    Supports embedded bars, fixed refs, record pointers and retired price-file
+    recipes. Existing corruption fails; no migration, collection or writes occur.
+    """
+    store = PriceStore(default_path(root), root=root)
+    selected = _physical_snapshot_series(local_runtime_path(path, root=root), expected_hash, keys)
+    if selected is None:
+        raw = _saved_snapshot_bytes(path, expected_hash, root=root, store=store)
+        value = json.loads(raw.decode('utf-8-sig'))
+        if 'ohlcv_store' in value:
+            store = PriceStore(value['ohlcv_store']['path'], root=root)
+        rows = value['series']
+    else:
+        rows = selected.values()
+    result = {}
+    for series in rows:
+        key = series['market'] + ':' + series['symbol']
+        if key not in keys:
+            continue
+        if key in result:
+            raise ValueError('duplicate_market_series')
+        reference = series.get('bars_ref')
+        if reference is not None:
+            bars = store.read_bars(series, reference=reference)['bars']
+            if 'bars' in series and normalized(series['bars']) != normalized(bars):
+                raise ValueError('ohlcv_reference_hash_mismatch')
+            series = {**series, 'bars': bars}
+        else:
+            validate(series['bars'])
+        result[key] = series
+    return result
+
 
 
 def identity_provider(provider):
@@ -413,11 +656,11 @@ def freeze_snapshot(snapshot, path, store=None, *, source_sha256=''):
     return value
 
 
-def hydrate_snapshot(value):
+def hydrate_snapshot(value, *, root=None):
     if not isinstance(value, dict) or 'ohlcv_store' not in value:
         return value
     from runtime_paths import local_runtime_path
-    store = PriceStore(local_runtime_path(value['ohlcv_store']['path']))
+    store = PriceStore(value['ohlcv_store']['path'], root=root)
     def expand(series):
         return {**series, 'bars': store.read(series['bars_ref'],connection=db)} if 'bars_ref' in series else series
     with closing(store.connect()) as db:

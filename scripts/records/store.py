@@ -19,7 +19,7 @@ from .paths import local_runtime_path, runtime_lookup_paths
 
 
 ROLES = frozenset({
-    'run.json', 'config.json', 'quality.json', 'market-failures.json',
+    'run.json', 'config.json', 'quality.json', 'market-failures.json', 'collection-receipt.json',
     'screen-base.json', 'screen.json', 'priority-review.json', 'priority-charts.json',
     'policy.json', 'scope-policy.json', 'classification-policy.json', 'registry.json',
 })
