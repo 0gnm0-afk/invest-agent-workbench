@@ -11,14 +11,19 @@ class ReportReadingTests(unittest.TestCase):
     tearDown = test_analysis.AnalysisTests.tearDown
     # Reuse only the isolated setup, not the parent regression suite.
     def test_readable_save_and_legacy_copy_preserve_evidence(self):
-        args=dict(snapshot_id=self.sid,kind='report',title='합성 보고서',body='# 합성 보고서\n\n사업 변화 해석',author='llm',llm_opinion='사업 변화 해석',event_research=[])
+        args=dict(snapshot_id=self.sid,kind='report',title='합성 보고서',body='# 합성 보고서\n\n사업 변화 해석',author='llm',llm_opinion='사업 변화 해석',event_research=[],sources=[{'label':'합성 공식 출처','url':'https://example.invalid/report','as_of':'2026-10-01'}],user_response={'counterexample':'실제 사용자 발언을 가정한 합성 원문'})
         record=self.s.record(self.case,args)
         path=self.root/record['markdown_path']
         original=path.read_bytes()
         doc=self.s.report_document(self.cid,record['id'])
         self.assertEqual(Path(doc['path']),path)
         self.assertEqual(path.read_text(encoding='utf-8').count('사업 변화 해석'),1)
-        self.assertNotIn('실제 사용자 응답',path.read_text(encoding='utf-8'))
+        self.assertIn('실제 사용자 응답',path.read_text(encoding='utf-8'))
+        self.assertIn(args['user_response']['counterexample'],path.read_text(encoding='utf-8'))
+        self.assertIn(args['sources'][0]['url'],path.read_text(encoding='utf-8'))
+        self.assertNotIn('open_in_codex',doc)
+        self.assertNotIn('codex',json.dumps(doc).lower())
+        self.assertIn('document.path',doc['next_step'])
         # Model an existing format without changing its saved body or snapshot.
         record.pop('reading_format')
         with closing(self.store.connect()) as db, db:
@@ -30,3 +35,4 @@ class ReportReadingTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(original).hexdigest(),record['markdown_sha256'])
         self.assertEqual(self.s.snapshot(self.cid,self.sid),before)
         self.assertEqual(len(self.s.rows('analysis_items',self.cid)),1)
+        self.assertEqual(self.s.item(self.cid,record['id']),record)

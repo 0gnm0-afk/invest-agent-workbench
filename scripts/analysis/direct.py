@@ -1,7 +1,4 @@
 """Session MCP adapter over existing stores; no HTTP endpoint or dashboard process."""
-from contextlib import closing
-import hashlib
-import json
 from pathlib import Path
 import re
 import sqlite3
@@ -10,7 +7,7 @@ import threading
 from analysis import Forbidden
 from analysis.service import AnalysisService
 from drawings.store import WorkspaceStore
-from market.prices import PriceStore, default_path
+from market.prices import PriceStore, default_path, saved_bars
 from market.history.chart import HistoryStore
 from market.history.saved import DBHistory
 
@@ -34,22 +31,12 @@ class SelectedArchive(DBHistory):
         self.currency = {'KR': 'KRW', 'US': 'USD'}[market]
         self.enabled, self.error, self.stocks = False, False, {}
         self.listings, self.coverage, self.references = {}, {}, {}
-        name = 'series/' + hashlib.sha256(symbol.encode()).hexdigest() + '.json'
-        paths = ['$.source', '$.config', '$.listings.' + json.dumps(symbol),
-                 '$.coverage.' + json.dumps(symbol), '$.references.' + json.dumps(name)]
-        with closing(store.connect()) as db:
-            row = db.execute('SELECT ' + ','.join('json_extract(value,?)' for _ in paths) +
-                             ' FROM price_meta WHERE key=?', (*paths, 'archive_' + market)).fetchone()
-        if not row or not row[0]:
+        entry = store.archive_entry(market, symbol)
+        if entry is None:
             return
         self.enabled = True
-        self.root, self.config = Path(row[0]), json.loads(row[1])
-        if row[2] is not None:
-            self.listings[symbol] = json.loads(row[2])
-        if row[3] is not None:
-            self.coverage[symbol] = json.loads(row[3])
-        if row[4] is not None:
-            self.references[name] = json.loads(row[4])
+        self.root, self.config = Path(entry['source']), entry['config']
+        self.listings, self.coverage, self.references = (entry[k] for k in ('listings', 'coverage', 'references'))
 
 
 class SelectedCatalog:
@@ -70,10 +57,11 @@ class SelectedCatalog:
 class SelectedHistories(HistoryStore):
     def __init__(self, root):
         # Skip the eager all-market catalog; reuse selected view/refresh methods.
+        self.root = Path(root)
         self.path = Path(root) / 'runtime/chart-history.sqlite3'
         self.lock = threading.Lock()
         self.client_factory = self.client = None
-        self.prices = PriceStore(default_path(root))
+        self.prices = PriceStore(default_path(root), root=root)
         self.saved = SelectedCatalog(self.prices)
 
     def select(self, stock_key):
@@ -82,18 +70,10 @@ class SelectedHistories(HistoryStore):
         if stock_key in self.saved.stocks:
             return self.saved.stocks[stock_key]
         market, symbol = stock_key.split(':', 1)
-        sid = self.prices.find({'market': market, 'symbol': symbol})
-        if sid is None:
-            raise ValueError('saved_price_identity_missing_or_ambiguous')
+        current = saved_bars(stock_key, root=self.root)
         archive = self.saved.archive(market, symbol)
-        with closing(self.prices.connect()) as db:
-            db.execute('BEGIN')
-            row = db.execute('SELECT identity,metadata FROM price_series WHERE id=?', (sid,)).fetchone()
-            identity, metadata = map(json.loads, row)
-            observation = db.execute('SELECT metadata FROM price_observations WHERE series_id=? ORDER BY id DESC LIMIT 1', (sid,)).fetchone()
-            observed = json.loads(observation[0]) if observation else {}
-            bars = [dict(zip(('date', 'open', 'high', 'low', 'close', 'volume'), row)) for row in db.execute(
-                'SELECT day,open,high,low,close,volume FROM prices WHERE series_id=? ORDER BY day', (sid,))]
+        identity, metadata = current['identity'], current['metadata']
+        observed, bars = current['observation_metadata'], current['bars']
         listing = archive.listings.get(symbol, {})
         if identity.get('isin') and listing.get('isinCode') and identity['isin'] != listing['isinCode']:
             raise ValueError('saved_listing_identity_changed')
@@ -129,7 +109,7 @@ class DirectService(AnalysisService):
                 'reopen_tool': {'name': 'analysis_collaboration_read', 'arguments': {'analysis_key': key}},
                 'reopen_command': f'.\\analysis.ps1 -AnalysisKey {key} -NoBrowser',
                 'resume_prompt': prompt, 'copy_text': prompt, 'prompt': prompt,
-                'qualitative_skill': 'stock-qualitative-analysis'}
+                'qualitative_skill': 'eps-research'}
 
 
 def service_for(root):
@@ -174,4 +154,5 @@ def call(op, arguments, *, root, role='collaboration'):
                 if str(exc) != 'saved_price_identity_missing_or_ambiguous':
                     raise
     result = service.dispatch(op, arguments, '', principal=role)
-    return result
+    from analysis.direct_accounts import project_response
+    return project_response(op, result)

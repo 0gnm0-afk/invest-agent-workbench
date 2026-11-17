@@ -80,6 +80,85 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(self.s.capture(self.case), original)
         self.assertEqual(self.s.snapshot(self.cid, identity['id']), identity)
 
+    def test_reference_snapshot_decoder_is_read_only_and_preserves_original(self):
+        from analysis import packed
+        from analysis.snapshots import decode_saved
+        from accounts.store import AccountStore
+        from market.prices import PriceStore
+        prices = PriceStore(self.root/'runtime/ohlcv.sqlite3', root=self.root)
+        prices.put(self.stock, source='synthetic-snapshot', kind='series')
+        self.hist.prices = prices
+        self.accounts['accounts'][0]['raw_lots'] = [{'synthetic_original': 'preserve internally'}]
+        snap = self.s.capture(self.case)
+        with closing(self.store.connect()) as db:
+            raw, sha = db.execute('SELECT payload,sha256 FROM analysis_snapshots WHERE id=?', (snap['id'],)).fetchone()
+        stored = json.loads(raw)
+        self.assertIn('chart_price_ref', stored)
+        self.assertEqual(set(stored['accounts']), {'account_store_ref'})
+        # A later correction must not replace the version pinned by the snapshot.
+        corrected = copy.deepcopy(self.stock); corrected['bars'][-1]['close'] = 106
+        prices.put(corrected, source='synthetic-correction', kind='series')
+        previous_root = self.root/'previous-workbench'
+        (self.root/'config.json').write_text(json.dumps({'records': {'previous_root': str(previous_root)}}), encoding='utf-8')
+        relocated = copy.deepcopy(stored)
+        relocated['accounts']['account_store_ref']['path'] = str(previous_root/'runtime/accounts.sqlite3')
+        # Finish fixture writes in rollback-journal mode. WAL coordination
+        # sidecars are covered separately; no production reader is weakened.
+        import sqlite3
+        for path in (prices.path, self.root/'runtime/accounts.sqlite3'):
+            with closing(sqlite3.connect(path)) as db:
+                db.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+                self.assertEqual(db.execute('PRAGMA journal_mode=DELETE').fetchone()[0], 'delete')
+        before = {p.relative_to(self.root).as_posix(): p.read_bytes()
+                  for p in self.root.rglob('*') if p.is_file()}
+        with (patch.object(AccountStore, 'connect', side_effect=AssertionError('account initialization')),
+              patch.object(AccountStore, 'save', side_effect=AssertionError('account save')),
+              patch.object(WorkspaceStore, '__init__', side_effect=AssertionError('workspace initialization')),
+              patch.object(AnalysisService, '__init__', side_effect=AssertionError('service initialization')),
+              patch.object(AnalysisService, 'capture', side_effect=AssertionError('capture')),
+              patch('accounts.saved.saved_accounts', side_effect=AssertionError('current holdings')),
+              patch('accounts.saved.session_projection', side_effect=AssertionError('historical input projection'))):
+            self.assertEqual(decode_saved(raw, sha, root=self.root), snap)
+            self.assertEqual(self.s.decode_snapshot(raw, sha), snap)
+            self.assertEqual(digest(decode_saved(raw, sha, root=self.root)), digest(snap))
+            self.assertEqual(decode_saved(packed(relocated), digest(relocated), root=self.root), snap)
+            self.assertFalse(previous_root.exists())
+            missing = copy.deepcopy(stored)
+            missing['accounts']['account_store_ref']['path'] = str(self.root/'missing-accounts.sqlite3')
+            import sqlite3
+            with self.assertRaises(sqlite3.OperationalError):
+                decode_saved(packed(missing), digest(missing), root=self.root)
+        after = {p.relative_to(self.root).as_posix(): p.read_bytes()
+                 for p in self.root.rglob('*') if p.is_file()}
+        self.assertEqual(after, before)
+        self.assertEqual(snap['accounts'], self.accounts)
+
+    def test_snapshot_decoder_reads_committed_wal_without_changing_stored_content(self):
+        from accounts.store import AccountStore
+        from market.prices import PriceStore
+        prices = PriceStore(self.root/'runtime/ohlcv.sqlite3', root=self.root)
+        prices.put(self.stock, source='wal-base', kind='series')
+        account_store = AccountStore(self.root/'runtime/accounts.sqlite3')
+        self.hist.prices = prices
+        # Keep real WAL connections open so newly committed references remain
+        # in WAL. immutable=1 would miss these commits and fail this test.
+        with closing(prices.connect(write=True)) as price_owner, closing(account_store.connect()) as account_owner:
+            self.stock['bars'][-1]['close'] = 106
+            prices.put(self.stock, source='wal-snapshot', kind='series')
+            self.accounts['as_of'] = '2026-11-17T00:00:00+00:00'
+            snap = self.s.capture(self.case)
+            corrected = copy.deepcopy(self.stock); corrected['bars'][-1]['close'] = 107
+            prices.put(corrected, source='wal-later-correction', kind='series')
+            paths = (prices.path, account_store.path)
+            self.assertTrue(all(Path(str(path)+'-wal').stat().st_size > 32 for path in paths))
+            before = {path: path.read_bytes() for path in paths}
+            logical = ['\n'.join(db.iterdump()) for db in (price_owner, account_owner)]
+            with (patch.object(AccountStore, 'connect', side_effect=AssertionError('account writer')),
+                  patch.object(AccountStore, 'save', side_effect=AssertionError('account save'))):
+                self.assertEqual(self.s.snapshot(self.cid, snap['id']), snap)
+            self.assertEqual({path: path.read_bytes() for path in paths}, before)
+            self.assertEqual(['\n'.join(db.iterdump()) for db in (price_owner, account_owner)], logical)
+
     def test_empty_drawings_reconnect(self):
         v=self.s.snapshot(self.cid,self.sid);self.assertEqual(v['workspace']['state']['drawings'],[])
         reopened=AnalysisService(self.store,self.hist,self.fin,self.s.view,self.root)

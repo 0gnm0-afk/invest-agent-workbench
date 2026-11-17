@@ -6,7 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
-from urllib.parse import urlencode, quote
+from urllib.parse import quote
 
 from drawings.store import Conflict, validate
 from drawings.geometry import geometry
@@ -17,7 +17,7 @@ from market.history.price_events import build as price_events, validate_research
 
 from .report import readable, FOLLOWUP
 
-QUALITATIVE_SKILL = 'stock-qualitative-analysis'
+QUALITATIVE_SKILL = 'eps-research'
 
 
 def short(value, limit=4000):
@@ -77,19 +77,8 @@ class AnalysisService:
         return self.decode_snapshot(*row)
 
     def decode_snapshot(self, payload, expected):
-        value=json.loads(payload)
-        if digest(value)!=expected: raise ValueError('snapshot_integrity_failed')
-        if 'chart_price_ref' in value:
-            from market.prices import PriceStore
-            from market.history.chart import aggregate
-            ref=value.pop('chart_price_ref')
-            value['chart']['bars']=aggregate(PriceStore(ref['path']).read(ref['reference']),ref['frame'])
-            if digest(value['chart']) != value['component_hashes']['chart']:
-                raise ValueError('snapshot_chart_integrity_failed')
-        if set(value.get('accounts',{})) == {'account_store_ref'}:
-            from accounts.store import hydrate
-            value['accounts']=hydrate(value['accounts'])
-        return value
+        from .snapshots import decode_saved
+        return decode_saved(payload, expected, root=self.root)
 
     def links(self, case, origin):
         cid=case['id']; route='#stock/'+quote(case['stock_key'].split(':',1)[0])+'/'+quote(case['stock_key'].split(':',1)[1])+'?analysis='+cid
@@ -102,34 +91,36 @@ class AnalysisService:
         else:
             prompt=(f"${QUALITATIVE_SKILL} 스킬을 사용해 투자 워크벤치 분석건 {cid} ({case['stock_key']})의 정성분석을 수행하고 "
                     "같은 분석건에 리포트를 저장해줘.\n"
-                    "스킬의 goal·조사·최대 2회 자체 검증 절차를 따른다. 먼저 analysis_collaboration_read와 analysis_history로 기존 보고서·사용자 답·미정·채택 계획 버전을 확인하고, analysis_read(analysis_key)로 "
-                    "현재 저장 입력을 읽고 반환 snapshot_id를 고정해 events·research_groups·news_inputs와 재무 요약·연간/분기 실적·출처를 읽어줘. "
-                    "내부 MCP의 계산 재무에서 의미 있는 변화와 사업 맥락을 해석해줘. 코드의 최근5년 주봉 고점·저점 전후 사건만 조사하고 확정·잠정 구분과 우선순위를 유지해줘. 시가 갭·월봉 독립 조사는 이번 범위 밖이다. "
-                    "Telegram 검색과 함께 필요한 공시·공식 자료·일반 웹 뉴스를 적극 활용하고, business/risk/new/tsr는 종목에 따라 portfolio/growth 등으로 추가·대체할 수 있다. 발표된 미래 주주환원 계획과 실제 집행을 구분해줘. "
-                    "각 news_window부터 실제 뉴스를 검색하고 근거 부족 시 확대하며 근접일을 같은 원인으로 단정하지 마. "
-                    "analysis_save_record의 event_research에 group_id, 조사상태(unresearched/failed/cause_unconfirmed/evidence_found), 검색범위·출처를 저장해줘. "
+                    "먼저 investment_context와 analysis_collaboration_read, analysis_history로 기존 근거·실제 발언·미정 질문·채택 계획 버전을 확인해줘. "
+                    "새 입력이 필요할 때만 analysis_read(analysis_key)로 현재 저장 입력을 읽고 반환 snapshot_id를 고정해 가격 사건·재무 요약·연간/분기 실적·출처를 읽어줘. "
+                    "eps-research 절차에 따라 필요한 공개 자료와 질문만 deep-research에 전달하고 조사 결과를 대화로 받아줘. "
+                    "기존 조사를 재사용하며 리포트 전제, 추정 EPS 상향과 실제 분기 실적, 검증할 가설·반대 근거·미확인을 구분해줘. "
+                    "원출처·공개일·회계기간·단위를 보존하고, 비교 입력이 없으면 EPS 증분을 추정하지 마. 보류된 뉴스 수집·검색 경로는 실행하지 마. "
                     "필요한 배열은 next_offset이 null이 될 때까지 같은 snapshot_id로 읽고, analysis_history의 기존 보고서·사용자 의견을 확인해줘. "
                     "저장 자료의 기준일·회계기간·결측·실패와 이전 성공 자료 사용 여부를 보존하고, 스킬에 따라 추가 조사한 공식 공시·IR·뉴스는 "
                     "출처와 공개일을 별도로 기록해줘. 저장 입력을 실시간 자료로 부르거나 과거 입력에 새 근거가 있었던 것처럼 쓰지 마.\n"
                     f"완성한 보고서는 analysis_save_record(analysis_key='{cid}', snapshot_id=고정한_ID, kind='report', author='llm')로 "
-                    "해석형 본문과 주장 가까이 연결한 출처를 저장해줘. 첫머리는 정성분석 근거에 기반한 52주 신고가 돌파·추가 상승의 핵심 조건과 촉매를 두괄식으로 설명하고, 확인된 재료·미확인 조건·반증을 구별해줘. 이어 기업의 변화와 판단 쟁점, 핵심 숫자의 사업/이익/현금/주당 가치 의미와 반대 근거를 설명해줘. 주봉 사건은 이전 추세·기대→새 정보→후속 가격→전환/강화/일시반응 해석을 연결하고 전체 국면을 종합해줘. 본문에 담은 해석을 llm_opinion에 중복하지 마. 사용자 발언을 만들지 말고 user_response에는 실제 확인된 발언만 넣어줘. "
+                    "해석형 본문과 주장 가까이 연결한 출처를 저장해줘. 첫머리에 전제 검증·EPS 변화·가설과 반대 근거를 설명하고 확인 사실·회사 전망·AI 가설을 구분해줘. 본문에 담은 해석을 llm_opinion에 중복하지 마. 사용자 발언을 만들지 말고 user_response에는 실제 확인된 발언만 넣어줘. "
                     "저장 성공의 ID와 history 일치를 확인해줘. "
                     "저장 실패를 완료로 표시하지 마. 작도는 없어도 되며 이 정성분석에서 작도 제안·계좌 조회·주문·위험 기준 변경은 하지 마. "
+                    "논의가 계획으로 이어지면 plan.hypothesis의 verification_date(가설 검증일·실적 발표일), invalidation_statement(정성 반증 조건), pre_verification_allocation(검증 전 비중)을 사용자 값 또는 미정 그대로 저장·조회해줘. 비중은 분모를 함께 안내한 사용자 원문 문자열이며 숫자로 환산하지 마. "
                     + FOLLOWUP + f"분석 키: {cid}\n대시보드: {dashboard}")
         resume = (f"투자 워크벤치 {cid} ({case['stock_key']})의 후속 논의를 이어가줘. "
                   "프로젝트 AGENTS의 후속 협업 규칙을 읽고 analysis_collaboration_read로 현재 판단·채택한 정확한 계획 버전·미정 질문·원문 참조를 먼저 확인해줘. "
                   "analysis_history에서 최신 보고서 본문과 원 출처를 읽고 analysis_report_document로 현재 세션에 열 문서를 얻어줘. 기존 근거를 재사용하며 새로운 사실이 필요한 부분만 조사해줘. 기술적인 처리 내역부터 설명하지 말고 기업의 변화·가격 국면·핵심 쟁점과 반대 근거부터 해석해줘. 7항목을 한꺼번에 묻지 말고 차트·보유 이유·반증·대응에서 이번 판단을 바꾸는 모호함만 자연스럽게 논의해줘. "
-                  "새 조사 필요 때만 stock-qualitative-analysis를 사용하고 미정 판단을 대신 채택하지 마. "
+                  "새 조사 필요 때만 eps-research 절차로 deep-research의 결과를 대화로 받고 미정 판단을 대신 채택하지 마. "
                   "확보한 발언 원문과 합의·미정을 analysis_save_discussion으로 저장하고 계획은 analysis_save_plan으로 초안 버전을 남겨줘. "
+                  "plan.hypothesis에는 가설 검증일(실적 발표일) verification_date, 정성 반증 조건 invalidation_statement, 검증 전 비중 pre_verification_allocation을 사용자 값 또는 미정 그대로 남겨줘. "
+                  "검증 전 비중은 분모를 함께 적게 안내하고 사용자 원문 문자열로 저장해줘. 숫자·수량으로 환산하거나 실적일 수집·반증 자동 판정을 하지 마. "
                   "사용자 직접 작도 또는 analysis_propose의 박스·평행 채널·손익비 초안을 활용하고 저장/채택/실제 체결을 구분해줘. "
                   "가격 경고는 트레일링·MA5와 별도 보유/매수 시나리오의 최신 완료 거래일 종가 판정이다. 접근 기본값은 조정 가능한 0.5×ATR14이며 기울어진 선은 해당 거래일 값으로 비교한다. "
                   "감시 연결은 사용자가 화면에서 확정 시나리오와 저장 작도·허용폭을 확인한다. 저장된 작도 수정은 활성 참조만 갱신하며 당시 snapshot/계획 원본은 보존한다. 폐기한 구 위험 계산 도구는 복구하지 마. "
                   "snapshot_id와 expected_revision을 고정하며 충돌은 재조회해 조정한다. 저장 뒤 ID·버전·재조회 일치와 복귀 링크를 확인해줘. "
                   + FOLLOWUP + f"계획 채택은 사용자가 화면에서 정확한 버전을 확인한다. 대시보드: {dashboard}")
         return {'analysis_key':cid,'dashboard_url':dashboard,'reopen_command':f'.\\analysis.ps1 -AnalysisKey {cid}',
-                'resume_prompt':resume, 'resume_codex_url':'codex://new?'+urlencode({'path':str(self.root),'prompt':resume}),
+                'resume_prompt':resume,
                 'copy_text':f'분석건 {cid}\n이 분석건의 현재 차트를 다시 봐줘.\n{dashboard}\n포트 변경/서버 종료 시 워크벤치에서 .\\analysis.ps1 -AnalysisKey {cid}',
-                'codex_url':'codex://new?'+urlencode({'path':str(self.root),'prompt':prompt}), 'prompt':prompt,
+                'prompt':prompt,
                 'qualitative_skill':QUALITATIVE_SKILL}
 
     def capture(self, case):
@@ -274,7 +265,6 @@ class AnalysisService:
                 except FileExistsError:pass
             if path.read_text(encoding='utf-8')!=rendered: raise ValueError('reading_copy_integrity_failed')
         return dict(record_id=record['id'],snapshot_id=record['snapshot_id'],path=str(path),original_path=str(original),
-                    open_in_codex=dict(target=dict(type='file',path=str(path)),placement='right'),
                     next_step=FOLLOWUP)
 
     def holding(self, case, a):
