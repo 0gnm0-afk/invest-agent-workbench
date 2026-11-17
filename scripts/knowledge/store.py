@@ -12,6 +12,8 @@ from pathlib import Path
 import re
 import sqlite3
 
+from .search import KeywordSearch
+
 
 AUTHORS = frozenset({'user', 'source', 'ai'})
 KINDS = frozenset({'learning', 'interpretation', 'hypothesis', 'question', 'interest',
@@ -87,8 +89,9 @@ def _source_media(source):
 
 
 class KnowledgeStore:
-    def __init__(self, path):
+    def __init__(self, path, *, search_backend=None):
         self.path = Path(path).resolve()
+        self.search_backend = KeywordSearch() if search_backend is None else search_backend
 
     @contextmanager
     def _read(self):
@@ -445,19 +448,11 @@ class KnowledgeStore:
         if not isinstance(query, str) or len(query) > 500:
             raise ValueError('knowledge_invalid_query')
         subjects = self._subjects([topic] if topic else [], [stock_key] if stock_key else [])
-        query = query.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
         rows = []
         with self._read() as db:
             if db:
-                for kind, table in (('source', 'knowledge_sources'), ('note', 'knowledge_notes')):
-                    searchable = "coalesce(json_extract(payload, '$.title'), '') || char(10) || coalesce(json_extract(payload, '$.text'), '') || char(10) || coalesce(json_extract(payload, '$.body'), '')"
-                    clauses = [f"(({searchable}) LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM knowledge_links q WHERE q.item_type=? AND q.item_id=t.id AND q.subject LIKE ? ESCAPE '\\'))"]
-                    params = ['%' + query + '%', kind, '%' + query + '%']
-                    for subject in subjects:
-                        clauses.append('EXISTS (SELECT 1 FROM knowledge_links l WHERE l.item_type=? AND l.item_id=t.id AND l.subject=?)')
-                        params.extend([kind, subject])
-                    for row in db.execute('SELECT * FROM ' + table + ' t WHERE ' + ' AND '.join(clauses), params):
-                        rows.append(self._item(db, kind, row, include_text=False, preview=True))
+                for kind, row in self.search_backend.search_rows(db, query=query, subjects=subjects):
+                    rows.append(self._item(db, kind, row, include_text=False, preview=True))
         rows.sort(key=lambda r: (r['created_at'], r['id']), reverse=True)
         count = len(rows)
         return dict(items=rows[offset:offset + limit], total=count, offset=offset,

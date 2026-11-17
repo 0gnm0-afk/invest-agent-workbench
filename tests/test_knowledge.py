@@ -1,14 +1,11 @@
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
-from datetime import timedelta
 import asyncio
-import base64
 import hashlib
 import json
 import os
 from pathlib import Path
 import sqlite3
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -275,37 +272,30 @@ class KnowledgeTests(unittest.TestCase):
         self.assertEqual(Path(result['path']).read_bytes(), raw)
 
     def test_export_rejects_linked_directory_and_target(self):
+        # M00 forbids creating native links. Supply link metadata at the OS
+        # boundary; exercise the real exporter, including its no-write checks.
         source = self.source()
-        outside = self.root / 'auth'
-        outside.mkdir()
         directory = self.path.parent / '01.원본내보내기'
-        junction = False
-        try:
-            directory.symlink_to(outside, target_is_directory=True)
-        except OSError as error:
-            if os.name != 'nt':
-                self.skipTest('Host cannot create test symlink: ' + type(error).__name__)
-            # Windows junctions do not require the symlink privilege. Verify the
-            # real filesystem redirection guard on restricted Windows hosts too.
-            import _winapi
-            _winapi.CreateJunction(str(outside), str(directory))
-            junction = True
-        with self.assertRaisesRegex(ValueError, 'unsafe_export_directory'):
-            self.store.export_source(source['id'])
-        self.assertEqual(list(outside.iterdir()), [])
-        directory.rmdir() if junction else directory.unlink()
-        directory.mkdir()
-        private = outside / 'private.txt'
-        private.write_text('keep this file', encoding='utf-8')
         target = directory / (source['sha256'] + '.txt')
-        if junction:
-            _winapi.CreateJunction(str(outside), str(target))
-        else:
-            target.symlink_to(private)
-        with self.assertRaisesRegex(ValueError, 'unsafe_export_target'):
-            self.store.export_source(source['id'])
-        self.assertEqual(private.read_text(encoding='utf-8'), 'keep this file')
-
+        before = self.path.read_bytes()
+        for attribute in ('is_symlink', 'is_junction'):
+            with self.subTest(attribute=attribute, location='directory'):
+                with patch.object(Path, attribute, autospec=True,
+                                  side_effect=lambda path: path == directory):
+                    with self.assertRaisesRegex(ValueError, 'unsafe_export_directory'):
+                        self.store.export_source(source['id'])
+                self.assertFalse(directory.exists())
+            directory.mkdir()
+            target.write_bytes(b'keep original fixture bytes')
+            with self.subTest(attribute=attribute, location='target'):
+                with patch.object(Path, attribute, autospec=True,
+                                  side_effect=lambda path: path == target):
+                    with self.assertRaisesRegex(ValueError, 'unsafe_export_target'):
+                        self.store.export_source(source['id'])
+                self.assertEqual(target.read_bytes(), b'keep original fixture bytes')
+            target.unlink()
+            directory.rmdir()
+        self.assertEqual(self.path.read_bytes(), before)
     def test_export_refuses_sensitive_storage_directory(self):
         private_store = KnowledgeStore(self.root / 'secrets' / 'records.sqlite3')
         source = private_store.ingest('Fixture only', text='Original fixture text.')
@@ -365,86 +355,112 @@ class KnowledgeTests(unittest.TestCase):
             self.store.summary_read('US:AAA', 1)
         self.assertFalse(self.path.exists())
 
-    def test_mcp_persistence_across_processes_without_dashboard(self):
+    def mcp_fixture(self):
+        # The M00 controller starts each registered node in a fresh guarded
+        # worker. Never spawn a server/subprocess or fall back to a real root.
+        import isolation
+        self.assertIsNotNone(isolation.ACTIVE, 'M00 runner required')
+        root = Path(isolation.ACTIVE.config['temp']) / 'm02-mcp-handoff'
+        import workbench_paths
+        root_patch = patch.object(workbench_paths, 'ROOT', root)
+        root_patch.start()
+        self.addCleanup(root_patch.stop)
         with patch.dict(os.environ, {'PYDANTIC_DISABLE_PLUGINS': '__all__'}):
-            from mcp import ClientSession, StdioServerParameters
-            from mcp.client.stdio import stdio_client
-        scripts = Path(__file__).resolve().parents[1] / 'scripts'
-        root = self.root / 'isolated-workspace'
+            import session_mcp
+        store_patch = patch.object(session_mcp, 'ROOT', root)
+        store_patch.start()
+        self.addCleanup(store_patch.stop)
+        context_patch = patch.object(session_mcp, 'saved_context',
+            side_effect=lambda stock_key, **kwargs: __import__('session_context').saved_context(
+                stock_key, root=root, **kwargs))
+        context_patch.start()
+        self.addCleanup(context_patch.stop)
+        return root, session_mcp.mcp
+
+    def call_mcp(self, mcp, name, arguments):
+        # SelectorEventLoop uses guarded socketpair, not native overlapped I/O.
+        with asyncio.Runner(loop_factory=asyncio.SelectorEventLoop) as runner:
+            result = runner.run(mcp.call_tool(name, arguments))
+        if isinstance(result, tuple):
+            content, structured = result
+            self.assertIsInstance(structured, dict)
+        else:
+            content = result
+        return json.loads(next(item.text for item in content if item.type == 'text'))
+
+    def test_mcp_fixture_write_for_process_handoff(self):
+        root, mcp = self.mcp_fixture()
         root.mkdir()
-        wrapper = self.root / 'mcp_fixture.py'
-        wrapper.write_text('import sys\nfrom pathlib import Path\n'
-                           + 'sys.path.insert(0, ' + repr(str(scripts)) + ')\n'
-                           + 'import workbench_paths\nworkbench_paths.ROOT = Path(' + repr(str(root)) + ')\n'
-                           + 'from session_mcp import mcp\nmcp.run(transport="stdio")\n', encoding='utf-8')
         raw = b'%PDF-1.4\nfixture original only; no real company claims\n'
-        document = self.root / 'fixture.pdf'
+        document = root / 'fixture.pdf'
         document.write_bytes(raw)
-
-        async def call(client, name, arguments):
-            result = await client.call_tool(name, arguments)
-            self.assertFalse(result.isError, str(result.content))
-            return json.loads(next(item.text for item in result.content if item.type == 'text'))
-
-        async def first_session():
-            params = StdioServerParameters(command=sys.executable, args=[str(wrapper)], env={'PYTHONUTF8': '1'})
-            async with stdio_client(params) as (read, write):
-                async with ClientSession(read, write, read_timeout_seconds=timedelta(seconds=120)) as client:
-                    initialized = await client.initialize()
-                    self.assertIn('Session-first investment workspace', initialized.instructions)
-                    names = {t.name for t in (await client.list_tools()).tools}
-                    self.assertTrue({'knowledge_ingest', 'knowledge_note', 'investment_context'} <= names)
-                    source = await call(client, 'knowledge_ingest', dict(title='Isolated fixture report', file_path=str(document),
-                                                                       text='Fixture extracted research, not a real opinion.', stock_keys=['US:AAA'], topics=['chips'], session_id='one'))
-                    note = await call(client, 'knowledge_note', dict(kind='question', body='Fixture question still unresolved.', author='user',
-                                                                    stock_keys=['US:AAA'], source_ids=[source['id']], session_id='one'))
-                    summary = await call(client, 'knowledge_summary', dict(subject='US:AAA', body='Fixture question remains open.',
-                                                                            expected_revision=0, note_ids=[note['id']], source_ids=[source['id']], next_step='Fixture follow-up.'))
-                    self.assertEqual(summary['revision'], 1)
-                    return source, note
-
-        source, note = asyncio.run(first_session())
-
-        async def second_session():
-            params = StdioServerParameters(command=sys.executable, args=[str(wrapper)], env={'PYTHONUTF8': '1'})
-            async with stdio_client(params) as (read, write):
-                async with ClientSession(read, write, read_timeout_seconds=timedelta(seconds=120)) as client:
-                    await client.initialize()
-                    context = await call(client, 'investment_context', {'stock_key': 'US:AAA'})
-                    self.assertEqual(context['knowledge']['summaries']['US:AAA']['revision'], 1)
-                    self.assertEqual(context['knowledge']['unresolved'][0]['id'], note['id'])
-                    self.assertEqual(context['knowledge']['related_topics'], ['topic:chips'])
-                    duplicate = await call(client, 'knowledge_note', dict(kind='question', body='Fixture question still unresolved.', author='user',
-                                                                         stock_keys=['US:AAA'], source_ids=[source['id']], session_id='two'))
-                    self.assertTrue(duplicate['idempotent'])
-                    self.assertEqual(duplicate['id'], note['id'])
-                    self.assertEqual(duplicate['session_ids'], ['one', 'two'])
-                    original = await call(client, 'knowledge_source', {'source_id': source['id']})
-                    self.assertEqual(original['sha256'], hashlib.sha256(raw).hexdigest())
-                    self.assertTrue(original['verified'])
-                    history = await call(client, 'knowledge_summary_history', {'subject': 'US:AAA', 'limit': 1})
-                    self.assertEqual(history['items'][0]['revision'], 1)
-                    previous = await call(client, 'knowledge_summary_read', {'subject': 'US:AAA', 'revision': 1, 'limit': 10})
-                    self.assertEqual(previous['body'], 'Fixture qu')
-                    self.assertEqual(previous['body_page']['next_offset'], 10)
-                    exported = await call(client, 'knowledge_source_export', {'source_id': source['id']})
-                    self.assertEqual(Path(exported['path']).read_bytes(), raw)
-                    self.assertEqual(exported['original_name'], document.name)
-                    self.assertEqual(exported['mime_type'], 'application/pdf')
-                    self.assertTrue(exported['verified'])
-                    repeat_export = await call(client, 'knowledge_source_export', {'source_id': source['id']})
-                    self.assertTrue(repeat_export['idempotent'])
-
-        asyncio.run(second_session())
+        self.assertIn('Session-first investment workspace', mcp.instructions)
+        with asyncio.Runner(loop_factory=asyncio.SelectorEventLoop) as runner:
+            names = {tool.name for tool in runner.run(mcp.list_tools())}
+        self.assertTrue({'knowledge_ingest', 'knowledge_note', 'investment_context'} <= names)
+        source = self.call_mcp(mcp, 'knowledge_ingest', dict(
+            title='Isolated fixture report', file_path=str(document),
+            text='Fixture extracted research, not a real opinion.',
+            stock_keys=['US:AAA'], topics=['chips'], session_id='one'))
+        note = self.call_mcp(mcp, 'knowledge_note', dict(
+            kind='question', body='Fixture question still unresolved.', author='user',
+            stock_keys=['US:AAA'], source_ids=[source['id']], session_id='one'))
+        summary = self.call_mcp(mcp, 'knowledge_summary', dict(
+            subject='US:AAA', body='Fixture question remains open.', expected_revision=0,
+            note_ids=[note['id']], source_ids=[source['id']], next_step='Fixture follow-up.'))
+        self.assertEqual(summary['revision'], 1)
+        self.assertTrue(source['verified'])
+        self.assertTrue(note['verified'])
+        self.assertTrue(summary['verified'])
         document.unlink()
-        export = subprocess.run([sys.executable, '-c',
-            'import sys,base64; sys.path.insert(0, ' + repr(str(scripts)) + '); '
-            'from knowledge import KnowledgeStore; '
-            'print(base64.b64encode(KnowledgeStore(' + repr(str(root / 'runtime/records.sqlite3')) + ').export_source_bytes(' + repr(source['id']) + ')).decode())'],
-            check=True, capture_output=True, text=True, timeout=30)
-        self.assertEqual(base64.b64decode(export.stdout.strip()), raw)
+        import isolation
+        marker = dict(writer_pid=os.getpid(), writer_node=isolation.ACTIVE.config['node'],
+                      source_id=source['id'], note_id=note['id'], sha256=source['sha256'],
+                      database_sha256=hashlib.sha256((root / 'runtime/records.sqlite3').read_bytes()).hexdigest(),
+                      verified=True)
+        (root / 'writer-success.json').write_text(json.dumps(marker), encoding='utf-8')
+
+    def test_mcp_persistence_across_processes_without_dashboard(self):
+        root, mcp = self.mcp_fixture()
+        marker_path = root / 'writer-success.json'
+        self.assertTrue(marker_path.is_file(), 'Run M02 suite or select both MCP handoff nodes in manifest order')
+        marker = json.loads(marker_path.read_text(encoding='utf-8'))
+        self.assertTrue(marker['verified'])
+        self.assertEqual(marker['writer_node'], 'test_knowledge.KnowledgeTests.test_mcp_fixture_write_for_process_handoff')
+        self.assertNotEqual(marker['writer_pid'], os.getpid())
+        database = root / 'runtime/records.sqlite3'
+        self.assertEqual(hashlib.sha256(database.read_bytes()).hexdigest(), marker['database_sha256'])
+        raw = b'%PDF-1.4\nfixture original only; no real company claims\n'
+        context = self.call_mcp(mcp, 'investment_context', {'stock_key': 'US:AAA'})
+        self.assertEqual(context['knowledge']['summaries']['US:AAA']['revision'], 1)
+        self.assertEqual(context['knowledge']['unresolved'][0]['id'], marker['note_id'])
+        self.assertEqual(context['knowledge']['related_topics'], ['topic:chips'])
+        duplicate = self.call_mcp(mcp, 'knowledge_note', dict(
+            kind='question', body='Fixture question still unresolved.', author='user',
+            stock_keys=['US:AAA'], source_ids=[marker['source_id']], session_id='two'))
+        self.assertTrue(duplicate['idempotent'])
+        self.assertEqual(duplicate['id'], marker['note_id'])
+        self.assertEqual(duplicate['session_ids'], ['one', 'two'])
+        original = self.call_mcp(mcp, 'knowledge_source', {'source_id': marker['source_id']})
+        self.assertEqual(original['sha256'], hashlib.sha256(raw).hexdigest())
+        self.assertEqual(original['sha256'], marker['sha256'])
+        self.assertTrue(original['verified'])
+        history = self.call_mcp(mcp, 'knowledge_summary_history', {'subject': 'US:AAA', 'limit': 1})
+        self.assertEqual(history['items'][0]['revision'], 1)
+        previous = self.call_mcp(mcp, 'knowledge_summary_read', {'subject': 'US:AAA', 'revision': 1, 'limit': 10})
+        self.assertEqual(previous['body'], 'Fixture qu')
+        self.assertEqual(previous['body_page']['next_offset'], 10)
+        exported = self.call_mcp(mcp, 'knowledge_source_export', {'source_id': marker['source_id']})
+        self.assertEqual(Path(exported['path']).read_bytes(), raw)
+        self.assertEqual(exported['original_name'], 'fixture.pdf')
+        self.assertEqual(exported['mime_type'], 'application/pdf')
+        self.assertTrue(exported['verified'])
+        repeat_export = self.call_mcp(mcp, 'knowledge_source_export', {'source_id': marker['source_id']})
+        self.assertTrue(repeat_export['idempotent'])
+        self.assertEqual(KnowledgeStore(database).export_source_bytes(marker['source_id']), raw)
         self.assertFalse((root / 'runtime/dashboard').exists())
         self.assertFalse((root / 'runtime/chart-workspaces.sqlite3').exists())
+        self.assertFalse((root / 'runtime/ohlcv.sqlite3').exists())
 
 
 if __name__ == '__main__':
