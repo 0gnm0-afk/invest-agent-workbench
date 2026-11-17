@@ -23,7 +23,11 @@ class RecalculateSaved(unittest.TestCase):
         self.sid = 'a' * 32
         self.folder = self.store.folder(self.key)
         self.base = self.folder / 'snapshots' / self.sid
-        self.prior = dict(key=self.key, snapshot_id=self.sid, collected_at='2026-09-30T01:00:00Z', sources=[dict(id='facts.json', url='https://www.sec.gov/example')])
+        raw = packed(dict(official='retained'))
+        receipt = dict(id='facts.json', url='https://www.sec.gov/example',
+                       fetched_at='2026-09-30T01:00:00Z',
+                       sha256=hashlib.sha256(raw).hexdigest(), bytes=len(raw))
+        self.prior = dict(key=self.key, snapshot_id=self.sid, collected_at='2026-09-30T01:00:00Z', sources=[receipt])
         save(self.base / 'source.json', dict(provider='SEC', symbol='ABC'))
         save(self.base / 'saved-price.json', dict(market='US', symbol='ABC', bars=[]))
         save(self.base / 'result.json', self.prior)
@@ -55,7 +59,7 @@ class RecalculateSaved(unittest.TestCase):
             self.assertEqual(lock.call_count,int(stale))
 
     def test_recalculate_retains_raw_date_and_original_snapshot(self):
-        with patch('financials.store.Collector') as collector, patch('financials.store.sec_normalize', return_value={'ok': True}), patch('financials.store.summarize', return_value={'summary': [], 'calculation_version': 'new'}):
+        with patch('financials.providers.official.Collector') as collector, patch('financials.providers.official.sec_normalize', return_value={'ok': True}), patch('financials.store.summarize', return_value={'summary': [], 'calculation_version': 'new'}):
             result = self.store.recalculate_saved(self.key)
             collector.assert_not_called()
         self.assertEqual(result['state'], 'complete')
@@ -122,7 +126,7 @@ class RecalculateSaved(unittest.TestCase):
         before={str(p.relative_to(self.base)):p.read_bytes() for p in self.base.rglob('*') if p.is_file()}
         updated=self.current_price(history={'state':'partial','reason':'saved_history_quality_flags'})
         updated['bars'][0]['close']=12
-        with patch('financials.store.Collector') as collector, patch('financials.store.sec_normalize',return_value={}), \
+        with patch('financials.providers.official.Collector') as collector, patch('financials.providers.official.sec_normalize',return_value={}), \
                 patch('financials.store.summarize',return_value={'summary':[]}) as calculate:
             result=self.store.recalculate_saved(self.key,stock=updated)
             collector.assert_not_called()
@@ -161,7 +165,7 @@ class RecalculateSaved(unittest.TestCase):
         # A newer correction cannot change the prices used by the old financial report.
         current=copy.deepcopy(original);current['bars'][0]['close']=11.5
         store.put(current,source='later',kind='series')
-        with patch('financials.store.Collector') as collector,patch('financials.store.sec_normalize',return_value={}), \
+        with patch('financials.providers.official.Collector') as collector,patch('financials.providers.official.sec_normalize',return_value={}), \
                 patch('financials.store.summarize',return_value={'summary':[]}) as calculate:
             result=self.store.recalculate_saved(self.key)
             self.assertEqual(result['state'],'complete')
@@ -196,6 +200,48 @@ class RecalculateSaved(unittest.TestCase):
             self.assertEqual(db.execute('SELECT count(*) FROM price_corrections').fetchone()[0],0)
         self.assertEqual(store.read(ref),live['bars'])
 
+    def test_saved_read_uses_only_readonly_price_api_without_collecting(self):
+        from market.financial_price_receipts import pack_price_input, read_price_input
+        store = self.store.price_store
+        stock = self.current_price(provider='Toss OpenAPI candles')
+        store.put(stock, source='fixture', kind='series')
+        price_path = self.base / 'saved-price.json'
+        marker = pack_price_input(stock, price_path, store)
+        before = {p.relative_to(self.store.root).as_posix(): p.read_bytes()
+                  for p in self.store.root.rglob('*') if p.is_file()}
+        with patch('financials.providers.official.Collector') as collector, \
+                patch('financials.store.pack_price_input') as pack, \
+                patch.object(store, 'put') as put, \
+                patch.object(store, 'connect', wraps=store.connect) as connect:
+            result = self.store.read(self.key)
+            self.assertEqual(read_price_input(packed(marker), price_path, store), stock)
+            collector.assert_not_called()
+            pack.assert_not_called()
+            put.assert_not_called()
+            self.assertTrue(connect.called)
+            self.assertTrue(all(not c.kwargs.get('write', False) for c in connect.call_args_list))
+        self.assertEqual(result['result'], self.prior)
+        after = {p.relative_to(self.store.root).as_posix(): p.read_bytes()
+                 for p in self.store.root.rglob('*') if p.is_file()}
+        self.assertEqual(after, before)
+
+    def test_price_version_unavailable_without_variants_does_not_write(self):
+        from market.financial_price_receipts import FinancialPriceFiles
+        store = self.store.price_store
+        live = self.current_price(provider='Toss OpenAPI candles')
+        current = store.put(live, source='fixture', kind='series')
+        historical = copy.deepcopy(live)
+        historical['bars'][0]['close'] = 10
+        before = store.path.read_bytes()
+        files = FinancialPriceFiles(store, allow_variants=False)
+        try:
+            with self.assertRaisesRegex(ValueError, '^financial_price_version_unavailable$'):
+                files.reference(historical)
+        finally:
+            files.close()
+        self.assertEqual(store.path.read_bytes(), before)
+        self.assertEqual(store.read(current), live['bars'])
+
     def test_price_recalculation_rejects_failed_or_incompatible_history(self):
         for fields in ({'bars':[]},*({'history':{'state':s}} for s in ('failed','excluded','unavailable','pending')),
                        {'history':{'state':'partial','daily_update_reason':'listing_identity_changed'}},
@@ -222,7 +268,7 @@ class RecalculateSaved(unittest.TestCase):
         self.assertEqual(result['scope'],'saved_disclosures_and_saved_prices_no_network')
 
     def test_failed_calculation_keeps_old_success(self):
-        with patch('financials.store.sec_normalize', side_effect=ValueError('bad period')):
+        with patch('financials.providers.official.sec_normalize', side_effect=ValueError('bad period')):
             result = self.store.recalculate_saved(self.key)
         self.assertEqual(result['state'], 'failed')
         self.assertEqual(result['result']['snapshot_id'], self.sid)
@@ -255,9 +301,11 @@ class RecalculateSaved(unittest.TestCase):
         self._make_dart_fixture()
         def supplement(collector, source):
             save(collector.folder / 'annual-extra.json', {'status':'000','list':[]})
-            collector.sources.append(dict(id='annual-extra.json', url='https://opendart.fss.or.kr/api/alotMatter.json'))
+            raw = (collector.folder / 'annual-extra.json').read_bytes()
+            collector.sources.append(dict(id='annual-extra.json', url='https://opendart.fss.or.kr/api/alotMatter.json',
+                fetched_at='2026-11-01T00:00:00Z', sha256=hashlib.sha256(raw).hexdigest(), bytes=len(raw)))
             return dict(source, annual_supplements=[{'year':2025,'raw':{'status':'000','list':[]}}])
-        with patch('financials.providers.dart_supplement.collect_annual_supplements', side_effect=supplement) as supplement_call, patch('financials.store.dart_normalize', return_value={'ok':True}), patch('financials.store.summarize', return_value={'summary':[], 'calculation_version':'new'}):
+        with patch('financials.providers.dart_supplement.collect_annual_supplements', side_effect=supplement) as supplement_call, patch('financials.providers.official.dart_normalize', return_value={'ok':True}), patch('financials.store.summarize', return_value={'summary':[], 'calculation_version':'new'}):
             response = self.store.recalculate_saved(self.key, supplement=True)
         supplement_call.assert_called_once()
         self.assertEqual(response['state'], 'complete')
@@ -280,7 +328,7 @@ class RecalculateSaved(unittest.TestCase):
         self.assertEqual(json.loads((self.folder / 'latest.json').read_bytes())['snapshot'], self.sid)
 
     def test_sec_supplement_stays_offline(self):
-        with patch('financials.store.Collector') as collector, patch('financials.store.sec_normalize', return_value={'ok':True}), patch('financials.store.summarize', return_value={'summary':[]}):
+        with patch('financials.providers.official.Collector') as collector, patch('financials.providers.official.sec_normalize', return_value={'ok':True}), patch('financials.store.summarize', return_value={'summary':[]}):
             response = self.store.recalculate_saved(self.key, supplement=True)
         collector.assert_not_called()
         self.assertEqual(response['state'], 'complete')

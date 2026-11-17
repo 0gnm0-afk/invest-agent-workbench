@@ -9,8 +9,8 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from financials.collect import Collector, SourceError, settings
-from financials.normalize import dart_normalize, sec_normalize
+from financials.collect import SourceError, settings
+from financials.providers.official import FinancialPeriod, OfficialFinancialAdapter, validate_sources
 from financials.calculate import VERSION, summarize
 from market.financial_price_receipts import pack_price_input, price_input_bytes, read_price_input
 from market.prices import PriceStore, default_path
@@ -77,7 +77,7 @@ def selected_stock(market,symbol,histories):
 
 
 class FinancialStore:
-    def __init__(self, root=None, *, price_store=None):
+    def __init__(self, root=None, *, price_store=None, adapter=None):
         self.root=Path(root or ROOT/'runtime/financials')
         if price_store is None:
             path = (default_path() if self.root.resolve()==(ROOT/'runtime/financials').resolve()
@@ -85,6 +85,7 @@ class FinancialStore:
                     else self.root/'ohlcv.sqlite3')
             price_store=PriceStore(path)
         self.price_store=price_store
+        self.adapter=adapter if adapter is not None else OfficialFinancialAdapter()
         self.mutex=threading.Lock()
 
     def folder(self,key):
@@ -141,33 +142,30 @@ class FinancialStore:
         def progress(stage):save(folder/'attempt.json',dict(state='running',started_at=started,stage=stage),atomic=True)
         try:
             inherited = None
+            period = FinancialPeriod.current()
             if seed:
                 import shutil
-                seed=Path(seed);shutil.copytree(seed/'raw',base/'raw',dirs_exist_ok=True)
+                seed=Path(seed)
+                # Copy bytes through audited Python I/O; copy2 uses unaudited
+                # Windows CopyFile2. Provenance lives in the source receipts.
+                shutil.copytree(seed/'raw',base/'raw',dirs_exist_ok=True,copy_function=shutil.copyfile)
                 source=json.loads(read_artifact(seed/'source.json'))
                 try:
                     inherited=json.loads(read_artifact(seed/'result.json'))
                 except FileNotFoundError:
                     pass
                 sources=json.loads((seed/'sources.json').read_bytes()) if (seed/'sources.json').exists() else inherited['sources']
-                if supplement and source.get('provider')=='DART':
-                    from financials.providers.dart_supplement import collect_annual_supplements
-                    collector=Collector(base/'raw',progress)
-                    source=collect_annual_supplements(collector,source)
-                    sources=[*sources,*collector.sources]
-                    source['supplemented_at']=now()
+                method=self.adapter.supplement_saved if supplement else self.adapter.normalize_saved
+                bundle=method(key,period,source,sources,base/'raw',progress)
             else:
-                collector=Collector(base/'raw',progress)
-                source=collector.korea(stock['symbol'].split('.')[0]) if stock['market']=='KR' else collector.usa(stock['symbol'])
-                sources=collector.sources
-            sources = list({s['id']:s for s in sources}.values())
-            source['symbol']=stock['symbol']
+                bundle=self.adapter.collect(key,period,base/'raw',progress)
+            source=bundle['source'];normal=bundle['normalized']
+            sources=validate_sources(bundle['sources'],base/'raw')
             progress('공시 기간 정규화 · Python 재무 계산')
-            from financials.business import unsupported,coverage
+            from financials.business import coverage
             if source.get('eligibility',{}).get('status')=='unsupported':
-                normal=unsupported(source);result=dict(normal,calculation_version=VERSION)
+                result=dict(normal,calculation_version=VERSION)
             else:
-                normal=dart_normalize(source) if source['provider']=='DART' else sec_normalize(source)
                 result=coverage(summarize(normal,stock))
                 result['format_issues']=source.get('format_issues',[])
                 result['enrichment_errors']=source.get('enrichment_errors',[])
@@ -184,6 +182,7 @@ class FinancialStore:
             files={str(p.relative_to(base)).replace('\\','/'):hashlib.sha256(p.read_bytes()).hexdigest() for p in base.rglob('*') if p.is_file()}
             code_paths = {
                 'financial_sources.py': 'financials/collect.py',
+                'financial_official.py': 'financials/providers/official.py',
                 'financial_model.py': 'financials/normalize.py',
                 'financial_focus.py': 'financials/calculate.py',
                 'financial_store.py': 'financials/store.py',
@@ -216,8 +215,10 @@ class FinancialStore:
             # Retain official sources for a future parser fix even when no table
             # can be produced. Never turn transport failure into format failure.
             if error=='UNSUPPORTED_FINANCIAL_FORMAT':
-                if 'source' in locals() and not (base/'source.json').exists():save(base/'source.json',source)
-                if 'sources' in locals() and not (base/'sources.json').exists():save(base/'sources.json',sources)
+                source=getattr(exc,'source',locals().get('source'))
+                sources=getattr(exc,'sources',locals().get('sources'))
+                if source is not None and not (base/'source.json').exists():save(base/'source.json',source)
+                if sources is not None and not (base/'sources.json').exists():save(base/'sources.json',sources)
             save(base/'failure.json',dict(state='failed',error=error,at=now()))
             save(folder/'attempt.json',dict(state='failed',started_at=started,finished_at=now(),error=error,stage='갱신 실패 · 이전 성공 보존'),atomic=True)
         finally:unlock(lease)
