@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import math
+import sqlite3
 from pathlib import Path
 from uuid import uuid4
 
@@ -93,7 +94,13 @@ class ScenarioStore:
             CREATE TABLE IF NOT EXISTS scenario_monitor_events(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS scenario_monitor_evaluations(monitor_id TEXT NOT NULL,revision INTEGER NOT NULL,day TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(monitor_id,revision,day));''')
 
-    def connect(self): return self.workspace.connect()
+    def connect(self):
+        # C1: opening a monitor connection must not initialize/migrate M06 tables.
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        return sqlite3.connect(self.path, timeout=5)
+
+    def _workspace_saved(self, db):
+        return db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='shared_chart_workspaces'").fetchone() is not None
 
     def read(self, stock_key=None, *, now=None, targets=None):
         with closing(self.connect()) as db:
@@ -131,7 +138,7 @@ class ScenarioStore:
 
     def register(self, *, stock_key, identity, case_id, plan_record_id, plan_id, plan_version,
                  drawing_id, workspace_revision, timeframe='1d', purpose='holding', boundary='both',
-                 tolerance_atr=.5, confirmed_response=None, confirmed_responses=None, account_alias=None, detail_url=None, chart=None, test_record=False):
+                 tolerance_atr=.5, confirmed_response=None, confirmed_responses=None, account_alias=None, detail_url=None, chart=None, test_record=False, hypothesis=None):
         if purpose not in ('holding', 'buy') or timeframe not in ('1d', '1w', '1mo'): raise ValueError('invalid_monitor_purpose_or_frame')
         if type(test_record) is not bool: raise ValueError('invalid_test_record')
         if boundary is None: boundary = 'both'
@@ -144,10 +151,12 @@ class ScenarioStore:
         if confirmed_responses is not None and (not isinstance(confirmed_responses,dict) or set(confirmed_responses)-{'lower','upper','line','entry','stop','target','zone'} or any(not isinstance(v,str) or len(v)>4000 for v in confirmed_responses.values())):
             raise ValueError('invalid_confirmed_responses')
         tolerance_atr = tolerance(tolerance_atr)
-        self.workspace.shared(stock_key, timeframe)
         with closing(self.connect()) as db, db:
             db.execute('BEGIN IMMEDIATE')
+            if not self._workspace_saved(db): raise ValueError('saved_drawing_required')
+            # 조 3 뒤 전환 대상: M06 read-only C3 reader, in this same transaction.
             workspace = self.workspace.read_shared(db, stock_key)
+            if workspace is None: raise ValueError('saved_drawing_required')
             if workspace['revision'] != workspace_revision: raise Conflict('workspace_changed_elsewhere')
             drawing = next((d for d in workspace['payload']['drawings'] if d['id']==drawing_id), None)
             if not drawing: raise ValueError('saved_drawing_required')
@@ -165,12 +174,17 @@ class ScenarioStore:
                      geometry_bars=[{k:b[k] for k in ('date','last_session') if k in b} for b in (chart or {}).get('bars',[])],
                      active=True, status='pending', issue=None, created_at=utc(), updated_at=utc(), latest=None,
                      conversion=None, event_states={})
+            # Adopted plan context only; never interpreted as a price/event condition.
+            if hypothesis is not None: m['hypothesis'] = deepcopy(hypothesis)
             self._save(db,m,'registered')
         return m
 
     def sync_workspace(self, stock_key):
         with closing(self.connect()) as db, db:
             db.execute('BEGIN IMMEDIATE')
+            if not self._workspace_saved(db): raise ValueError('saved_drawing_required')
+            # 조 3 뒤 전환 대상: M06 workspace_revisions(stock_key, after_revision).
+            # Preserve every intermediate change/deletion/restoration in one transaction.
             versions = self.workspace.shared_versions(db, stock_key)
             if not versions: return
             current_revision = versions[-1]['revision']
@@ -246,6 +260,9 @@ class ScenarioStore:
             for payload, in db.execute('SELECT payload FROM scenario_monitors').fetchall():
                 m=json.loads(payload)
                 if not m['active']: continue
+                # Show the supplied saved observation even when it is stale/failed.
+                # account_as_of remains the last accepted observation for time-regression checks.
+                m['observed_account_as_of'] = bundle.get('as_of')
                 try:
                     if m.get('issue')=='saved_drawing_deleted_or_type_changed': raise ValueError(m['issue'])
                     stock=stocks.get(m['stock_key']); ident=m['identity']; market=ident['market']
@@ -344,4 +361,6 @@ def refresh_saved(root, market_run, targets, now=None, *, account_failed=False):
     active=[m for m in store.read()['monitors'] if m['active']]
     if not active: return store.read()
     bundle, stocks = saved_inputs(root, market_run, {m['stock_key'] for m in active}, account_failed=account_failed)
-    return store.update(bundle,stocks,targets,now)
+    result = store.update(bundle,stocks,targets,now)
+    result['account_observation'] = {key: bundle.get(key) for key in ('as_of','query_state','source_mode')}
+    return result

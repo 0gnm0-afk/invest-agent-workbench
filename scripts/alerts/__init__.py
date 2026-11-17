@@ -58,6 +58,7 @@ def packed(value):
     return json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True)
 
 
+# 조 2b 전환 대상: M03 공통 읽기로 구 내장 bars/bars_ref와 원본 해시를 보존한다.
 def holding_series(path, expected_hash, keys):
     """Read selected series from our indent=2 immutable snapshot without loading the universe."""
     if not path.exists():

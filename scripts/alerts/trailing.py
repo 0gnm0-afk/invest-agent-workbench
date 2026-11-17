@@ -218,6 +218,8 @@ class TrailingStore:
                     saved[key] = state
             for key, state in saved.items():
                 if key not in seen:
+                    state['observed_account_as_of'] = bundle.get('as_of')
+                    state['checked_at'] = now.isoformat()
                     account = accounts.get(state['account'])
                     if fresh and account and account.get('holdings_complete') and (not state.get('account_as_of') or account_time >= stamp(state['account_as_of'])):
                         state.update(active=False,status='closed',quantity=0,issue=None,account_as_of=bundle['as_of'])
@@ -227,8 +229,14 @@ class TrailingStore:
         return self.read()
 
 
-def refresh_saved(root, market_run, targets, now=None):
-    """Morning path: verified saved market + saved accounts only; no broker calls."""
+def refresh_saved(root, market_run, targets, now=None, *, account_failed=False):
+    """Evaluate saved holdings independently of broker refresh and delivery.
+
+    M12 can pass a failed observation without hiding the last saved timestamp.
+    Delivery is a separate call and does not depend on querying accounts.
+    """
     root = Path(root)
-    accounts, stocks = saved_inputs(root, market_run)
-    return TrailingStore(root/'runtime/trailing-warnings.sqlite3').update(accounts, stocks, targets, now)
+    accounts, stocks = saved_inputs(root, market_run, account_failed=account_failed)
+    result = TrailingStore(root/'runtime/trailing-warnings.sqlite3').update(accounts, stocks, targets, now)
+    result['account_observation'] = {key: accounts.get(key) for key in ('as_of', 'query_state', 'source_mode')}
+    return result

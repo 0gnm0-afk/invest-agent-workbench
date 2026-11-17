@@ -168,6 +168,40 @@ class Scenarios(unittest.TestCase):
   self.state['drawings'][0]['points'][0]['price']=95;self.ws.shared('US:S',revision=2,state=self.state)
   self.store.sync_workspace('US:S');h=self.store.history(m['id'])
   self.assertEqual([r['monitor']['drawing']['points'][0]['price'] for r in h],[90,92,95])
+ def test_missed_deletion_and_restoration_keep_both_revisions(self):
+  m=self.register();self.update();original=deepcopy(self.state)
+  self.state['drawings']=[];self.ws.shared('US:S',revision=1,state=self.state)
+  self.ws.shared('US:S',revision=2,state=original);self.store.sync_workspace('US:S')
+  history=self.store.history(m['id'])
+  self.assertEqual([h['monitor']['workspace_revision'] for h in history],[1,2,3])
+  self.assertEqual([h['reason'] for h in history],['registered','saved_drawing_deleted','saved_drawing_changed'])
+  self.assertEqual(history[1]['monitor']['issue'],'saved_drawing_deleted_or_type_changed')
+  self.assertIsNone(history[2]['monitor']['issue'])
+  self.assertEqual(self.store.read()['monitors'][0]['evaluations'][0]['workspace_revision'],1)
+ def test_store_does_not_initialize_or_migrate_drawing_tables(self):
+  other=ScenarioStore(self.root/'empty.sqlite3')
+  with closing(other.connect()) as db:
+   tables={row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+  self.assertEqual(tables,{'scenario_monitors','scenario_monitor_history','scenario_monitor_events','scenario_monitor_evaluations'})
+  with patch.object(WorkspaceStore,'connect',side_effect=AssertionError('drawing write connection forbidden')),patch.object(WorkspaceStore,'shared',side_effect=AssertionError('drawing migration forbidden')):
+   m=self.register();self.update();self.assertEqual(m['workspace_revision'],1)
+ def test_registration_requires_existing_shared_workspace(self):
+  other=ScenarioStore(self.root/'legacy.sqlite3');legacy=WorkspaceStore(other.path)
+  legacy.save('US:S',0,self.state)
+  with closing(other.connect()) as db:
+   before=db.execute('SELECT * FROM chart_workspaces').fetchall()
+  with patch.object(self,'store',other),self.assertRaisesRegex(ValueError,'saved_drawing_required'): self.register()
+  with closing(other.connect()) as db:
+   self.assertEqual(db.execute('SELECT * FROM chart_workspaces').fetchall(),before)
+   self.assertFalse(db.execute("SELECT 1 FROM sqlite_master WHERE name='shared_chart_workspaces'").fetchone())
+  self.assertEqual(other.read()['monitors'],[])
+ def test_failed_and_stale_account_keeps_observed_time(self):
+  self.register();self.bundle['as_of']=(self.now-timedelta(days=2)).isoformat()
+  m=self.update()['monitors'][0];self.assertEqual(m['observed_account_as_of'],self.bundle['as_of'])
+  self.assertEqual(m['issue'],'account_stale_or_incomplete');self.assertNotIn('account_as_of',m)
+  self.bundle['query_state']='failed';self.bundle['as_of']=self.now.isoformat()
+  m=self.update()['monitors'][0];self.assertEqual(m['observed_account_as_of'],self.bundle['as_of'])
+  self.assertEqual(m['issue'],'account_stale_or_incomplete');self.assertNotIn('account_as_of',m)
  def test_failed_evaluation_delivery_gate(self):
   self.register();self.add(89);self.update();event=self.store.read()['events'][0];event['test_record']=False
   with closing(self.store.connect()) as db,db:db.execute('UPDATE scenario_monitor_events SET payload=? WHERE id=?',(__import__('json').dumps(event),event['id']))
@@ -179,7 +213,28 @@ class Scenarios(unittest.TestCase):
   with closing(self.store.connect()) as db,db:db.execute('UPDATE scenario_monitor_events SET payload=? WHERE id=?',(__import__('json').dumps(event),event['id']))
   sent=[];send=lambda msg:sent.append(msg) or {'message_id':1}
   config=dict(enabled_at='2020-01-01',chat='fake')
-  dispatch(self.root,{'US':self.bars[-1]['date']},config=config,sender=send);dispatch(self.root,{'US':self.bars[-1]['date']},config=config,sender=send)
+  with patch('alerts.delivery.datetime') as clock:
+   clock.now.return_value=self.now
+   dispatch(self.root,{'US':self.bars[-1]['date']},config=config,sender=send);dispatch(self.root,{'US':self.bars[-1]['date']},config=config,sender=send)
   self.assertEqual(len(sent),1);self.assertIn('다음 행동',sent[0]);self.assertIn('분석 요청',sent[0]);self.assertNotIn('PRIVATE_ACCOUNT',sent[0]);self.assertIn('90.00 USD',sent[0])
+ def test_stale_holding_event_not_dispatched_without_reevaluation(self):
+  self.register();self.add(89);self.update();event=self.store.read()['events'][0];event['test_record']=False
+  with closing(self.store.connect()) as db,db: db.execute('UPDATE scenario_monitor_events SET payload=? WHERE id=?',(__import__('json').dumps(event),event['id']))
+  sent=[]
+  with patch('alerts.delivery.datetime') as clock:
+   clock.now.return_value=self.now+timedelta(days=2)
+   dispatch(self.root,{'US':self.bars[-1]['date']},config=dict(enabled_at='2020-01-01',chat='fake'),sender=lambda msg:sent.append(msg) or {'message_id':1})
+  self.assertFalse(sent)
+ def test_old_buy_event_is_recorded_expired(self):
+  self.register(purpose='buy');self.bundle['accounts'][0]['positions']=[];self.update()
+  event=self.store.read()['events'][0];event['test_record']=False
+  with closing(self.store.connect()) as db,db: db.execute('UPDATE scenario_monitor_events SET payload=? WHERE id=?',(__import__('json').dumps(event),event['id']))
+  before=deepcopy(self.store.read()['events']);sent=[]
+  next_day=(datetime.fromisoformat(event['date'])+timedelta(days=1)).date().isoformat()
+  with patch('alerts.delivery.datetime') as clock:
+   clock.now.return_value=self.now
+   result=dispatch(self.root,{'US':next_day},config=dict(enabled_at='2020-01-01',chat='fake'),sender=lambda msg:sent.append(msg) or {'message_id':1})
+  self.assertEqual(result['counts'].get('expired'),1);self.assertFalse(sent)
+  self.assertEqual(self.store.read()['events'],before)
 
 if __name__=='__main__':unittest.main()

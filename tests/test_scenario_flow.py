@@ -1,21 +1,64 @@
 """Isolated saved-record → drawing plan → confirmed watch integration."""
 from contextlib import closing
 from copy import deepcopy
+from pathlib import Path
+from types import SimpleNamespace
+import tempfile
 import unittest
 from unittest.mock import patch
 
-import test_collaboration as fixtures
 from analysis import Forbidden
-from drawings.store import defaults, Conflict
+from analysis.collaboration import VERSION
+from analysis.service import AnalysisService
+from drawings.store import WorkspaceStore, defaults, Conflict
 
 
 class ScenarioFlowTests(unittest.TestCase):
-    setUp = fixtures.CollaborationTests.setUp
-    tearDown = fixtures.CollaborationTests.tearDown
-    call = fixtures.CollaborationTests.call
-    read = fixtures.CollaborationTests.read
-    adopt = fixtures.CollaborationTests.adopt
-    envelope = fixtures.CollaborationTests.envelope
+    def setUp(self):
+        # Keep the M07 fixture self-contained: C8 copies only registered test files.
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name); self.store = WorkspaceStore(self.root / 'chart.sqlite3')
+        self.bars = [dict(date=d, open=100, high=112, low=90, close=105, volume=1000)
+                     for d in ('2026-09-18', '2026-09-21', '2026-09-22', '2026-09-23')]
+        self.stock = dict(symbol='SYNTH', market='US', name='Synthetic only', currency='USD', bars=self.bars,
+                          isin_code='US0000000001', exchange='NASDAQ', price_basis='adjusted')
+        self.accounts = {'as_of':'2026-10-01', 'accounts':[{'alias':'synthetic-us','positions':[
+            dict(symbol='SYNTH', market='US', quantity='10', currency='USD')]}], 'risk':{}}
+        self.data = {'accounts':self.accounts, 'market':{'state':'partial'}}
+        self.hist = SimpleNamespace(saved=SimpleNamespace(stocks={}, markets={}),
+                                    view=lambda s,f:{**s, 'timeframe':f},
+                                    ensure=lambda *a,**k: self.fail('provider access forbidden'))
+        self.fin = SimpleNamespace(read=lambda k:{'state':'unavailable', 'result':None})
+        self.view = lambda:(self.data, {'US:SYNTH':self.stock})
+        self.s = AnalysisService(self.store, self.hist, self.fin, self.view, self.root)
+        self.origin = 'http://127.0.0.1:1234'
+        detail = self.s.dispatch('create', {'stock_key':'US:SYNTH','test_record':True}, self.origin)
+        self.cid = detail['case']['id']; self.sid = detail['snapshots'][0]['id']
+
+    def call(self, op, args=None, role='collaboration', session=None):
+        return self.s.dispatch(op, {'analysis_key':self.cid, **(args or {})}, self.origin, principal=role, session=session)
+
+    def read(self): return self.call('collaboration_read')
+
+    def envelope(self):
+        return dict(contract_version=VERSION, snapshot_id=self.sid, expected_revision=self.read()['revision'])
+
+    def full_plan(self):
+        plan = dict(title='합성 전체 계획', purpose='통합 검증', account_alias='synthetic-us',
+                    allocation=dict(quantity='10', basis='units'), scenarios=[], conditions=[
+                        dict(id='c1', kind='qualitative', statement='성장 논리 훼손 시 재검토', action='review',
+                             evaluation=None, operator=None, price=None, currency=None,
+                             quantity=dict(value=None, basis=None), priority=1, execution_price=None, drawing_ref=None)])
+        return self.call('plan_save', {**self.envelope(), 'plan_id':None, 'expected_plan_version':0,
+                                      'plan':plan, 'references':[]})['record']
+
+    def adopt(self, plan, action='adopt'):
+        rev = self.read()['revision']
+        review = self.call('plan_review', dict(plan_record_id=plan['id'], expected_revision=rev),
+                           role='browser', session='browser-fixture')
+        return self.call('plan_decide', dict(contract_version=VERSION, expected_revision=rev,
+                         confirmation=review['confirmation'], action=action, reason='synthetic confirmation'),
+                         role='browser', session='browser-fixture')
 
     def drawing(self, kind='box'):
         prices = {'box':[95,110], 'channel':[95,100,110], 'riskreward':[100,95,110]}[kind]
@@ -89,7 +132,7 @@ class ScenarioFlowTests(unittest.TestCase):
 
     def test_simple_editor_preserves_full_plan_by_rejecting_replacement(self):
         self.drawing()
-        original=fixtures.CollaborationTests.plan(self)
+        original=self.full_plan()
         with self.assertRaisesRegex(ValueError,'full_plan_requires_full_editor'):
             self.draft(plan_id=original['plan_id'],expected_plan_version=original['plan_version'])
         self.assertEqual(self.s.item(self.cid,original['id']),original)

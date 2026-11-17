@@ -193,6 +193,12 @@ def scenario_message(e):
 
 
 def dispatch(root=ROOT, targets=None, *, config=None, sender=None, include_trailing=True, include_scenarios=True, include_technical=True):
+    """Deliver saved eligible events independently of account collection/evaluation.
+
+    M12 can call this after saved-input evaluations even when no account request
+    ran or a saved account observation was unavailable. Each source retains its
+    own eligibility checks; technical events do not require a holding.
+    """
     root = Path(root)
     folder = root/'runtime/telegram-delivery'
     folder.mkdir(parents=True, exist_ok=True)
@@ -207,7 +213,8 @@ def dispatch(root=ROOT, targets=None, *, config=None, sender=None, include_trail
             from alerts.trailing import TrailingStore
             events = TrailingStore(root/'runtime/trailing-warnings.sqlite3').delivery_events(targets) if include_trailing else []
             from scenarios.monitor import ScenarioStore
-            scenario = ScenarioStore(root/'runtime/chart-workspaces.sqlite3').read() if include_scenarios else {'monitors':[], 'events':[]}
+            scenario = ScenarioStore(root/'runtime/chart-workspaces.sqlite3').read(
+                now=datetime.now(timezone.utc)) if include_scenarios else {'monitors':[], 'events':[]}
             monitors = {m['id']:m for m in scenario['monitors']}
             for event in scenario['events']:
                 monitor = monitors.get(event['monitor_id'])
@@ -230,7 +237,7 @@ def dispatch(root=ROOT, targets=None, *, config=None, sender=None, include_trail
                 db.execute("UPDATE deliveries SET state='unknown',error='interrupted_delivery' WHERE state='sending'")
                 db.commit()
                 for event in reversed(events):
-                    if event['created_at'] < config['enabled_at']:
+                    if event.get('test_record') or event['created_at'] < config['enabled_at']:
                         continue
                     row = db.execute('SELECT state,attempts FROM deliveries WHERE id=?',(event['id'],)).fetchone()
                     if row and (row[0] != 'failed' or row[1] >= 3):
@@ -244,7 +251,7 @@ def dispatch(root=ROOT, targets=None, *, config=None, sender=None, include_trail
                     db.commit()
                     try:
                         result = sender(body)
-                        if not isinstance(result.get('message_id'), int):
+                        if type(result.get('message_id')) is not int:
                             raise DeliveryError('unknown', 'telegram_response_unconfirmed')
                         state, mid, error = 'sent', result['message_id'], None
                     except DeliveryError as exc:
