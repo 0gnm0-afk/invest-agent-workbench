@@ -99,9 +99,6 @@ class ScenarioStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         return sqlite3.connect(self.path, timeout=5)
 
-    def _workspace_saved(self, db):
-        return db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='shared_chart_workspaces'").fetchone() is not None
-
     def read(self, stock_key=None, *, now=None, targets=None):
         with closing(self.connect()) as db:
             rows = [json.loads(r[0]) for r in db.execute('SELECT payload FROM scenario_monitors ORDER BY rowid')]
@@ -153,10 +150,9 @@ class ScenarioStore:
         tolerance_atr = tolerance(tolerance_atr)
         with closing(self.connect()) as db, db:
             db.execute('BEGIN IMMEDIATE')
-            if not self._workspace_saved(db): raise ValueError('saved_drawing_required')
-            # 조 3 뒤 전환 대상: M06 read-only C3 reader, in this same transaction.
-            workspace = self.workspace.read_shared(db, stock_key)
-            if workspace is None: raise ValueError('saved_drawing_required')
+            workspace = self.workspace.saved_workspace(stock_key, connection=db)
+            if workspace['status'] == 'corrupt_data': raise ValueError('saved_drawing_corrupt_data')
+            if workspace['status'] not in ('ok', 'empty'): raise ValueError('saved_drawing_required')
             if workspace['revision'] != workspace_revision: raise Conflict('workspace_changed_elsewhere')
             drawing = next((d for d in workspace['payload']['drawings'] if d['id']==drawing_id), None)
             if not drawing: raise ValueError('saved_drawing_required')
@@ -182,15 +178,20 @@ class ScenarioStore:
     def sync_workspace(self, stock_key):
         with closing(self.connect()) as db, db:
             db.execute('BEGIN IMMEDIATE')
-            if not self._workspace_saved(db): raise ValueError('saved_drawing_required')
-            # 조 3 뒤 전환 대상: M06 workspace_revisions(stock_key, after_revision).
-            # Preserve every intermediate change/deletion/restoration in one transaction.
-            versions = self.workspace.shared_versions(db, stock_key)
-            if not versions: return
-            current_revision = versions[-1]['revision']
-            for payload, in db.execute('SELECT payload FROM scenario_monitors').fetchall():
-                m = json.loads(payload)
-                if m['stock_key'] != stock_key or not m['active'] or m['workspace_revision'] == current_revision: continue
+            monitors = [json.loads(row[0]) for row in db.execute('SELECT payload FROM scenario_monitors')]
+            monitors = [m for m in monitors if m['stock_key'] == stock_key and m['active']]
+            if not monitors: return
+            # Read all missed changes from the oldest active baseline in our transaction.
+            history = self.workspace.workspace_revisions(
+                stock_key, min(m['workspace_revision'] for m in monitors), connection=db)
+            if history['status'] != 'ok': raise ValueError('saved_drawing_' + history['status'])
+            if not history['history_complete']: raise ValueError('saved_drawing_history_incomplete')
+            versions = history['revisions']
+            current_revision = history['current_revision']
+            if any(m['workspace_revision'] > current_revision for m in monitors):
+                raise ValueError('saved_drawing_revision_ahead_of_workspace')
+            for m in monitors:
+                if m['workspace_revision'] == current_revision: continue
                 for workspace in versions:
                     version = workspace['revision']
                     if version <= m['workspace_revision']: continue
