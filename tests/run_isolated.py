@@ -29,6 +29,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SUPPORT = {'test_market_collect': ['test_hybrid_market.py']}
 SUFFIXES = {'.py', '.js', '.cjs', '.css', '.html', '.svg'}
 POLICIES = {'scripts/market/policies/exclusions.json', 'scripts/market/policies/lifecycle.json'}
+STATIC_LAUNCH_SOURCES = ('dashboard.ps1', 'daily.ps1', 'scheduled-market.ps1',
+                         'register-morning-task.ps1')
 
 
 def registered_method_exists(root, module, cls, method, seen=None):
@@ -119,6 +121,13 @@ def prepare(root, nodes, workspace):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(path.read_bytes())
                 copied.append(relative.as_posix())
+    # Fixed text fixtures only; this does not grant PowerShell execution rights.
+    for name in STATIC_LAUNCH_SOURCES:
+        source = root / name
+        if source.is_symlink() or source.resolve().parent != root.resolve():
+            raise ValueError('source_link_not_allowed')
+        (code / name).write_bytes(source.read_bytes())
+        copied.append(name)
     names = {'run_isolated.py', 'isolation.py', 'isolation_node.cjs',
              'test_isolation_node.cjs'}
     for node in nodes:

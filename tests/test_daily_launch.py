@@ -312,20 +312,29 @@ class Launch(unittest.TestCase):
 
 class DashboardViews(unittest.TestCase):
     def test_published_view_and_update_status_are_read_only(self):
+        from copy import deepcopy
         from web.server import handler_for, ThreadingHTTPServer
         with tempfile.TemporaryDirectory() as tmp:
-            holder={'view':({'generation':1},{'KR:A':{'bars':[1]}})}
+            holder={'view':({'generation':1,'market':{'run_id':'fixture-run-1'}},{'KR:A':{'market':'KR','symbol':'A','bars':[1]}})}
             with patch('socket.getfqdn',return_value='127.0.0.1'):
                 server=ThreadingHTTPServer(('127.0.0.1',0),handler_for({}, {},Path(tmp),'token',Path(tmp)/'workspace.sqlite3',views=holder,daily_status=lambda:{'enabled':True,'state':'partial','view_ready':True}))
             thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
             def get(path):
                 conn=http.client.HTTPConnection('127.0.0.1',server.server_port);conn.request('GET',path);response=conn.getresponse();result=json.loads(response.read());conn.close();return result
             try:
-                self.assertEqual(get('/api/home')['generation'],1)
-                holder['view']=({'generation':2},{'KR:A':{'bars':[2]}})
-                self.assertEqual(get('/api/home')['generation'],2)
+                before=deepcopy(holder)
+                home=get('/api/home')
+                self.assertEqual(home['market']['run_id'],'fixture-run-1')
+                self.assertNotIn('generation',home)
+                self.assertEqual(holder,before)
+                holder['view']=({'generation':2,'market':{'run_id':'fixture-run-2'}},{'KR:A':{'market':'KR','symbol':'A','bars':[2]}})
+                before=deepcopy(holder)
+                home=get('/api/home')
+                self.assertEqual(home['market']['run_id'],'fixture-run-2')
+                self.assertNotIn('generation',home)
                 self.assertEqual(get('/api/stock/KR:A')['bars'],[2])
                 self.assertEqual(get('/api/daily-update')['state'],'partial')
+                self.assertEqual(holder,before)
             finally:server.shutdown();server.server_close();thread.join()
 
 if __name__=='__main__':unittest.main()

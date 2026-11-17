@@ -156,7 +156,7 @@ class SessionMcpContractTests(unittest.TestCase):
                              dict(start=args.get('start'), end=args.get('end'), timeframe=args.get('timeframe', '1d'), include_l1=True))
             read.assert_called_once()
 
-    def test_context_preserves_pages_and_uses_interpretation_without_coordinates(self):
+    def test_context_preserves_pages_drawings_and_complete_c3_result(self):
         packet = self.packet()
         knowledge = {'history': {'next_offset': 4}, 'unresolved_page': {'next_offset': 7}, 'next_steps_page': {'next_offset': 9}}
         operations = {'drawings': [{'payload': {'points': ['raw']}}], 'records_page': {'next_offset': 4}, 'errors': []}
@@ -170,19 +170,14 @@ class SessionMcpContractTests(unittest.TestCase):
         read.assert_called_once_with('US:FIX')
         self.assertEqual(result['knowledge'], knowledge)
         self.assertEqual(result['operations']['records_page'], operations['records_page'])
-        self.assertNotIn('drawings', result['operations'])
+        self.assertEqual(result['operations']['drawings'], operations['drawings'])
+        self.assertEqual({k: v for k, v in result['operations'].items() if k != 'drawing_context'}, operations)
         context = result['operations']['drawing_context']
-        self.assertEqual(context['summary'], packet['summary'])
-        self.assertEqual(context['price'], packet['price'])
-        self.assertEqual(context['latest']['workspace_revision'], 2)
-        self.assertEqual(context['latest']['workspace_saved_at'], packet['latest']['workspace_saved_at'])
-        self.assertEqual(context['automatic_l1']['window'], packet['automatic_l1']['window'])
-        self.assertEqual(context['automatic_l1']['calculated_window'], packet['automatic_l1']['calculated_window'])
-        self.assertEqual(context['automatic_l1']['label'], '자동 L1 추세선')
-        self.assertEqual(context['automatic_l1']['line_count'], 1)
-        self.assertEqual(context['details'], {'tool': 'investment_drawings', 'arguments': {'stock_key': 'US:FIX'}})
-        for raw in ('coordinates', 'snapshot_drawing', 'payload', 'points'):
-            self.assertNotIn(raw, json.dumps(context))
+        self.assertEqual(context, packet)
+        self.assertEqual(context['latest']['drawings'][0]['workspace_revision'], 2)
+        self.assertEqual(context['adopted']['drawings'][0]['workspace_revision'], 1)
+        self.assertEqual(context['latest']['drawings'][0]['levels'][0]['distance'], -2)
+        self.assertEqual(context['automatic_l1']['lines'], packet['automatic_l1']['lines'])
         self.assertEqual((packet, knowledge, operations), originals)
 
     def test_topic_only_and_errors_do_not_guess_or_retry(self):

@@ -129,6 +129,7 @@ class RetiredFeatures(unittest.TestCase):
     def test_market_without_screening(self):
         from launch.daily import DailyLaunch
         import market.daily as daily
+        from market.collection_receipts import ROLE, collection_receipt
         from market.prices import PriceStore, freeze_snapshot
         from atomic_io import load, sha as file_sha
         targets = {'KR': '2026-10-06', 'US': '2026-10-06'}
@@ -150,7 +151,8 @@ class RetiredFeatures(unittest.TestCase):
             write(output / 'latest.json', {'attempt': str(source)})
         with patch.object(daily, 'ROOT', self.root), patch.object(daily, 'collect', side_effect=collect) as collector, \
              patch.object(daily, 'audit', return_value=quality), patch('market.exclusions.inventory', return_value={'issues': []}):
-            result = daily.run(config)
+            result = daily.run(config, session_cutoff='2026-10-06',
+                               evaluated_at='2026-10-07T00:01:00+00:00')
         collector.assert_called_once()
         self.assertEqual(result['state'], 'succeeded', result.get('error'))
         output = Path(result['output'])
@@ -170,9 +172,16 @@ class RetiredFeatures(unittest.TestCase):
         # already-published immutable fixture above untouched.
         value = deepcopy(result)
         path = self.root / 'runtime/receipt-cases'
-        def publish():
+        value['output'] = str(path)
+        def publish(*, receipt_override=None):
             write(path / 'run.json', value)
-            write(path / 'manifest.json', {'output_hashes': {'run.json': sha((path / 'run.json').read_bytes())}})
+            run_sha = sha((path / 'run.json').read_bytes())
+            published = (collection_receipt(value, run_sha) if receipt_override is None
+                         else {**deepcopy(receipt_override), 'sha256': run_sha})
+            write(path / ROLE, published)
+            write(path / 'manifest.json', {'output_hashes': {
+                'run.json': run_sha, ROLE: sha((path / ROLE).read_bytes())}})
+            return published
         value['quality']['markets']['US'] = dict(requested=2, received=1, failed=1)
         publish()
         self.assertEqual(launcher.collection_receipt(path, targets)['status'], 'partial')
@@ -181,14 +190,16 @@ class RetiredFeatures(unittest.TestCase):
         self.assertEqual(launcher.collection_receipt(path, targets)['status'], 'failed')
         value['quality']['markets']['US'] = dict(requested=1, received=1, failed=0)
         value['data_times']['session_dates']['US'] = '2026-10-05'
-        publish()
+        valid_receipt = publish()
         self.assertEqual(launcher.collection_receipt(path, targets)['status'], 'partial')
         del value['quality']['markets']['US']['received']
-        publish()
+        # Keep valid receipt fields but publish a malformed run with matching hashes;
+        # the reader must validate counts, not merely trust the artifact hashes.
+        publish(receipt_override=valid_receipt)
         with self.assertRaises((KeyError, ValueError)):
             launcher.collection_receipt(path, targets)
         (path / 'run.json').write_text('{}', encoding='utf-8')
-        with self.assertRaisesRegex(ValueError, 'run_hash_mismatch'):
+        with self.assertRaisesRegex(ValueError, '^input_hash_mismatch:'):
             launcher.collection_receipt(path, targets)
 
     def test_saved_stock_without_screening(self):

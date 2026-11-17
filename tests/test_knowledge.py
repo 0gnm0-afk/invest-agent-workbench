@@ -371,7 +371,7 @@ class KnowledgeTests(unittest.TestCase):
         store_patch.start()
         self.addCleanup(store_patch.stop)
         context_patch = patch.object(session_mcp, 'saved_context',
-            side_effect=lambda stock_key, **kwargs: __import__('session_context').saved_context(
+            side_effect=lambda stock_key, *, root=root, **kwargs: __import__('session_context').saved_context(
                 stock_key, root=root, **kwargs))
         context_patch.start()
         self.addCleanup(context_patch.stop)

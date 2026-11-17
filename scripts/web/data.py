@@ -121,9 +121,10 @@ def home_view(data):
 
 
 def market_update(value):
-    """Do not expose legacy account retry/results as market update status."""
+    """Publish market status without internal account/monitor result payloads."""
     return {key: item for key, item in value.items()
-            if not key.startswith('account') and key != 'saved_accounts'}
+            if not key.startswith('account')
+            and key not in {'saved_accounts', 'trailing_result', 'scenario_result'}}
 
 
 def build(root=ROOT, refresh=False, *, market_run=None, daily_update=None, persist_view=False):

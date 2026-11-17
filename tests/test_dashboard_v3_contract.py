@@ -61,12 +61,13 @@ class DashboardContract(unittest.TestCase):
                                    start=Mock(side_effect=AssertionError('external financial forbidden')))
         self.retry = Mock(return_value={'state': 'running'})
         self.launch = Mock(return_value={'state': 'saved'})
+        self.daily_status = Mock(return_value={'enabled': False})
         self.server = None
 
     def start(self, *, offline=False):
         handler = handler_for(self.data, self.stocks, ASSET_ROOT, 'fixture-token', self.path,
                               views=self.views, root=self.root, offline=offline,
-                              daily_retry=self.retry, launch=self.launch,
+                              daily_status=self.daily_status, daily_retry=self.retry, launch=self.launch,
                               analysis_dependencies={'histories':self.hist, 'financials':self.fin})
         # The fixture has a numeric loopback address; skip HTTPServer reverse DNS.
         with patch('socket.getfqdn', return_value='127.0.0.1'):
@@ -96,8 +97,21 @@ class DashboardContract(unittest.TestCase):
         return self.request(path, method='POST', value=value, raw=raw, headers=supplied)
 
     def test_home_is_market_projection_and_keeps_internal_observation(self):
+        # M12 retains full service results in its receipt. The market HTTP
+        # projection must not expose those nested account/monitor payloads.
+        update = dict(state='succeeded', trailing_state='evaluated', scenario_state='evaluated',
+                      technical_state='evaluated', account_state='failed',
+                      trailing_result={'positions': [{'account': 'nested-private-account',
+                          'quantity': 19, 'average_cost': 123, 'secret': 'nested-private-secret'}]},
+                      scenario_result={'monitors': [{'account_alias': 'nested-private-alias',
+                          'plan_record_id': 'nested-private-plan', 'token': 'nested-private-token'}]})
+        self.data['daily_update'] = copy.deepcopy(update)
+        self.daily_status.return_value = copy.deepcopy(update)
+        self.launch.return_value = copy.deepcopy(update)
         self.start()
         before = copy.deepcopy(self.views)
+        before_status = copy.deepcopy(self.daily_status.return_value)
+        before_launch = copy.deepcopy(self.launch.return_value)
         status, body, _ = self.request('/api/home')
         self.assertEqual(status, 200)
         value = json.loads(body)
@@ -105,9 +119,24 @@ class DashboardContract(unittest.TestCase):
         self.assertEqual(value['market']['session_dates'], {'US':self.rows[-1]['date']})
         self.assertEqual(value['market']['quality'], {'received':1})
         self.assertEqual(value['generated_at'], self.data['generated_at'])
-        for retired in ('private-sentinel', 'retired-candidate', 'retired-sector', 'accounts', 'trailing'):
+        for retired in ('private-sentinel', 'retired-candidate', 'retired-sector', 'accounts'):
             self.assertNotIn(retired, body.decode())
+        self.assertNotIn('trailing', value)
+        responses = [value['daily_update']]
+        status, body, _ = self.request('/api/daily-update')
+        self.assertEqual(status, 200)
+        responses.append(json.loads(body))
+        status, body, _ = self.post('/api/launch',
+            {'daily_refresh': True, 'retry_market': False, 'saved_accounts': False})
+        self.assertEqual(status, 202)
+        responses.append(json.loads(body))
+        expected = {key: update[key] for key in ('state', 'trailing_state', 'scenario_state', 'technical_state')}
+        for response in responses:
+            self.assertEqual(response, expected)
+            self.assertNotIn('nested-private-', json.dumps(response))
         self.assertEqual(self.views, before)
+        self.assertEqual(self.daily_status.return_value, before_status)
+        self.assertEqual(self.launch.return_value, before_launch)
 
     def test_retired_apis_and_assets_are_unreachable(self):
         self.start()
@@ -196,7 +225,9 @@ class DashboardContract(unittest.TestCase):
         for headers in ({'Origin':'https://evil.example'}, {'Host':'evil.example'}, {'X-Workbench-Token':'wrong'}):
             self.assertEqual(self.post(path, body, headers=headers)[0], 403)
         self.assertEqual(self.post(path, body, headers={'Content-Type':'text/plain'})[0], 415)
-        self.assertEqual(self.post(path, raw=b'x'*131073)[0], 413)
+        # Reject the declared size before reading a body. Sending the entire
+        # oversized body races HTTP/1.0 close and can reset the response on Windows.
+        self.assertEqual(self.post(path, raw=b'', headers={'Content-Length':'131073'})[0], 413)
         self.assertEqual(self.post(path, raw=b'')[0], 413)
         self.assertEqual(self.post(path, raw=b'{broken')[0], 400)
         fake_dispatch = Mock(return_value={'confirmed':True})

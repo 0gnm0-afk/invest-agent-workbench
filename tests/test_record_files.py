@@ -16,6 +16,7 @@ with patch("platform.machine", return_value="AMD64"):
     import market.daily as daily
     from launch.daily import DailyLaunch
 from market.prices import PriceStore
+from market.collection_receipts import ROLE, collection_receipt
 from records.files import MARKER, publish_thin, compact_run
 from records.prices import completed_weeks_v1
 from records.store import RecordStore
@@ -82,11 +83,28 @@ class RecordFileIntegrationTests(unittest.TestCase):
     def publish(self):
         return self.store.publish_run(self.run, root=self.root)
 
+    def add_collection_receipt(self):
+        """Opt current-launcher fixtures into C9 before immutable publication."""
+        run = self.values['run.json']
+        run['output'] = str(self.run)
+        raw = json.dumps(run, ensure_ascii=False, sort_keys=True, indent=2).encode('utf-8')
+        self.originals['run.json'] = raw
+        (self.run / 'run.json').write_bytes(raw)
+        receipt = collection_receipt(run, sha(raw))
+        self.values[ROLE] = receipt
+        raw = json.dumps(receipt, ensure_ascii=False, sort_keys=True, indent=2).encode('utf-8')
+        self.originals[ROLE] = raw
+        (self.run / ROLE).write_bytes(raw)
+        for role in ('run.json', ROLE):
+            self.manifest['output_hashes'][role] = sha(self.originals[role])
+        (self.run / 'manifest.json').write_text(json.dumps(self.manifest), encoding='utf-8')
+
     def count_versions(self):
         with closing(self.store.connect()) as db:
             return db.execute('SELECT count(*) FROM record_versions').fetchone()[0]
 
     def test_new_thin_run_preserves_hashes_prices_and_launcher_reads(self):
+        self.add_collection_receipt()
         before = sha(self.prices.path.read_bytes())
         self.publish()
         self.assertEqual(publish_thin(self.run, root=self.root, store=self.store), len(self.originals))
@@ -150,6 +168,7 @@ class RecordFileIntegrationTests(unittest.TestCase):
                     atomic_io.read_bytes(path)
 
     def test_twice_moved_run_replays_all_path_generations_without_rewriting_db(self):
+        self.add_collection_receipt()
         self.publish()
         intermediate = self.root / 'intermediate'
         current = self.root / 'consolidated'

@@ -47,7 +47,8 @@ class CollectionWithoutScreening(unittest.TestCase):
                 atomic_io.write_json(source/'manifest.json', {'snapshot.json':atomic_io.sha(source/'snapshot.json')})
                 atomic_io.write_json(output/'latest.json', {'attempt':str(source)})
             collector = stack.enter_context(patch.object(daily, 'collect', side_effect=collect))
-            result = daily.run(config)
+            result = daily.run(config, session_cutoff='2026-10-16',
+                               evaluated_at='2026-10-17T00:01:00+00:00')
             self.assertEqual(result['state'], 'succeeded', result.get('error'))
             collector.assert_called_once()
             output = Path(result['output'])

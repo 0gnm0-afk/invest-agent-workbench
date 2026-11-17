@@ -1,6 +1,6 @@
 # M12: C9 receipts, no account refresh, saved monitoring, launch and guarded lifetimes.
 # T01-T06/T08 map to the explicitly registered existing test modules below.
-# exclude: T07 root PowerShell source-copy checks: M00 prepare does not copy root .ps1; verified separately by read-only static checks, not module pass evidence.
+# T07 inspects copied fixed PowerShell source files; it never executes them.
 # exclude: PowerShell ScheduledLauncher lifetime tests (normal/early-error/detached): no guarded PowerShell bootstrap; no operational wrapper executed.
 # exclude: Actual detached market worker survival after coordinator termination: M00 allows fixed guarded probes only; command/log/lock boundaries tested with synthetic Popen.
 # exclude: Actual detached dashboard restart/reuse: tested with synthetic loopback server and Popen handshake boundary, not an operational server.
@@ -79,3 +79,4 @@ test_worker_lifetime.WorkerLifetime.test_journal_distinguishes_exit_codes_and_in
 test_daily_launch.Launch.test_successful_reopen_rechecks_c9_without_mutating_old_attempt
 test_daily_launch.Launch.test_worker_auth_error_survives_missing_c9_without_automatic_retry
 test_dashboard_startup.Startup.test_invalid_refresh_flags_fail_before_lock_builder_or_browser
+test_launch_contracts.LaunchContracts.test_wrapper_sources_and_schedule_identity
