@@ -1,0 +1,653 @@
+{
+  "schema": 1,
+  "python": {
+    "distribution": "CPython python.org Windows user installation (winget)",
+    "version": "3.12.10",
+    "architecture": "AMD64",
+    "bits": 64,
+    "executable": "<user-home>\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+    "sha256": "4d6f5f81a4bca11191c4c7c6b43632694d0a4ce74e068619d8fdc161d469859a"
+  },
+  "previous_environment": {
+    "version": "3.12.14",
+    "architecture": "AMD64",
+    "base": "Codex cache (retained, not executed or modified)",
+    "pth": [
+      "../../../src",
+      "../../../scripts"
+    ],
+    "direct_installs": [],
+    "packages": {
+      "aiofile": "3.12.3",
+      "annotated-types": "0.8.0",
+      "anyio": "4.14.2",
+      "attrs": "26.1.0",
+      "Authlib": "1.7.2",
+      "beartype": "0.22.9",
+      "beautifulsoup4": "4.15.0",
+      "cachetools": "7.1.7",
+      "caio": "0.12.2",
+      "certifi": "2026.7.22",
+      "cffi": "2.1.1",
+      "charset-normalizer": "3.4.9",
+      "click": "8.4.2",
+      "colorama": "0.4.6",
+      "contourpy": "1.3.3",
+      "cryptography": "50.0.0",
+      "cycler": "0.12.1",
+      "cyclopts": "4.22.5",
+      "dnspython": "2.8.0",
+      "docstring_parser": "0.18.0",
+      "email-validator": "2.3.0",
+      "exceptiongroup": "1.3.1",
+      "exchange_calendars": "4.13.2",
+      "fastmcp": "3.4.6",
+      "fastmcp-slim": "3.4.6",
+      "finance-datareader": "0.9.202",
+      "fonttools": "4.65.0",
+      "griffelib": "2.1.0",
+      "h11": "0.16.0",
+      "httpcore": "1.0.9",
+      "httpx": "0.28.1",
+      "httpx-sse": "0.4.3",
+      "idna": "3.18",
+      "jaraco.classes": "3.4.0",
+      "jaraco.context": "6.1.2",
+      "jaraco.functools": "4.6.0",
+      "joserfc": "1.7.4",
+      "jsonref": "1.1.0",
+      "jsonschema": "4.26.0",
+      "jsonschema-path": "0.5.0",
+      "jsonschema-specifications": "2025.9.1",
+      "keyring": "25.7.0",
+      "kiwisolver": "1.5.1",
+      "korean_lunar_calendar": "0.4.0",
+      "lxml": "6.1.1",
+      "markdown-it-py": "4.2.0",
+      "matplotlib": "3.11.1",
+      "mcp": "1.29.0",
+      "mdurl": "0.1.2",
+      "more-itertools": "11.1.0",
+      "narwhals": "2.24.0",
+      "numpy": "2.5.1",
+      "openapi-pydantic": "0.5.1",
+      "OpenDartReader": "0.2.2",
+      "opentelemetry-api": "1.44.0",
+      "packaging": "26.3",
+      "pandas": "3.0.5",
+      "pathable": "0.6.0",
+      "pillow": "12.3.0",
+      "pip": "25.0.1",
+      "platformdirs": "4.11.1",
+      "plotly": "6.9.0",
+      "py-key-value-aio": "0.4.5",
+      "pycparser": "3.0",
+      "pydantic": "2.13.4",
+      "pydantic-settings": "2.15.0",
+      "pydantic_core": "2.46.4",
+      "Pygments": "2.20.0",
+      "PyJWT": "2.13.0",
+      "pyluach": "2.3.0",
+      "pyparsing": "3.3.2",
+      "pyperclip": "1.11.0",
+      "python-dateutil": "2.9.0.post0",
+      "python-dotenv": "1.2.2",
+      "python-multipart": "0.0.32",
+      "pywin32": "312",
+      "pywin32-ctypes": "0.2.3",
+      "PyYAML": "6.0.3",
+      "referencing": "0.37.0",
+      "requests": "2.34.2",
+      "requests-file": "3.0.1",
+      "rich": "15.0.0",
+      "rich-rst": "2.1.0",
+      "rpds-py": "2026.6.3",
+      "six": "1.17.0",
+      "soupsieve": "2.9.2",
+      "sse-starlette": "3.4.8",
+      "starlette": "1.5.0",
+      "tabulate": "0.10.0",
+      "toolz": "1.1.0",
+      "tqdm": "4.70.0",
+      "typing-inspection": "0.4.2",
+      "typing_extensions": "4.16.0",
+      "tzdata": "2026.3",
+      "uncalled-for": "0.3.2",
+      "urllib3": "2.7.0",
+      "uvicorn": "0.52.1",
+      "watchfiles": "1.2.0",
+      "websockets": "17.0.1"
+    },
+    "metadata_capture": "Read distribution metadata and pyvenv.cfg only; operating interpreter not executed."
+  },
+  "wheel_source": "https://pypi.org/simple",
+  "platform": "win_amd64",
+  "packages": [
+    {
+      "name": "aiofile",
+      "version": "3.12.3",
+      "file": "aiofile-3.12.3-py3-none-any.whl",
+      "sha256": "5c1bcc9e929c50834608e8cc1a4cc1d7503eb60c15a535b779fd39e2f372c017"
+    },
+    {
+      "name": "annotated-types",
+      "version": "0.8.0",
+      "file": "annotated_types-0.8.0-py3-none-any.whl",
+      "sha256": "f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0"
+    },
+    {
+      "name": "anyio",
+      "version": "4.14.2",
+      "file": "anyio-4.14.2-py3-none-any.whl",
+      "sha256": "9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494"
+    },
+    {
+      "name": "attrs",
+      "version": "26.1.0",
+      "file": "attrs-26.1.0-py3-none-any.whl",
+      "sha256": "c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309"
+    },
+    {
+      "name": "Authlib",
+      "version": "1.7.2",
+      "file": "authlib-1.7.2-py2.py3-none-any.whl",
+      "sha256": "3e1faedc9d87e7d56a164eca3ccb6ace0d61b94abe83e92242f8dc8bba9b4a9f"
+    },
+    {
+      "name": "beartype",
+      "version": "0.22.9",
+      "file": "beartype-0.22.9-py3-none-any.whl",
+      "sha256": "d16c9bbc61ea14637596c5f6fbff2ee99cbe3573e46a716401734ef50c3060c2"
+    },
+    {
+      "name": "beautifulsoup4",
+      "version": "4.15.0",
+      "file": "beautifulsoup4-4.15.0-py3-none-any.whl",
+      "sha256": "d6f88de62e1d4e38ecb1077eb9724cd0eff29d2a08ca16a401e9b9e93f117cf9"
+    },
+    {
+      "name": "cachetools",
+      "version": "7.1.7",
+      "file": "cachetools-7.1.7-py3-none-any.whl",
+      "sha256": "ef98ef375ad188819ef2f9b3645e3987f4b8c5b7550e436ad998c2de78296df0"
+    },
+    {
+      "name": "caio",
+      "version": "0.12.2",
+      "file": "caio-0.12.2-py3-none-any.whl",
+      "sha256": "5233e797c9fe2b541914b1bc2e2df82677e2206b537e44e252188f3c2cbb0ea9"
+    },
+    {
+      "name": "certifi",
+      "version": "2026.7.22",
+      "file": "certifi-2026.7.22-py3-none-any.whl",
+      "sha256": "62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775"
+    },
+    {
+      "name": "cffi",
+      "version": "2.1.1",
+      "file": "cffi-2.1.1-cp312-cp312-win_amd64.whl",
+      "sha256": "f53e442b08449d42821fa4a4fba000095af9f62742a500f978a9f557ec44339a"
+    },
+    {
+      "name": "charset-normalizer",
+      "version": "3.4.9",
+      "file": "charset_normalizer-3.4.9-cp312-cp312-win_amd64.whl",
+      "sha256": "4b3dac63058cc36820b0dd072f89898604e2d39686fe05321729d00d8ac185a0"
+    },
+    {
+      "name": "click",
+      "version": "8.4.2",
+      "file": "click-8.4.2-py3-none-any.whl",
+      "sha256": "e6f9f66136c816745b9d65817da91d61d957fb16e02e4dcd0552553c5a197b76"
+    },
+    {
+      "name": "colorama",
+      "version": "0.4.6",
+      "file": "colorama-0.4.6-py2.py3-none-any.whl",
+      "sha256": "4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6"
+    },
+    {
+      "name": "contourpy",
+      "version": "1.3.3",
+      "file": "contourpy-1.3.3-cp312-cp312-win_amd64.whl",
+      "sha256": "8153b8bfc11e1e4d75bcb0bff1db232f9e10b274e0929de9d608027e0d34ff8b"
+    },
+    {
+      "name": "cryptography",
+      "version": "50.0.0",
+      "file": "cryptography-50.0.0-cp311-abi3-win_amd64.whl",
+      "sha256": "bd1c592e4d5974f0d08d4888e432157adba757c66da0246918e43677fafa2d30"
+    },
+    {
+      "name": "cycler",
+      "version": "0.12.1",
+      "file": "cycler-0.12.1-py3-none-any.whl",
+      "sha256": "85cef7cff222d8644161529808465972e51340599459b8ac3ccbac5a854e0d30"
+    },
+    {
+      "name": "dnspython",
+      "version": "2.8.0",
+      "file": "dnspython-2.8.0-py3-none-any.whl",
+      "sha256": "01d9bbc4a2d76bf0db7c1f729812ded6d912bd318d3b1cf81d30c0f845dbf3af"
+    },
+    {
+      "name": "email-validator",
+      "version": "2.3.0",
+      "file": "email_validator-2.3.0-py3-none-any.whl",
+      "sha256": "80f13f623413e6b197ae73bb10bf4eb0908faf509ad8362c5edeb0be7fd450b4"
+    },
+    {
+      "name": "exceptiongroup",
+      "version": "1.3.1",
+      "file": "exceptiongroup-1.3.1-py3-none-any.whl",
+      "sha256": "a7a39a3bd276781e98394987d3a5701d0c4edffb633bb7a5144577f82c773598"
+    },
+    {
+      "name": "exchange_calendars",
+      "version": "4.13.2",
+      "file": "exchange_calendars-4.13.2-py3-none-any.whl",
+      "sha256": "fc5a2ad0d61b5c3a6539a3061cd4cbb55c59f4a903455cec7926e4b798919996"
+    },
+    {
+      "name": "fastmcp-slim",
+      "version": "3.4.6",
+      "file": "fastmcp_slim-3.4.6-py3-none-any.whl",
+      "sha256": "3e08e6acb03523a47aa17f4d2ab9943e648a41e20b24084da491a732c46dffdc"
+    },
+    {
+      "name": "finance-datareader",
+      "version": "0.9.202",
+      "file": "finance_datareader-0.9.202-py3-none-any.whl",
+      "sha256": "8d166865c1537c2b9fe0243ab67aea7eb057d7e25ff0366f8eeabda6dccdfbac"
+    },
+    {
+      "name": "fonttools",
+      "version": "4.65.0",
+      "file": "fonttools-4.65.0-cp312-cp312-win_amd64.whl",
+      "sha256": "3b5d9ba89edf778b376e669b879ae33a198bf45cf5a23c3f6514f935cf9d0d9d"
+    },
+    {
+      "name": "h11",
+      "version": "0.16.0",
+      "file": "h11-0.16.0-py3-none-any.whl",
+      "sha256": "63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86"
+    },
+    {
+      "name": "httpcore",
+      "version": "1.0.9",
+      "file": "httpcore-1.0.9-py3-none-any.whl",
+      "sha256": "2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55"
+    },
+    {
+      "name": "httpx",
+      "version": "0.28.1",
+      "file": "httpx-0.28.1-py3-none-any.whl",
+      "sha256": "d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad"
+    },
+    {
+      "name": "httpx-sse",
+      "version": "0.4.3",
+      "file": "httpx_sse-0.4.3-py3-none-any.whl",
+      "sha256": "0ac1c9fe3c0afad2e0ebb25a934a59f4c7823b60792691f779fad2c5568830fc"
+    },
+    {
+      "name": "idna",
+      "version": "3.18",
+      "file": "idna-3.18-py3-none-any.whl",
+      "sha256": "7f952cbe720b688055e3f87de14f5c3e5fdaa8bc3928985c4077ca689de849a2"
+    },
+    {
+      "name": "jaraco.classes",
+      "version": "3.4.0",
+      "file": "jaraco.classes-3.4.0-py3-none-any.whl",
+      "sha256": "f662826b6bed8cace05e7ff873ce0f9283b5c924470fe664fff1c2f00f581790"
+    },
+    {
+      "name": "jaraco.context",
+      "version": "6.1.2",
+      "file": "jaraco_context-6.1.2-py3-none-any.whl",
+      "sha256": "bf8150b79a2d5d91ae48629d8b427a8f7ba0e1097dd6202a9059f29a36379535"
+    },
+    {
+      "name": "jaraco.functools",
+      "version": "4.6.0",
+      "file": "jaraco_functools-4.6.0-py3-none-any.whl",
+      "sha256": "99e3dc0060c5cbe8fcd1cdb36258e2a65ca40f1566b2033b12abb1bb44dd3c30"
+    },
+    {
+      "name": "joserfc",
+      "version": "1.7.4",
+      "file": "joserfc-1.7.4-py3-none-any.whl",
+      "sha256": "32d46c2cd5e3203c13e87a6c61333cab310b1ba80cd54b4c4f386a848a122463"
+    },
+    {
+      "name": "jsonschema",
+      "version": "4.26.0",
+      "file": "jsonschema-4.26.0-py3-none-any.whl",
+      "sha256": "d489f15263b8d200f8387e64b4c3a75f06629559fb73deb8fdfb525f2dab50ce"
+    },
+    {
+      "name": "jsonschema-specifications",
+      "version": "2025.9.1",
+      "file": "jsonschema_specifications-2025.9.1-py3-none-any.whl",
+      "sha256": "98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe"
+    },
+    {
+      "name": "keyring",
+      "version": "25.7.0",
+      "file": "keyring-25.7.0-py3-none-any.whl",
+      "sha256": "be4a0b195f149690c166e850609a477c532ddbfbaed96a404d4e43f8d5e2689f"
+    },
+    {
+      "name": "kiwisolver",
+      "version": "1.5.1",
+      "file": "kiwisolver-1.5.1-cp312-cp312-win_amd64.whl",
+      "sha256": "06a6917674de9e0fe3f66f5430787f59a9f2ddb64af9b714eaec547e29ef5c19"
+    },
+    {
+      "name": "korean_lunar_calendar",
+      "version": "0.4.0",
+      "file": "korean_lunar_calendar-0.4.0-py3-none-any.whl",
+      "sha256": "c042e20de0bb702add6bec8d0f6da1ea8d3b170838e63846f70420cf341fe4e7"
+    },
+    {
+      "name": "lxml",
+      "version": "6.1.1",
+      "file": "lxml-6.1.1-cp312-cp312-win_amd64.whl",
+      "sha256": "26e6eda8d38c1fcab1090dd196ee87cbd13788e531937610e2589085de074e77"
+    },
+    {
+      "name": "markdown-it-py",
+      "version": "4.2.0",
+      "file": "markdown_it_py-4.2.0-py3-none-any.whl",
+      "sha256": "9f7ebbcd14fe59494226453aed97c1070d83f8d24b6fc3a3bcf9a38092641c4a"
+    },
+    {
+      "name": "matplotlib",
+      "version": "3.11.1",
+      "file": "matplotlib-3.11.1-cp312-cp312-win_amd64.whl",
+      "sha256": "88a2a27dd9691ae448dfae4b26f59036be90c3c28757edd3553a29559d00859f"
+    },
+    {
+      "name": "mcp",
+      "version": "1.29.0",
+      "file": "mcp-1.29.0-py3-none-any.whl",
+      "sha256": "f5a075bb611f23d6f4d080c6a1699fa62772eebc562ba9e66b306ddde1c755f7"
+    },
+    {
+      "name": "mdurl",
+      "version": "0.1.2",
+      "file": "mdurl-0.1.2-py3-none-any.whl",
+      "sha256": "84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8"
+    },
+    {
+      "name": "more-itertools",
+      "version": "11.1.0",
+      "file": "more_itertools-11.1.0-py3-none-any.whl",
+      "sha256": "4b65538ae22f6fed0ce4874efd317463a7489796a0939fa66824dd542125a192"
+    },
+    {
+      "name": "narwhals",
+      "version": "2.24.0",
+      "file": "narwhals-2.24.0-py3-none-any.whl",
+      "sha256": "42fdedf44e5b2ca7505630d45b4ac3058f38d8485cba9fe1652ca23152df7489"
+    },
+    {
+      "name": "numpy",
+      "version": "2.5.1",
+      "file": "numpy-2.5.1-cp312-cp312-win_amd64.whl",
+      "sha256": "f7d60026c0bdb1380e83bfa7a0419c4577ee4b9a08880afcb6dadeb74c649fa2"
+    },
+    {
+      "name": "OpenDartReader",
+      "version": "0.2.2",
+      "file": "OpenDartReader-0.2.2-py3-none-any.whl",
+      "sha256": "1e8f6489643736ab151d21115eb4d73c1e3c8ee297abd753aedf12ce1f66b751"
+    },
+    {
+      "name": "opentelemetry-api",
+      "version": "1.44.0",
+      "file": "opentelemetry_api-1.44.0-py3-none-any.whl",
+      "sha256": "94b98c893a91b88657eaac1e3ba89618cdb85be6918196705354f34728b2cdef"
+    },
+    {
+      "name": "packaging",
+      "version": "26.3",
+      "file": "packaging-26.3-py3-none-any.whl",
+      "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c"
+    },
+    {
+      "name": "pandas",
+      "version": "3.0.5",
+      "file": "pandas-3.0.5-cp312-cp312-win_amd64.whl",
+      "sha256": "80a611068e8a3ac23f7398c6c14eb46dc974e5cc9997f653e2dcfd1da74edd41"
+    },
+    {
+      "name": "pillow",
+      "version": "12.3.0",
+      "file": "pillow-12.3.0-cp312-cp312-win_amd64.whl",
+      "sha256": "a2b55dd6b2a4c4b7d87ffa56bdb33fdc5fdb9a462173861a7bc097f17d91cb09"
+    },
+    {
+      "name": "pip",
+      "version": "25.0.1",
+      "file": "pip-25.0.1-py3-none-any.whl",
+      "sha256": "c46efd13b6aa8279f33f2864459c8ce587ea6a1a59ee20de055868d8f7688f7f"
+    },
+    {
+      "name": "platformdirs",
+      "version": "4.11.1",
+      "file": "platformdirs-4.11.1-py3-none-any.whl",
+      "sha256": "2efd27d363e8dd2e661639ffb398865a5e0a46442a11d266bf375a0e0c10e386"
+    },
+    {
+      "name": "plotly",
+      "version": "6.9.0",
+      "file": "plotly-6.9.0-py3-none-any.whl",
+      "sha256": "36bebe2f1bb13884774fe61689c329071446f6ce4a8927fb1f0d6fb24f581236"
+    },
+    {
+      "name": "py-key-value-aio",
+      "version": "0.4.5",
+      "file": "py_key_value_aio-0.4.5-py3-none-any.whl",
+      "sha256": "ab862adbcb8c72547d1c57821f22cbbb71ab86509039c96f36e914e0336c8dd7"
+    },
+    {
+      "name": "pycparser",
+      "version": "3.0",
+      "file": "pycparser-3.0-py3-none-any.whl",
+      "sha256": "b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992"
+    },
+    {
+      "name": "pydantic",
+      "version": "2.13.4",
+      "file": "pydantic-2.13.4-py3-none-any.whl",
+      "sha256": "45a282cde31d808236fd7ea9d919b128653c8b38b393d1c4ab335c62924d9aba"
+    },
+    {
+      "name": "pydantic-settings",
+      "version": "2.15.0",
+      "file": "pydantic_settings-2.15.0-py3-none-any.whl",
+      "sha256": "0ba092c291c94baceb5eff768aa0d56400a457585bc0175925a5a5510303da42"
+    },
+    {
+      "name": "pydantic_core",
+      "version": "2.46.4",
+      "file": "pydantic_core-2.46.4-cp312-cp312-win_amd64.whl",
+      "sha256": "e9c26f834c65f5752f3f06cb08cb86a913ceb7274d0db6e267808a708b46bc89"
+    },
+    {
+      "name": "Pygments",
+      "version": "2.20.0",
+      "file": "pygments-2.20.0-py3-none-any.whl",
+      "sha256": "81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176"
+    },
+    {
+      "name": "PyJWT",
+      "version": "2.13.0",
+      "file": "pyjwt-2.13.0-py3-none-any.whl",
+      "sha256": "66adcc2aff09b3f1bbd95fc1e1577df8ac8723c978552fd43304c8a290ac5728"
+    },
+    {
+      "name": "pyluach",
+      "version": "2.3.0",
+      "file": "pyluach-2.3.0-py3-none-any.whl",
+      "sha256": "4497b731aef59508b079dbf5f00bc5bf4329ac45090a6cd37b5a83756f0e69ab"
+    },
+    {
+      "name": "pyparsing",
+      "version": "3.3.2",
+      "file": "pyparsing-3.3.2-py3-none-any.whl",
+      "sha256": "850ba148bd908d7e2411587e247a1e4f0327839c40e2e5e6d05a007ecc69911d"
+    },
+    {
+      "name": "python-dateutil",
+      "version": "2.9.0.post0",
+      "file": "python_dateutil-2.9.0.post0-py2.py3-none-any.whl",
+      "sha256": "a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427"
+    },
+    {
+      "name": "python-dotenv",
+      "version": "1.2.2",
+      "file": "python_dotenv-1.2.2-py3-none-any.whl",
+      "sha256": "1d8214789a24de455a8b8bd8ae6fe3c6b69a5e3d64aa8a8e5d68e694bbcb285a"
+    },
+    {
+      "name": "python-multipart",
+      "version": "0.0.32",
+      "file": "python_multipart-0.0.32-py3-none-any.whl",
+      "sha256": "ff6d3f776f16878c894e52e107296ffc890e913c611b1a4ec6c44e2821fe2e23"
+    },
+    {
+      "name": "pywin32",
+      "version": "312",
+      "file": "pywin32-312-cp312-cp312-win_amd64.whl",
+      "sha256": "b457f6d628a47e8a7346ce22acb7e1a46a4a78b52e1d17e1af56871bd19a93bc"
+    },
+    {
+      "name": "pywin32-ctypes",
+      "version": "0.2.3",
+      "file": "pywin32_ctypes-0.2.3-py3-none-any.whl",
+      "sha256": "8a1513379d709975552d202d942d9837758905c8d01eb82b8bcc30918929e7b8"
+    },
+    {
+      "name": "referencing",
+      "version": "0.37.0",
+      "file": "referencing-0.37.0-py3-none-any.whl",
+      "sha256": "381329a9f99628c9069361716891d34ad94af76e461dcb0335825aecc7692231"
+    },
+    {
+      "name": "requests",
+      "version": "2.34.2",
+      "file": "requests-2.34.2-py3-none-any.whl",
+      "sha256": "2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0"
+    },
+    {
+      "name": "requests-file",
+      "version": "3.0.1",
+      "file": "requests_file-3.0.1-py2.py3-none-any.whl",
+      "sha256": "d0f5eb94353986d998f80ac63c7f146a307728be051d4d1cd390dbdb59c10fa2"
+    },
+    {
+      "name": "rich",
+      "version": "15.0.0",
+      "file": "rich-15.0.0-py3-none-any.whl",
+      "sha256": "33bd4ef74232fb73fe9279a257718407f169c09b78a87ad3d296f548e27de0bb"
+    },
+    {
+      "name": "rpds-py",
+      "version": "2026.6.3",
+      "file": "rpds_py-2026.6.3-cp312-cp312-win_amd64.whl",
+      "sha256": "2c958bf94822e9290a40aaf2a822d4bc5c88099093e3948ad6c571eca9272e5f"
+    },
+    {
+      "name": "setuptools",
+      "version": "84.2.1",
+      "file": "setuptools-84.2.1-py3-none-any.whl",
+      "sha256": "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2"
+    },
+    {
+      "name": "six",
+      "version": "1.17.0",
+      "file": "six-1.17.0-py2.py3-none-any.whl",
+      "sha256": "4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274"
+    },
+    {
+      "name": "soupsieve",
+      "version": "2.9.2",
+      "file": "soupsieve-2.9.2-py3-none-any.whl",
+      "sha256": "8089a26fd974ca7a1f30276d3d8492ab266ab15af581642dfe8aa162e0c1c823"
+    },
+    {
+      "name": "sse-starlette",
+      "version": "3.4.8",
+      "file": "sse_starlette-3.4.8-py3-none-any.whl",
+      "sha256": "6e82314c786709a3cd9520f2285cf9fff90e181e598e8a357b0cf80f66afba0d"
+    },
+    {
+      "name": "starlette",
+      "version": "1.5.0",
+      "file": "starlette-1.5.0-py3-none-any.whl",
+      "sha256": "9ca76b47375e56f279d7c66651e801ef11167e58557c429be7ec55702d81d4bb"
+    },
+    {
+      "name": "tabulate",
+      "version": "0.10.0",
+      "file": "tabulate-0.10.0-py3-none-any.whl",
+      "sha256": "f0b0622e567335c8fabaaa659f1b33bcb6ddfe2e496071b743aa113f8774f2d3"
+    },
+    {
+      "name": "toolz",
+      "version": "1.1.0",
+      "file": "toolz-1.1.0-py3-none-any.whl",
+      "sha256": "15ccc861ac51c53696de0a5d6d4607f99c210739caf987b5d2054f3efed429d8"
+    },
+    {
+      "name": "tqdm",
+      "version": "4.70.0",
+      "file": "tqdm-4.70.0-py3-none-any.whl",
+      "sha256": "7f585706bfddbdebf89daac705b2dfcc16890130727d3197ca62c732b4310953"
+    },
+    {
+      "name": "typing-inspection",
+      "version": "0.4.2",
+      "file": "typing_inspection-0.4.2-py3-none-any.whl",
+      "sha256": "4ed1cacbdc298c220f1bd249ed5287caa16f34d44ef4e9c3d0cbad5b521545e7"
+    },
+    {
+      "name": "typing_extensions",
+      "version": "4.16.0",
+      "file": "typing_extensions-4.16.0-py3-none-any.whl",
+      "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8"
+    },
+    {
+      "name": "tzdata",
+      "version": "2026.3",
+      "file": "tzdata-2026.3-py2.py3-none-any.whl",
+      "sha256": "dc096730c87af6cab1b171c9d532be840741ff5d459015e7f6947bd7d7e54931"
+    },
+    {
+      "name": "urllib3",
+      "version": "2.7.0",
+      "file": "urllib3-2.7.0-py3-none-any.whl",
+      "sha256": "9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897"
+    },
+    {
+      "name": "uvicorn",
+      "version": "0.52.1",
+      "file": "uvicorn-0.52.1-py3-none-any.whl",
+      "sha256": "e4403f9d93188cf9d1088e9f40e3acd12630e2df8675316704379a7fc20fff6a"
+    }
+  ],
+  "locks": {
+    "requirements.lock.txt": "aab4037a5342aa33ebc1e934c9a05c34917d07379ef5b23b27f96d7da4f66408",
+    "requirements-dev.lock.txt": "a074562c9a3960a1fbd6491e007cb5c6cfc5cbc2e6a810217b63127d96dbdbf9"
+  },
+  "import_paths": [
+    "src",
+    "scripts"
+  ],
+  "scope": "Workbench only; offline setup; runtime and credentials excluded. Existing .venv is never replaced by this tool.",
+  "lock_hash_format": "SHA256 of UTF-8 lock bytes with CRLF normalized to LF; wheel hashes are raw bytes"
+}

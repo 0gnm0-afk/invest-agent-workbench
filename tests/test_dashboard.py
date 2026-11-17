@@ -21,6 +21,19 @@ class StoredData(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
+        # Recovery helpers otherwise fall back through module-level/default
+        # arguments to another root. Inject the synthetic stores end-to-end.
+        self.addCleanup(patch.stopall)
+        patch('runtime_paths.ROOT', self.root).start()
+        patch('records.files.ROOT', self.root).start()
+        patch('market.prices.default_path', return_value=self.root / 'runtime/ohlcv.sqlite3').start()
+        patch('market.price_files.default_path', return_value=self.root / 'runtime/ohlcv.sqlite3').start()
+        from records.store import RecordStore
+        from market.prices import PriceStore
+        self.records = RecordStore(self.root / 'runtime/records.sqlite3')
+        self.prices = PriceStore(self.root / 'runtime/ohlcv.sqlite3')
+        connection = self.prices.connect(write=True)
+        connection.close()
         self.run = self.root / 'runtime/run'
         self.source = self.root / 'runtime/source/snapshot.json'
         d.write(self.source, {'series': [{'market': 'US', 'symbol': 'ABC', 'bars': []}]})
@@ -129,7 +142,7 @@ class BrokerBoundary(unittest.TestCase):
 
     def reader(self, path, inputs, continuation=None):
         if path == '/n2/acctinfo':
-            return {'Output_0': [{'acct_type': '01', 'acct_no': 'SYNTH_ACCOUNT_254aa248acb4'}]}, {}
+            return {'Output_0': [{'acct_type': '01', 'acct_no': 'SYNTH_ACCOUNT_254aa248acb4'}], 'rsp_msg': '조회완료'}, {}
         return {'Output_0': {}, 'Output_1': [], 'rsp_msg': '조회완료'}, {'cts_flag': 'N'}
 
     def pages(self, path, inputs, reader):
@@ -142,21 +155,26 @@ class BrokerBoundary(unittest.TestCase):
         self.assertEqual(raw['accounts'][0]['markets']['KR']['state'], 'received')
 
     def test_order_request_refused_before_transport(self):
+        transport = []
+        def reader(path, inputs, continuation=None):
+            transport.append(path)
+            return self.reader(path, inputs, continuation)
         def pages(path, inputs, reader):
             return reader('/krstock/inquiry/v1/dailyOrderExecution', inputs)
         with self.assertRaisesRegex(ValueError, 'read_only'):
-            account_data.collect_balances(self.reader, pages, self.Error)
+            account_data.collect_balances(reader, pages, self.Error)
+        self.assertEqual(transport, ['/n2/acctinfo'])
 
     def test_one_market_error_is_not_empty_success(self):
         def reader(path, inputs, continuation=None):
             if 'gbstock' in path: raise self.Error('http_503')
             return self.reader(path, inputs, continuation)
         raw = account_data.collect_balances(reader, self.pages, self.Error)
-        self.assertEqual(raw['accounts'][0]['markets']['US'], {'state':'unavailable','reason':'http_503'})
+        self.assertEqual(raw['accounts'][0]['markets']['US'], {'state':'unavailable','reason':'http_503','pages':[]})
         self.assertEqual(raw['accounts'][0]['markets']['KR']['state'],'received')
 
     def test_unconfirmed_empty_account_list_rejected(self):
-        with self.assertRaisesRegex(ValueError, 'empty_account_list'):
+        with self.assertRaisesRegex(ValueError, 'account_list_not_confirmed'):
             account_data.collect_balances(lambda *args: ({'Output_0': []}, {}), self.pages, self.Error)
 
     def test_confirmed_zero_accounts(self):
@@ -166,7 +184,29 @@ class BrokerBoundary(unittest.TestCase):
     def test_duplicate_account_rejected(self):
         row = {'acct_type': '01', 'acct_no': 'SYNTH_ACCOUNT_254aa248acb4'}
         with self.assertRaisesRegex(ValueError, 'identity'):
-            account_data.collect_balances(lambda *args: ({'Output_0': [row, row]}, {}), self.pages, self.Error)
+            account_data.collect_balances(lambda *args: ({'Output_0': [row, row], 'rsp_msg': '조회완료'}, {}), self.pages, self.Error)
+
+    def test_unconfirmed_nonempty_account_list_rejected(self):
+        row = {'acct_type': '01', 'acct_no': 'SYNTH_ACCOUNT_254aa248acb4'}
+        with self.assertRaisesRegex(ValueError, 'account_list_not_confirmed'):
+            account_data.collect_balances(lambda *args: ({'Output_0': [row]}, {}), self.pages, self.Error)
+
+    def test_non_dict_account_row_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'account_list_not_confirmed'):
+            account_data.collect_balances(lambda *args: ({'Output_0': ['not-an-account'], 'rsp_msg': '조회완료'}, {}), self.pages, self.Error)
+
+    def test_error_pages_preserved(self):
+        pages = [{'Output_0': {}, 'Output_1': [], 'rsp_msg': '조회완료'}]
+        def reader(path, inputs, continuation=None):
+            if 'gbstock' in path:
+                error = self.Error('http_503')
+                error.pages = pages
+                raise error
+            return self.reader(path, inputs, continuation)
+        raw = account_data.collect_balances(reader, self.pages, self.Error)
+        self.assertEqual(raw['accounts'][0]['markets']['US'],
+                         {'state': 'unavailable', 'reason': 'http_503', 'pages': pages})
+        self.assertEqual(raw['accounts'][0]['markets']['KR']['state'], 'received')
 
 
 class HttpBoundary(unittest.TestCase):

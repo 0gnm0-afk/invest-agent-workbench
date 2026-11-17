@@ -14,7 +14,7 @@ from records.store import RecordStore
 
 class TradeJournalTests(unittest.TestCase):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1] / 'runtime')
+        tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name).resolve()
         self.mother = self.root / 'mother'

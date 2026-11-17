@@ -69,13 +69,14 @@ class MarketOnlyTests(base_tests.TossMarketPipelineTests):
         rows, meta = self.full_config()
         with patch('market.toss_collection.discover', return_value=(rows, meta)):
             snapshot = self.run_collect()
-        project = m.ROOT
-        (project / 'runtime').mkdir(exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=project / 'runtime') as directory:
-            root = Path(directory)
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            root = project / 'runtime/collection'
+            root.mkdir(parents=True)
             config = root / 'input.json'
             config.write_text(json.dumps(self.config))
-            with patch.object(m, 'completed_sessions', return_value=self.days), \
+            with patch.object(m, 'ROOT', project), \
+                    patch.object(m, 'completed_sessions', return_value=self.days), \
                     patch.object(m, 'default_path', return_value=self.root/'ohlcv.sqlite3'), \
                     patch.object(m, 'TossMarketClient') as client, \
                     patch.object(m, 'collect', return_value=snapshot) as collector:

@@ -28,3 +28,12 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 invest_agent = ["LICENSE"]
+
+# Explicit offline setup pins the interpreter, wheels and both import roots.
+# It never replaces the operating .venv or installs during application startup.
+[tool.invest-agent.dev-environment]
+manifest = "dev-environment.json"
+runtime-lock = "requirements.lock.txt"
+development-lock = "requirements-dev.lock.txt"
+setup = "scripts/setup_dev_environment.py"
+import-paths = ["src", "scripts"]

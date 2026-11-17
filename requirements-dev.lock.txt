@@ -1,0 +1,4 @@
+# CPython 3.12 / Windows x64. PyPI wheel SHA256; install with --require-hashes --no-index.
+-r requirements.lock.txt
+pip==25.0.1 --hash=sha256:c46efd13b6aa8279f33f2864459c8ce587ea6a1a59ee20de055868d8f7688f7f
+setuptools==84.2.1 --hash=sha256:ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2

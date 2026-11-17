@@ -18,7 +18,7 @@ from market.prices import PriceStore, hydrate_snapshot
 
 class LiveVerificationOfflineTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1] / 'runtime')
+        self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.database = self.root / 'runtime/ohlcv.sqlite3'
