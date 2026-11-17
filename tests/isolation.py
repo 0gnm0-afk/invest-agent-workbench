@@ -201,6 +201,11 @@ class Guard:
 
     def install(self):
         global ACTIVE
+        # Warm the stdlib platform cache before guarding. On Windows the first
+        # uname() reads the registry and may spawn `ver`; pandas triggers it on
+        # first import, which made thread-order-dependent guard blocks (M05).
+        import platform
+        platform.uname()
         ACTIVE = self
         socket.has_ipv6 = False  # C8 permits only IPv4 127.0.0.1 fixtures.
         # Only noninteractive pipes are provided. Replace optional UI adapters,
