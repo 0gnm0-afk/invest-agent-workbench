@@ -1,8 +1,34 @@
 # 투자에이전트 워크벤치
 
-사용자가 공부한 자료와 투자 생각을 로컬 DB에 쌓고, Claude Code의 다음 세션이 그 맥락을 이어받는 투자 작업공간이다. 자료·발언·분석·계획을 연결하고, 가격·재무·차트 작도·감시 결과를 함께 읽는다. 종목 선택과 매매 판단은 사람이 한다.
+내 투자 공부를 위한 RAG(검색 증강 생성) 시스템을 만들어 가는 기록이다. 리포트·공시 같은 자료와 내가 쓴 메모·가설을 로컬 DB에 쌓아 두고, Claude Code 세션이 질문을 받으면 관련 자료와 지난 생각부터 찾아 읽은 뒤 논의를 이어 간다. 세션이 바뀔 때마다 앞서 읽은 자료와 내 생각이 끊기는 게 불편해서, 실제로 쓰려고 만들고 있다. 종목 선택과 매매 판단은 내가 하고, 증권사 연결은 조회 전용이다.
 
-이 공개본은 코드 구조, 모듈 설계, AI 에이전트 협업 방식과 시험 경계를 보여 주는 쇼케이스다. 개인 DB·인증 정보·운영 설정·매매 기록은 포함하지 않는다. 설계 문서는 작성 시점의 계획과 계약을 보존한 자료이며, 문서에 적힌 기능·시험·운영 전환 전체가 완료되었다는 뜻은 아니다.
+- **검색과 생성:** 지금은 종목·주제 연결과 키워드 검색(SQLite)으로 자료와 메모를 찾아 세션에 넘긴다. 의미 기반 검색(벡터 DB)은 미니 PC를 갖춘 다음 개편에서 붙일 계획이다.
+- **어떻게 쓰는가:** 종목·산업 이야기를 꺼내면 세션이 저장된 원문·내 메모·미정 질문부터 읽는다. 리포트를 읽다가 질문하고, 의미 있는 생각과 가설은 그때그때 지식 DB에 남긴다. 차트에 직접 그은 작도를 세션이 읽어 함께 해석하고, 계획에는 가설 검증일·반증 조건·검증 전 비중을 적는다.
+- **만든 방식:** Claude Code가 설계·작업 지시·검수·통합을 맡고 Codex가 승인된 모듈을 구현했다. 모듈마다 설명서 → 작업 지시서 → 구현 → 검수 순서를 지키고, 모듈 사이는 계약으로 나누며, 시험은 운영 자료와 외부 네트워크를 막은 격리 실행기에서 돌린다. 단계마다 내가 승인했다.
+- **현재 단계:** 4단계 구현 완료, **5단계 검수 중**(실제 종목 하나로 전체 흐름 확인). 작동하는 것과 계획을 [아래 표](#지금-작동하는-것과-계획)에 나눴다.
+- **근거:** [설계와 계약](docs/design/3%EB%8B%A8%EA%B3%84%20%EC%84%A4%EA%B3%84.md) · [모듈 설명서·작업 지시서](docs/design/) · [격리 시험 실행기](tests/run_isolated.py) · [모듈별 시험 목록](tests/suites/) · [개발 방식 학습 기록(노션)](https://jelly-snapper-928.notion.site/41b50951fc8481d684d0e623c67941d5)
+
+## 지금 작동하는 것과 계획
+
+**지금 작동하는 것** — 개인 작업공간에서 모듈별 시험 목록 12개가 모두 통과했다(2026-11-18 기록). 공개 체크아웃에서의 재현은 아래 [시험 재현](#시험-재현)의 한계를 따른다.
+
+| 기능 | 하는 일 | 상태 |
+|---|---|---|
+| 지식·논의 기록 (세션 MCP) | 자료 원문, 내 발언·가설·보류·결정, AI 정리를 작성자와 종류를 구분해 저장하고 다음 세션이 다시 읽는다 | 개편 전부터 같은 DB로 사용 중. 개편 뒤 실제 환경에서 MCP 연결 확인(2026-11-18) |
+| 차트·작도와 세션 연결 | 종목 검색 → 차트 → 작도. 세션이 채택·최신 작도와 현재가와의 거리를 읽는다. L1 추세 구간 참고선(매매 신호 아님) | 구현·시험 통과, 5단계 검수 중 |
+| 분석·논의·계획 기록 | 논의와 계획 초안을 버전으로 남긴다. 계획에 가설 검증일·반증 조건·검증 전 비중 칸 | 구현·시험 통과, 5단계 검수 중 |
+| 재무 | SEC/DART 공식 자료를 교체 가능한 출처 어댑터로 읽는다 | 구현·시험 통과 |
+| 계좌 관측 | 저장된 조회 결과만 읽는다. 앱의 자동 계좌 조회는 없앴다 | 구현·시험 통과 |
+
+**계획**
+
+| 항목 | 시점·조건 |
+|---|---|
+| 5단계 검수 | 실제 종목 하나로 작도 → 조사 → 계획 가설 칸까지 전체 흐름을 확인한다. **검수 중**(완료 전) |
+| 6단계 운영 전환 | 아침 일봉 수집·기술 신호·Telegram 알림 예약을 켠다. 5단계 뒤. 코드는 있으나 지금은 멈춰 둔 상태 |
+| 의미 기반 검색(벡터 DB) | 지금의 키워드·주제 연결 검색에 더한다. 미니 PC를 갖춘 다음 개편 때 |
+| Telegram 뉴스 자동 분류 | 시험 이후 미니 PC·벡터 DB 개편 때 다시 설계한다. 그때까지 기존 코드는 보류 |
+| Koyfin 재무 데이터 | 별도로 검토 중. 재무 출처 어댑터 층에 붙이는 방식을 우선 본다 |
 
 ## 구조
 
@@ -18,6 +44,8 @@
 | `docs/design/` | 전체 설계와 M00~M13 설명서·작업 지시서 |
 
 세션 MCP와 대시보드는 서비스 함수를 공유한다. DB별 쓰기 소유권, 가격 읽기, 작도 해석, MCP·HTTP 변경 담당을 계약으로 나누어 병렬 구현의 충돌을 줄인다. 과거 이력에는 현재 개편에서 제거하거나 보류한 기능도 남아 있다.
+
+이 공개본은 코드 구조, 모듈 설계, AI 에이전트 협업 방식과 시험 경계를 보여 주는 쇼케이스다. 개인 DB·인증 정보·운영 설정·매매 기록은 포함하지 않는다. 설계 문서는 작성 시점의 계획과 계약을 보존한 자료이며, 문서에 적힌 기능·시험·운영 전환 전체가 완료되었다는 뜻은 아니다.
 
 ## AI 에이전트와 작업하는 방식
 
@@ -58,8 +86,12 @@ if ($LASTEXITCODE -eq 0) {
 
 ## English summary
 
-A local investment research workspace that carries study notes, analysis and user decisions across Claude Code sessions. Trading decisions remain with the user.
+A record of building a RAG (retrieval-augmented generation) system for my own investment study. Sources, my notes and hypotheses are stored in a local database; when a Claude Code session gets a question, it first retrieves the related material and my earlier reasoning, then continues the discussion. Retrieval today uses stock/topic links and keyword search in SQLite; semantic (vector) search is planned for the next rework. I built it because I actually need it. I make the stock and trading decisions; broker connections are read-only.
 
-Claude Code supervises integration; Codex implements bounded modules using explicit contracts and isolated tests. This showcase contains selected code and design artifacts, with private data and credentials excluded.
+How I use it: when a stock or industry comes up, the session first reads saved sources, my notes and open questions; ideas and hypotheses are recorded as the discussion goes; chart drawings I make are read back into the session; plans record a hypothesis check date, falsification conditions and pre-check position size.
+
+How it was built: Claude Code handled design, work orders, review and integration; Codex implemented approved modules. Each module followed spec → work order → implementation → review, modules are separated by explicit contracts, and tests run in an isolated runner that blocks operational data and external network access. I approved each stage.
+
+Status: implementation (stage 4) is complete and stage 5 — reviewing the full flow on one real stock — is in progress. Planned: stage 6 operational switch-over (morning data collection, signals, scheduled Telegram alerts), automatic Telegram news classification after a later hardware and vector-DB rework, and a Koyfin financial-data source under separate review.
 
 The public snapshot documents its reproducibility limits: redacted local interpreter paths and excluded operational launch fixtures require separate portability work before the complete M00 suite can run unchanged.
