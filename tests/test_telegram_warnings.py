@@ -51,7 +51,7 @@ class TelegramWarnings(unittest.TestCase):
 
     def test_disabled_without_private_config_even_if_env_exists(self):
         self.add()
-        with patch.dict('os.environ', {'TELEGRAM_BOT_TOKEN':'123:secret','TELEGRAM_CHAT_ID':'123'}):
+        with patch.object(telegram.os, 'environ', {'TELEGRAM_BOT_TOKEN':'123:secret','TELEGRAM_CHAT_ID':'123'}):
             self.assertEqual(telegram.dispatch(self.root)['state'],'disabled')
 
     def test_separate_warnings_and_no_duplicate_after_restart(self):
@@ -88,6 +88,22 @@ class TelegramWarnings(unittest.TestCase):
         self.dispatch()
         self.assertFalse(self.sent)
         self.assertNotIn('credential_must_not_leak',(self.root/'runtime/telegram-delivery/latest.json').read_text())
+
+    def test_boolean_message_id_is_unknown_and_not_resent(self):
+        self.add()
+        calls = []
+        def unconfirmed(text):
+            calls.append(text)
+            return {'message_id': True}
+        self.assertEqual(self.dispatch(unconfirmed)['counts'], {'unknown': 1})
+        self.dispatch(unconfirmed)
+        self.assertEqual(len(calls), 1)
+
+    def test_test_record_warning_is_preserved_but_not_sent(self):
+        self.add(test_record=True)
+        self.assertEqual(self.dispatch()['counts'], {})
+        self.assertFalse(self.sent)
+        self.assertEqual(len(self.store.read()['events']), 1)
 
     def test_crashed_inflight_delivery_not_resent(self):
         self.add();self.dispatch()
@@ -201,11 +217,22 @@ class TelegramWarnings(unittest.TestCase):
         self.assertEqual(self.store.read(), before)
 
     def test_configuration_dpapi_roundtrip_no_plaintext(self):
-        with patch.dict('os.environ',{'TELEGRAM_BOT_TOKEN':'123:secret','TELEGRAM_CHAT_ID':'123'}):
+        # Exercise the persistence contract with an opaque synthetic protector.
+        # No DPAPI, user environment or real credential is read by this test.
+        protected = {}
+        def protect(data, decrypt=False):
+            if decrypt:
+                return protected[data]
+            marker = b'fixture-protected-blob'
+            protected[marker] = data
+            return marker
+        with patch.object(telegram, 'protect', side_effect=protect) as protection, \
+                patch.object(telegram.os, 'environ', {'TELEGRAM_BOT_TOKEN':'123:secret','TELEGRAM_CHAT_ID':'123'}):
             telegram.configure(self.root)
-        self.assertEqual(telegram.settings(self.root)['token'],'123:secret')
-        self.assertNotIn('123:secret',(self.root/'secrets/telegram.dpapi.json').read_text())
-        with self.assertRaises(ValueError):telegram.configure(self.root)
+            self.assertEqual(telegram.settings(self.root)['token'],'123:secret')
+            self.assertNotIn('123:secret',(self.root/'secrets/telegram.dpapi.json').read_text())
+            with self.assertRaises(ValueError):telegram.configure(self.root)
+        self.assertEqual(protection.call_count, 2)
 
     def test_lock_prevents_concurrent_delivery(self):
         self.add()

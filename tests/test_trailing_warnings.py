@@ -160,6 +160,25 @@ class Warnings(unittest.TestCase):
   p=self.run_update()['positions'][0];self.add(p['line'],high=100,low=95)
   self.assertIn('trailing',[e['kind'] for e in self.run_update()['events']])
 
+
+ def test_failed_missing_holdings_preserves_last_good_and_observed_times(self):
+  old=self.run_update()['positions'][0]
+  self.bundle.update(query_state='failed',as_of=(self.now-timedelta(hours=1)).isoformat(),accounts=[])
+  result=self.run_update();position=result['positions'][0]
+  self.assertEqual(position['account_as_of'],old['account_as_of'])
+  self.assertEqual(position['observed_account_as_of'],self.bundle['as_of'])
+  self.assertEqual(position['checked_at'],self.now.isoformat())
+  self.assertEqual(position['issue'],'account_stale_or_incomplete')
+  self.assertEqual(position['history'],old['history']);self.assertTrue(position['active'])
+  self.assertFalse(result['events'])
+
+ def test_initial_stale_holding_exposes_observation_without_activation(self):
+  self.bundle['as_of']=(self.now-timedelta(days=2)).isoformat()
+  result=self.run_update();position=result['positions'][0]
+  self.assertEqual(position['observed_account_as_of'],self.bundle['as_of'])
+  self.assertEqual(position['issue'],'account_stale_or_incomplete')
+  self.assertFalse(position['active']);self.assertFalse(result['events'])
+
 class SelectedSeries(unittest.TestCase):
  def test_selected_only_and_integrity(self):
   import json,hashlib
@@ -178,6 +197,27 @@ class SelectedSeries(unittest.TestCase):
    self.assertEqual(holding_series(path,hashlib.sha256(path.read_bytes()).hexdigest(),set()),{})
    path.write_text('{"series": []}',encoding='utf-8')
    with self.assertRaises(ValueError):holding_series(path,hashlib.sha256(path.read_bytes()).hexdigest(),set())
+
+
+ def test_pinned_bars_ref_survives_correction_and_preserves_hashes(self):
+  import hashlib,json
+  from market.prices import PriceStore
+  with tempfile.TemporaryDirectory() as folder:
+   root=Path(folder);store=PriceStore(root/'prices.sqlite3')
+   bars=[dict(date='2026-10-05',open=100,high=102,low=98,close=100,volume=10)]
+   series=dict(market='US',symbol='A',currency='USD',provider='fixture',price_basis='adjusted',bars=bars)
+   reference=store.put(series,source='fixture')
+   row={k:v for k,v in series.items() if k!='bars'};row['bars_ref']=reference
+   snapshot=root/'snapshot.json'
+   snapshot.write_text(json.dumps(dict(ohlcv_store={'path':str(store.path)},series=[row]),indent=2),encoding='utf-8')
+   original=snapshot.read_bytes();sha=hashlib.sha256(original).hexdigest()
+   store.put({**series,'bars':[{**bars[0],'close':101}]},source='correction')
+   database=store.path.read_bytes()
+   selected=holding_series(snapshot,sha,{'US:A'})
+   self.assertEqual(selected['US:A']['bars'],bars)
+   self.assertEqual(selected['US:A']['bars_ref'],reference)
+   self.assertEqual(store.path.read_bytes(),database)
+   self.assertEqual(snapshot.read_bytes(),original)
 
 if __name__=='__main__':unittest.main()
 
@@ -212,3 +252,17 @@ class SavedAlertInputs(unittest.TestCase):
                 market.write_text(market.read_text()+' ')
                 with self.assertRaisesRegex(ValueError,'saved_artifact_hash_mismatch'):
                     saved_inputs(root,run)
+
+    def test_refresh_saved_reports_observation_and_forwards_failure_without_query(self):
+        from unittest.mock import patch
+        from alerts.trailing import refresh_saved
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            bundle=dict(as_of='2026-10-06T00:00:00+00:00',query_state='failed',source_mode='saved',accounts=[])
+            with patch('alerts.trailing.saved_inputs',return_value=(bundle,{})) as inputs, \
+                 patch('alerts.trailing.TrailingStore.update',return_value={'positions':[],'events':[]}) as update, \
+                 patch('accounts.account_view',side_effect=AssertionError('new account query')):
+                result=refresh_saved(root,root/'runtime/run',{'US':'2026-10-05'},account_failed=True)
+            self.assertTrue(inputs.call_args.kwargs['account_failed'])
+            self.assertIs(update.call_args.args[0],bundle)
+            self.assertEqual(result['account_observation'],{k:bundle[k] for k in ('as_of','query_state','source_mode')})

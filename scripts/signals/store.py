@@ -150,6 +150,7 @@ def evaluate_saved(root, targets):
             sid = prices.find(dict(market=market, symbol=symbol))
             if sid is None:
                 raise ValueError('price_identity_missing_or_ambiguous')
+            # 조 2b 전환 대상: M03 bars 읽기로 교체하고 cutoff/revision/hash를 보존한다.
             with closing(prices.connect()) as db:
                 rows = db.execute('SELECT day,open,high,low,close,volume,revision FROM prices WHERE series_id=? AND day<=? ORDER BY day', (sid, cutoff)).fetchall()
             bars = [dict(zip(('date', 'open', 'high', 'low', 'close', 'volume'), row[:6])) for row in rows]

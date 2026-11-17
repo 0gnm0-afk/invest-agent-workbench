@@ -1,4 +1,5 @@
 """Browser-confirmed scenario watches over immutable adopted analysis plans."""
+from copy import deepcopy
 from analysis import Forbidden
 
 from analysis.collaboration import fields, integer
@@ -39,6 +40,7 @@ def dispatch(service, op, args, origin, principal, session):
             raise Conflict('confirmed_drawing_revision_changed')
         # Only recorded and user-adopted response text enters the deterministic alert.
         responses = list(dict.fromkeys(c['statement'] for c in references if c.get('statement')))
+        # 조 3 뒤 전환 대상: M06 C3 exact adopted-revision drawing reader.
         drawing = next(d for d in snap['workspace']['state']['drawings'] if d['id'] == args['drawing_id'])
         mapping = {'low':'lower', 'high':'upper', 'entry':'entry', 'stop':'stop', 'target':'target', 'line':'line'}
         if drawing['kind'] == 'channel':
@@ -63,7 +65,8 @@ def dispatch(service, op, args, origin, principal, session):
             timeframe=snap['chart']['timeframe'], purpose=args['purpose'], boundary=args['boundary'],
             tolerance_atr=args['tolerance_atr'], confirmed_response='\n'.join(responses) or None,
             confirmed_responses=by_boundary, account_alias=plan['plan']['account_alias'],
-            detail_url=service.links(case, origin)['dashboard_url'], chart=snap['chart'], test_record=case['test_record'])
+            detail_url=service.links(case, origin)['dashboard_url'], chart=snap['chart'], test_record=case['test_record'],
+            hypothesis=deepcopy(plan['plan'].get('hypothesis')))
         return result
     if op == 'monitor_update':
         fields(args, ('id', 'revision', 'tolerance_atr', 'active'), ('id', 'revision'))

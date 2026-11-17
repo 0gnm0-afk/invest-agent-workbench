@@ -131,13 +131,32 @@ class Persistence(unittest.TestCase):
         watch = self.configure(True)
         self.store.record(watch,self.evaluation,close=100)
         messages=[]
-        options=dict(config={'enabled_at':'2000-01-01','chat':'fixture'}, sender=lambda text: (messages.append(text) or {'message_id':1}),
+        options=dict(config={'enabled_at':'2000-01-01','chat':'fixture','token':'SYNTHETIC_PRIVATE_TOKEN'}, sender=lambda text: (messages.append(text) or {'message_id':1}),
                      include_trailing=False,include_scenarios=False)
-        dispatch(self.root,self.targets,**options)
-        dispatch(self.root,self.targets,**options)
+        with patch('accounts.account_view', create=True, side_effect=AssertionError('account_query_forbidden')) as query, \
+                patch('accounts.refresh_account_snapshot', create=True, side_effect=AssertionError('account_refresh_forbidden')) as refresh:
+            self.assertEqual(dispatch(self.root,self.targets,**options)['counts'], {'sent': 1})
+            self.assertEqual(dispatch(self.root,self.targets,**options)['counts'], {'sent': 1})
+            query.assert_not_called()
+            refresh.assert_not_called()
         self.assertEqual(len(messages),1)
         self.assertIn('개별 조건',messages[0])
         self.assertIn('저장 지식',messages[0])
+        self.assertNotIn('SYNTHETIC_PRIVATE_TOKEN',messages[0])
+
+    def test_account_independent_delivery_with_default_event_sources(self):
+        watch = self.configure(True)
+        self.store.record(watch, self.evaluation, close=100)
+        messages = []
+        with patch('accounts.account_view', create=True, side_effect=AssertionError('account_query_forbidden')) as query, \
+                patch('accounts.refresh_account_snapshot', create=True, side_effect=AssertionError('account_refresh_forbidden')) as refresh:
+            result = dispatch(self.root, self.targets,
+                config={'enabled_at': '2000-01-01', 'chat': 'fixture'},
+                sender=lambda text: messages.append(text) or {'message_id': 7})
+        self.assertEqual(result['counts'], {'sent': 1})
+        self.assertEqual(len(messages), 1)
+        query.assert_not_called()
+        refresh.assert_not_called()
 
     def test_saved_prices_and_watch_evaluate_without_network(self):
         from signals.store import evaluate_saved
