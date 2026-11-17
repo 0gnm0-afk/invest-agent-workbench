@@ -146,76 +146,117 @@ class StoredData(unittest.TestCase):
 
 
 class BrokerBoundary(unittest.TestCase):
-    class Error(Exception): pass
+    """M08 handoff: persist session results; no app-owned broker transport."""
 
-    def reader(self, path, inputs, continuation=None):
-        if path == '/n2/acctinfo':
-            return {'Output_0': [{'acct_type': '01', 'acct_no': 'SYNTH_ACCOUNT_254aa248acb4'}], 'rsp_msg': '조회완료'}, {}
-        return {'Output_0': {}, 'Output_1': [], 'rsp_msg': '조회완료'}, {'cts_flag': 'N'}
+    def setUp(self):
+        from accounts.store import AccountStore
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.store = AccountStore(Path(self.temp.name) / 'runtime/accounts.sqlite3')
 
-    def pages(self, path, inputs, reader):
-        return [reader(path, inputs)[0]]
+    def observation(self):
+        page = {'Output_0': {}, 'Output_1': [], 'rsp_msg': '조회완료',
+                '_pagination': {'cts_flag': 'N', 'cts': None, 'request_cts': None}}
+        return {'as_of': '2026-11-01T01:00:00+00:00', 'accounts_complete': True,
+                'accounts': [{'alias': 'nh-synthetic', 'markets': {
+                    market: {'state': 'received', 'pages': [copy.deepcopy(page)]}
+                    for market in ('KR', 'US')}}]}
 
-    def test_exact_account_balance_allowlist(self):
-        raw = account_data.collect_balances(self.reader, self.pages, self.Error)
-        self.assertEqual(raw['endpoint_calls'], ['/n2/acctinfo','/krstock/inquiry/v1/balance','/gbstock/inquiry/v1/balance'])
-        self.assertNotIn('SYNTH_ACCOUNT_254aa248acb4', json.dumps(raw))
-        self.assertEqual(raw['accounts'][0]['markets']['KR']['state'], 'received')
+    def save(self, observation, request_id='synthetic'):
+        from accounts.brokers import query_state
+        from accounts.record import normalized
+        snapshot = normalized('nh', observation)
+        claim = self.store.begin('nh', request_id, 'mcp')
+        self.assertTrue(claim['execute'])
+        return self.store.complete('nh', request_id, claim['lease'],
+            metadata={'query_state': query_state(snapshot)}, snapshot=snapshot, raw=observation)
 
-    def test_order_request_refused_before_transport(self):
-        transport = []
-        def reader(path, inputs, continuation=None):
-            transport.append(path)
-            return self.reader(path, inputs, continuation)
-        def pages(path, inputs, reader):
-            return reader('/krstock/inquiry/v1/dailyOrderExecution', inputs)
-        with self.assertRaisesRegex(ValueError, 'read_only'):
-            account_data.collect_balances(reader, pages, self.Error)
-        self.assertEqual(transport, ['/n2/acctinfo'])
+    def test_session_observation_preserves_refs_and_timestamp(self):
+        observation = self.observation()
+        receipt = self.save(observation)
+        self.assertEqual(receipt['origin'], 'mcp')
+        self.assertEqual(receipt['query_state'], 'received')
+        self.assertEqual(self.store.read(receipt['raw_ref']), observation)
+        snapshot = self.store.read(receipt['snapshot_ref'])
+        self.assertEqual(snapshot['as_of'], observation['as_of'])
+        self.assertTrue(snapshot['accounts'][0]['holdings_complete'])
+        self.assertEqual(self.store.latest('nh'), receipt)
+
+    def test_completed_request_does_not_grant_second_lease(self):
+        receipt = self.save(self.observation())
+        repeated = self.store.begin('nh', receipt['request_id'], 'mcp')
+        self.assertFalse(repeated['execute'])
+        self.assertNotIn('lease', repeated)
+        self.assertEqual(repeated['result'], receipt)
 
     def test_one_market_error_is_not_empty_success(self):
-        def reader(path, inputs, continuation=None):
-            if 'gbstock' in path: raise self.Error('http_503')
-            return self.reader(path, inputs, continuation)
-        raw = account_data.collect_balances(reader, self.pages, self.Error)
-        self.assertEqual(raw['accounts'][0]['markets']['US'], {'state':'unavailable','reason':'http_503','pages':[]})
-        self.assertEqual(raw['accounts'][0]['markets']['KR']['state'],'received')
+        observation = self.observation()
+        observation['accounts'][0]['markets']['US'] = {
+            'state': 'unavailable', 'reason': 'synthetic_http_503', 'pages': []}
+        receipt = self.save(observation)
+        self.assertEqual(receipt['query_state'], 'partial')
+        account = self.store.read(receipt['snapshot_ref'])['accounts'][0]
+        self.assertFalse(account['holdings_complete'])
+        self.assertEqual(account['query_markets']['KR']['state'], 'received')
+        self.assertEqual(account['query_markets']['US'], {
+            'state': 'unavailable', 'reason': 'synthetic_http_503', 'pages': 0})
 
-    def test_unconfirmed_empty_account_list_rejected(self):
-        with self.assertRaisesRegex(ValueError, 'account_list_not_confirmed'):
-            account_data.collect_balances(lambda *args: ({'Output_0': []}, {}), self.pages, self.Error)
+    def test_unconfirmed_empty_account_list_is_partial(self):
+        observation = self.observation()
+        observation.update(accounts=[], accounts_complete=False)
+        receipt = self.save(observation)
+        self.assertEqual(receipt['query_state'], 'partial')
+        snapshot = self.store.read(receipt['snapshot_ref'])
+        self.assertEqual(snapshot['accounts'], [])
+        self.assertFalse(snapshot['accounts_complete'])
 
     def test_confirmed_zero_accounts(self):
-        raw = account_data.collect_balances(lambda *args: ({'Output_0': [], 'rsp_msg': '조회완료'}, {}), self.pages, self.Error)
-        self.assertEqual(raw['accounts'], [])
+        observation = self.observation()
+        observation['accounts'] = []
+        receipt = self.save(observation)
+        self.assertEqual(receipt['query_state'], 'received')
+        snapshot = self.store.read(receipt['snapshot_ref'])
+        self.assertEqual(snapshot['accounts'], [])
+        self.assertTrue(snapshot['accounts_complete'])
 
     def test_duplicate_account_rejected(self):
-        row = {'acct_type': '01', 'acct_no': 'SYNTH_ACCOUNT_254aa248acb4'}
-        with self.assertRaisesRegex(ValueError, 'identity'):
-            account_data.collect_balances(lambda *args: ({'Output_0': [row, row], 'rsp_msg': '조회완료'}, {}), self.pages, self.Error)
+        from accounts.record import normalized
+        observation = self.observation()
+        observation['accounts'].append(copy.deepcopy(observation['accounts'][0]))
+        with self.assertRaisesRegex(ValueError, 'duplicate_account_alias'):
+            normalized('nh', observation)
+        self.assertFalse(self.store.path.exists())
 
-    def test_unconfirmed_nonempty_account_list_rejected(self):
-        row = {'acct_type': '01', 'acct_no': 'SYNTH_ACCOUNT_254aa248acb4'}
-        with self.assertRaisesRegex(ValueError, 'account_list_not_confirmed'):
-            account_data.collect_balances(lambda *args: ({'Output_0': [row]}, {}), self.pages, self.Error)
+    def test_unconfirmed_nonempty_account_list_is_partial(self):
+        observation = self.observation()
+        observation.pop('accounts_complete')
+        receipt = self.save(observation)
+        self.assertEqual(receipt['query_state'], 'partial')
+        snapshot = self.store.read(receipt['snapshot_ref'])
+        self.assertEqual(len(snapshot['accounts']), 1)
+        self.assertFalse(snapshot['accounts_complete'])
 
     def test_non_dict_account_row_rejected(self):
-        with self.assertRaisesRegex(ValueError, 'account_list_not_confirmed'):
-            account_data.collect_balances(lambda *args: ({'Output_0': ['not-an-account'], 'rsp_msg': '조회완료'}, {}), self.pages, self.Error)
+        from accounts.record import normalized
+        observation = self.observation()
+        observation['accounts'] = ['not-an-account']
+        with self.assertRaisesRegex(ValueError, 'observation_shape_invalid'):
+            normalized('nh', observation)
+        self.assertFalse(self.store.path.exists())
 
-    def test_error_pages_preserved(self):
-        pages = [{'Output_0': {}, 'Output_1': [], 'rsp_msg': '조회완료'}]
-        def reader(path, inputs, continuation=None):
-            if 'gbstock' in path:
-                error = self.Error('http_503')
-                error.pages = pages
-                raise error
-            return self.reader(path, inputs, continuation)
-        raw = account_data.collect_balances(reader, self.pages, self.Error)
-        self.assertEqual(raw['accounts'][0]['markets']['US'],
-                         {'state': 'unavailable', 'reason': 'http_503', 'pages': pages})
-        self.assertEqual(raw['accounts'][0]['markets']['KR']['state'], 'received')
-
+    def test_failed_attempt_preserves_error_pages_and_observation(self):
+        observation = self.observation()
+        original = self.save(observation)
+        claim = self.store.begin('nh', 'synthetic-failed', 'mcp')
+        error = {'pages': [{'rsp_msg': 'synthetic unavailable'}]}
+        failed = self.store.complete('nh', 'synthetic-failed', claim['lease'],
+            metadata={'query_state': 'failed', 'reason': 'synthetic_http_503'}, raw=error)
+        self.assertIsNone(failed['snapshot_ref'])
+        self.assertEqual(self.store.read(failed['raw_ref']), error)
+        self.assertEqual(self.store.latest_attempt('nh'), failed)
+        self.assertEqual(self.store.latest('nh'), original)
+        self.assertEqual(self.store.read(original['raw_ref']), observation)
+        self.assertEqual(self.store.read(original['snapshot_ref'])['as_of'], observation['as_of'])
 
 class HttpBoundary(unittest.TestCase):
     @classmethod
