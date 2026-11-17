@@ -26,12 +26,16 @@ class FinancialRecords(unittest.TestCase):
         self.sid = 'a' * 32
         self.folder = self.financial.folder(self.key)
         self.base = self.folder / 'snapshots' / self.sid
-        self.result = dict(key=self.key, snapshot_id=self.sid, collected_at='2026-11-01T00:00:00Z', sources=[])
+        save(self.base / 'raw' / 'official.json', {'fact': 3})
+        raw = (self.base / 'raw' / 'official.json').read_bytes()
+        receipt = dict(id='official.json', url='https://www.sec.gov/synthetic-official.json',
+                       fetched_at='2026-11-01T00:00:00Z',
+                       sha256=hashlib.sha256(raw).hexdigest(), bytes=len(raw))
+        self.result = dict(key=self.key, snapshot_id=self.sid, collected_at='2026-11-01T00:00:00Z', sources=[receipt])
         save(self.base / 'result.json', self.result)
         save(self.base / 'normalized.json', dict(annual=[], quarterly=[]))
         save(self.base / 'source.json', dict(provider='SEC', symbol=self.symbol))
         save(self.base / 'saved-price.json', dict(market='US', symbol=self.symbol, bars=[]))
-        save(self.base / 'raw' / 'official.json', {'fact': 3})
         files = {
             p.relative_to(self.base).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
             for p in self.base.rglob('*') if p.is_file()
@@ -128,7 +132,7 @@ class FinancialRecords(unittest.TestCase):
                 return publish_snapshot(base, **kwargs)
 
             lease = lock_file(self.folder / 'request.lock')
-            with patch('financials.store.Collector') as collector, \
+            with patch('financials.providers.official.Collector') as collector, \
                     patch('financials.store.publish_snapshot', side_effect=publish) as publish_call:
                 collector.return_value.sources = []
                 collector.return_value.usa.return_value = source
@@ -149,8 +153,8 @@ class FinancialRecords(unittest.TestCase):
         self.publish()
         for name in ARTIFACTS:
             (self.base / name).rename(self.base / (name + '.fixture-hidden'))
-        with patch('financials.store.Collector') as collector, \
-                patch('financials.store.sec_normalize', return_value={'annual': []}), \
+        with patch('financials.providers.official.Collector') as collector, \
+                patch('financials.providers.official.sec_normalize', return_value={'annual': []}), \
                 patch('financials.store.summarize', return_value={'summary': []}):
             result = self.financial.recalculate_saved(self.key)
             collector.assert_not_called()
