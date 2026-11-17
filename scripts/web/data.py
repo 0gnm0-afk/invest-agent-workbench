@@ -108,7 +108,25 @@ class StockSearch:
         return result
 
 
-def build(root=ROOT, refresh=True, *, market_run=None, daily_update=None, persist_view=False):
+def home_view(data):
+    """Public market status only; saved holding context stays inside services."""
+    market_fields = ('state', 'run_id', 'processing_state', 'data_times', 'quality',
+                     'finished_at', 'errors', 'session_dates', 'quality_gaps')
+    result = {'generated_at': data.get('generated_at'),
+              'market': {key: value for key, value in data.get('market', {}).items()
+                         if key in market_fields}}
+    if 'daily_update' in data:
+        result['daily_update'] = market_update(data['daily_update'])
+    return result
+
+
+def market_update(value):
+    """Do not expose legacy account retry/results as market update status."""
+    return {key: item for key, item in value.items()
+            if not key.startswith('account') and key != 'saved_accounts'}
+
+
+def build(root=ROOT, refresh=False, *, market_run=None, daily_update=None, persist_view=False):
     config = load(root / 'config.json')
     sys.path.insert(0, str(Path(config['engine']) / 'src'))
     # Ordinary views are memory projections of the existing DBs. Only an
@@ -121,22 +139,19 @@ def build(root=ROOT, refresh=True, *, market_run=None, daily_update=None, persis
     except (OSError, ValueError, KeyError, TypeError) as exc:
         market = {'state': 'unavailable', 'errors': ['saved_market_unavailable:' + type(exc).__name__],
                   'stocks': {}, 'session_dates': {}, 'quality': {}}
-    accounts = account_view(config, output, refresh, persist_receipt=persist_view)
-    if (daily_update or {}).get('account_state') == 'failed':
-        accounts.update(query_state='failed', reason='daily_account_refresh_failed')
+    # Compatibility callers may still supply refresh; web views only read the
+    # session's saved observation and never initiate broker queries.
+    accounts = account_view(config, output, False, persist_receipt=persist_view)
     stocks = market.pop('stocks')
     from alerts.trailing import TrailingStore
     from launch.daily import plan_for
     warning_store = TrailingStore(root/'runtime/trailing-warnings.sqlite3')
     warning_time = datetime.now(timezone.utc)
     warning_targets = plan_for(warning_time)['targets']
-    # Saved-only viewing must not rewrite monitor timestamps/state. The daily
-    # collection path already evaluates warnings after its account refresh.
-    warnings = (warning_store.update(accounts, stocks, warning_targets, warning_time) if refresh
-                else warning_store.public(warning_time, warning_targets))
+    warnings = warning_store.public(warning_time, warning_targets)
     data = {'generated_at': now(), 'market': market, 'accounts': accounts, 'trailing': warnings}
     if daily_update is not None:
-        data['daily_update'] = daily_update
+        data['daily_update'] = market_update(daily_update)
     if persist_view:
         publish_receipt(output, accounts, view=data, market_network_calls=0, view_storage='export',
                         market_run=str(market_run) if market_run else None)

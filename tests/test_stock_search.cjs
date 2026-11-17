@@ -45,7 +45,7 @@ function setup() {
  document.activeElement = input;
  input.blur = () => { document.activeElement = null; host.fire('focusout', {relatedTarget: null}); };
  input.focus = () => { document.activeElement = input; input.fire('focus'); };
- const timers = new Map(), requests = [], location = {hash: '#home'};
+ const timers = new Map(), requests = [], location = {hash: '#search'};
  let serial = 0;
  const context = vm.createContext({document, window, location, AbortController,
   setTimeout(fn, delay) { const id = ++serial; timers.set(id, {fn, delay}); return id; },
@@ -112,16 +112,16 @@ const stocks = [
  h = setup(); await h.results();
  h.input.fire('compositionstart'); assert.equal(h.panel.hidden, true);
  h.type('삼'); assert.equal(h.timers.size, 0); assert.equal(h.key('Enter').defaultPrevented, false);
- assert.equal(h.location.hash, '#home', 'IME confirmation does not select a result');
+ assert.equal(h.location.hash, '#search', 'IME confirmation does not select a result');
  h.input.fire('compositionend'); h.input.fire('input');
  assert.equal(h.timers.size, 1); h.tick(); await h.reply(1, korean);
  assert.equal(h.key('Enter', {isComposing: true}).defaultPrevented, false);
  assert.equal(h.key('Enter', {keyCode: 229}).defaultPrevented, false);
- assert.equal(h.location.hash, '#home'); h.key('Enter'); assert.equal(h.location.hash, '#stock/KR/005930.KS');
+ assert.equal(h.location.hash, '#search'); h.key('Enter'); assert.equal(h.location.hash, '#stock/KR/005930.KS');
 
  h = setup(); h.type('absent'); h.tick(); await h.reply(0, []);
  assert.equal(h.list.children.length, 0); assert.match(h.status.textContent, /일치하는 종목이 없습니다/);
- h.key('Enter'); assert.equal(h.location.hash, '#home');
+ h.key('Enter'); assert.equal(h.location.hash, '#search');
  h.type('nv'); h.tick(); await h.reply(1, [], 0, false);
  assert.match(h.status.textContent, /불러오지 못했습니다/); assert.equal(h.input.getAttribute('aria-activedescendant'), null);
  await h.results(); assert.equal(h.list.children.length, 2, 'a later edit recovers from a failed request');
@@ -131,7 +131,7 @@ const stocks = [
  h = setup(); await h.results(); h.key('Escape');
  assert.equal(h.panel.hidden, true); assert.equal(h.input.value, 'nvd');
  assert.equal(h.input.getAttribute('aria-expanded'), 'false'); assert.equal(h.list.children.length, 0);
- h.key('Enter'); assert.equal(h.location.hash, '#home', 'Enter on a closed popup does not navigate');
+ h.key('Enter'); assert.equal(h.location.hash, '#search', 'Enter on a closed popup does not navigate');
  h.key('ArrowDown'); assert.equal(h.panel.hidden, false); h.tick(); await h.reply(1, stocks);
  h.key('Tab'); assert.equal(h.panel.hidden, true);
  h.input.focus(); h.tick(); await h.reply(2, stocks);

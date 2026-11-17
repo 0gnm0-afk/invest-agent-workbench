@@ -50,9 +50,9 @@ function setup(initial=failed,hash='#stock/US/AAA'){
  let h=setup({...failed,view_ready:false,retry_available:false,error:'basis_document_changed_review_required',account_attempted:true,account_state:'received'});await h.start();
  assert.match(h.text(),/오늘의 갱신에 오류/);
  assert.match(h.text(),/공식 문서 변경/);
- assert.match(h.text(),/계좌 갱신 완료/);
+ assert.doesNotMatch(h.text(),/계좌|잔고/);
  assert.match(h.text(),/저장 화면 준비 중/);
- assert.doesNotMatch(h.text(),/오늘의 종가·계좌 갱신 중|갱신 진행 중…/);
+ assert.doesNotMatch(h.text(),/오늘의 종가 갱신 중|갱신 진행 중…/);
  assert.equal(h.button('daily-retry').textContent,'화면 준비 중…');
  assert.equal(h.button('daily-retry').disabled,true);
  h.status={...h.status,view_ready:true,retry_available:true};await h.refresh();
@@ -60,7 +60,7 @@ function setup(initial=failed,hash='#stock/US/AAA'){
  assert.equal(h.button('daily-retry').textContent,'오늘의 갱신 재시도');
  h=setup({...failed,state:'succeeded',error:null,view_ready:false,retry_available:false});await h.start();
  assert.match(h.text(),/오늘의 갱신 완료/);
- assert.doesNotMatch(h.text(),/오늘의 종가·계좌 갱신 중/);
+ assert.doesNotMatch(h.text(),/오늘의 종가 갱신 중/);
  assert.equal(h.button('daily-retry').disabled,true);
  h=setup();await h.start();
  assert.match(h.text(),/시장 자료 수집 작업이 오류로 종료/);
@@ -91,7 +91,7 @@ function setup(initial=failed,hash='#stock/US/AAA'){
  h.closeAllowed=true;await h.button('daily-result').onclick();assert.equal(h.c.DATA,h.next);
  assert.equal(h.button('daily-result'),undefined);assert.equal(h.calls.filter(c=>c[0]==='route').length,2);
 
- h=setup(failed,'#home');await h.start();
+ h=setup(failed,'#search');await h.start();
  assert.equal(h.calls.filter(c=>c[0]==='/api/home').length,1);
  await h.refresh();assert.equal(h.calls.filter(c=>c[0]==='/api/home').length,1);
  await h.button('daily-retry').onclick();
@@ -108,7 +108,7 @@ function setup(initial=failed,hash='#stock/US/AAA'){
  assert.equal(h.c.DATA,h.next);
 
  // A display-only retry keeps the market attempt identity but publishes a new view revision.
- for(const hash of ['#home','#stock/US/AAA']){
+ for(const hash of ['#search','#stock/US/AAA']){
   h=setup({...failed,error:'dashboard_preparation_failed',revision:0,finished_at:'unchanged-finish'},hash);
   await h.start();
   const previous=h.c.DATA;
@@ -152,10 +152,14 @@ function setup(initial=failed,hash='#stock/US/AAA'){
 
  h=setup({...failed,error:'dashboard_preparation_failed'});await h.start();assert.match(h.text(),/화면 자료를 준비하지 못/);
  h=setup({...failed,account_state:'failed',account_error:'http_400_IGW40043'});await h.start();
- assert.match(h.text(),/NH 인증 복구 후에도 토큰이 거절/);
- assert.match(h.text(),/IGW40043/);
+ assert.doesNotMatch(h.text(),/NH|IGW40043|계좌/);
+ assert.match(h.text(),/시장 자료 수집 작업이 오류로 종료/,'historical account failure does not hide the market failure');
  h=setup({...failed,account_state:'failed',account_error:'http_400_IGW40012'});await h.start();
- assert.match(h.text(),/NH가 계좌 요청을 거절/);
+ assert.doesNotMatch(h.text(),/NH|IGW40012|계좌/);
+ h=setup({...failed,state:'succeeded',error:null,retry_available:false,account_state:'failed',account_error:'historical_account_failure'});await h.start();
+ assert.equal(h.button('daily-retry'),undefined,'account failure alone does not offer a market retry');
+ assert.match(h.text(),/오늘의 갱신 완료/);
+ assert.doesNotMatch(h.text(),/historical_account_failure|계좌/);
  h=setup({...failed,state:'running',view_ready:false,stage:'adr_metadata'});await h.start();
  assert.match(h.text(),/ADR 시총·업종 보강/);
  h=setup({enabled:false});await h.start();assert.equal(h.host.hidden,true);
