@@ -155,10 +155,9 @@ class SavedContextTests(unittest.TestCase):
                     self.assertEqual(legacy['errors'], [])
         self.assertEqual(before, self.fingerprint(self.prices))
 
-    def test_price_service_missing_bars_table_cannot_preserve_context_error_shape(self):
-        # Group 2b handoff gap: the old consumer publishes [] after reading
-        # price_series, before the bars SELECT fails. C2 raises without that
-        # partial result, so replacing the call would silently change its shape.
+    def test_price_service_missing_bars_table_reports_error_without_partial_prices(self):
+        # After the 2b switch the context no longer publishes a partial [] when
+        # the bars table is missing; the error is recorded and prices is absent.
         self.prices.parent.mkdir(parents=True)
         with closing(sqlite3.connect(self.prices)) as db, db:
             db.execute('CREATE TABLE price_series (id INTEGER PRIMARY KEY, metadata TEXT)')
@@ -166,7 +165,7 @@ class SavedContextTests(unittest.TestCase):
                        (1, json.dumps(dict(market='US', symbol='SYNTH'))))
         before = self.fingerprint(self.prices)
         legacy = saved_context('US:SYNTH', root=self.root)
-        self.assertEqual(legacy['prices'], [])
+        self.assertNotIn('prices', legacy)
         self.assertEqual(legacy['errors'], [{'component': 'prices', 'error_type': 'OperationalError'}])
         self.assertFalse(legacy['found'])
         with self.assertRaisesRegex(sqlite3.OperationalError, 'no such table: prices'):
