@@ -1,4 +1,4 @@
-"""Finite, headless 06:40 KST market and balance job; no orders, browser, or LLM."""
+"""Finite, headless 06:40 KST market job using saved account observations."""
 import argparse
 from datetime import datetime, timezone
 import getpass
@@ -45,7 +45,7 @@ def main():
                 raise ValueError('configured_root_missing')
             result.update(state='check_passed', plan=plan_for(now), network_calls=0)
         else:
-            daily = DailyLaunch(ROOT)
+            daily = DailyLaunch(ROOT, accounts=False)
             record = run_scheduled(daily, now)
             result.update(daily.public(record))
             result.update(state=record['state'], run=record.get('run'), scheduled_day=record.get('scheduled_day'))

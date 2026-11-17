@@ -16,12 +16,18 @@ import launch.startup as startup
 
 class Startup(unittest.TestCase):
     def setUp(self):
+        self.proxy = patch('urllib.request.getproxies', return_value={})
+        self.proxy.start()
+        self.addCleanup(self.proxy.stop)
+        self.dns = patch('socket.getfqdn', return_value='127.0.0.1')
+        self.dns.start()
+        self.addCleanup(self.dns.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         (self.root / 'shell').mkdir()
         self.ready = self.root / 'data-ready.json'
         self.state = {}
-        (self.root / 'shell/index.html').write_text('<head><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/financial-focus.css"><script defer src="/app.js"></script></head><div class="loading">저장 자료를 불러오고 있습니다…</div>', encoding='utf-8')
+        (self.root / 'shell/index.html').write_text('<head><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/financial-focus.css"><script defer src="/app.js"></script></head><nav><a data-nav="home">작업대</a><a data-nav="accounts">계좌</a><a data-nav="screening">스크리닝</a><a data-nav="sectors">섹터</a><a data-nav="cycles">사이클</a></nav><div class="loading">저장 자료를 불러오고 있습니다…</div>', encoding='utf-8')
         (self.root / 'shell/style.css').write_text('body{}')
         (self.root / 'shell/startup.js').write_text('void 0;')
         self.server = ThreadingHTTPServer(('127.0.0.1', 0), startup.handler_for(self.root, self.state, self.ready))
@@ -51,7 +57,10 @@ class Startup(unittest.TestCase):
             try:
                 self.assertTrue(entered.wait(2))
                 page = self.get('/')
-                self.assertIn('스크리닝', page)
+                self.assertIn('종목 차트', page)
+                self.assertIn('작업대', page)
+                for retired in ('스크리닝', '섹터', '사이클', '계좌'):
+                    self.assertNotIn(retired, page)
                 self.assertIn('/startup.js', page)
                 self.assertNotIn('/financial-focus.css', page)
                 self.assertNotIn('/app.js', page)
@@ -74,14 +83,18 @@ class Startup(unittest.TestCase):
         self.state['failed'] = True
         self.assertEqual(json.loads(self.get('/api/startup'))['state'], 'failed')
 
-    def test_worker_failure_persists_traceback_without_console_output(self):
+    def test_worker_failure_persists_private_diagnostic_without_secret_text(self):
         def failed_main():
-            raise RuntimeError('preparation_fixture_failure')
-        with patch.dict(sys.modules, {'web.server': type('FailedDashboard', (), {'main': staticmethod(failed_main)})}), patch.object(sys, 'argv', []), patch.object(sys, 'stderr', io.StringIO()):
+            raise RuntimeError('SECRET_ACCOUNT_TOKEN_FIXTURE')
+        stderr = io.StringIO()
+        with patch.dict(sys.modules, {'web.server': type('FailedDashboard', (), {'main': staticmethod(failed_main)})}), patch.object(sys, 'argv', []), patch.object(sys, 'stderr', stderr):
             startup.run_dashboard([], self.ready, self.state)
         self.assertTrue(self.state['failed'])
         diagnostic = self.ready.with_suffix('.err.log').read_text(encoding='utf-8')
-        self.assertIn('RuntimeError: preparation_fixture_failure', diagnostic)
+        self.assertEqual(json.loads(diagnostic)['error_type'], 'RuntimeError')
+        self.assertTrue(json.loads(diagnostic)['error_frames'])
+        self.assertNotIn('SECRET_ACCOUNT_TOKEN_FIXTURE', diagnostic)
+        self.assertNotIn('SECRET_ACCOUNT_TOKEN_FIXTURE', stderr.getvalue())
         self.assertEqual(json.loads(self.get('/api/startup'))['state'], 'failed')
 
     def test_foreign_host_and_unlisted_paths_are_blocked(self):
@@ -110,6 +123,17 @@ class Startup(unittest.TestCase):
         self.assertEqual(launched[0][1][0], ['--daily-refresh', '--saved-accounts'])
         self.assertEqual(launched[1][0], startup.webbrowser.open)
         self.assertEqual(launched[1][1], ('http://127.0.0.1:12345',))
+
+    def test_invalid_refresh_flags_fail_before_lock_builder_or_browser(self):
+        for flags in (['--offline', '--daily-refresh'], ['--offline', '--retry-market'], ['--retry-market']):
+            with self.subTest(flags=flags), patch.object(startup, 'ROOT', self.root), patch.object(startup, 'acquire') as acquire, patch.object(startup, 'serve') as serve, patch.object(startup.webbrowser, 'open') as browser, patch.object(sys, 'argv', ['startup', *flags]), patch.object(sys, 'stderr', io.StringIO()):
+                with self.assertRaises(SystemExit) as error:
+                    startup.main()
+                self.assertEqual(error.exception.code, 2)
+                acquire.assert_not_called()
+                serve.assert_not_called()
+                browser.assert_not_called()
+
 
 
 if __name__ == '__main__':

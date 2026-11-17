@@ -7,10 +7,10 @@ import queue
 import subprocess
 import time
 from launch.instance import acquire, release, existing, publish, reuse
+from launch.journal import error_frames
 import re
 import sys
 import threading
-import traceback
 import urllib.parse
 import uuid
 import webbrowser
@@ -24,6 +24,9 @@ from atomic_io import atomic_write
 def loading_page(assets):
     page = (assets / ASSETS['/']).read_text(encoding='utf-8')
     page = re.sub(r'<script\b[^>]*>.*?</script>', '', page, flags=re.S)
+    # M10 owns the application shell; the loading shell exposes only retained screens.
+    page = re.sub(r'<a\b[^>]*data-nav="(?:screening|screener|sectors|sector|cycles|cycle|accounts)"[^>]*>.*?</a>',
+                  '', page, flags=re.S)
     page = re.sub(r'<link\b[^>]*href="([^"]+)"[^>]*>',
                   lambda match: match[0] if match[1] in STARTUP_ASSETS else '', page)
     return page.replace('</head>', '<script defer src="/startup.js"></script></head>').replace(
@@ -34,7 +37,7 @@ def loading_page(assets):
         '<div class="stats" aria-hidden="true">' + ''.join(
             '<div class="stat"><span class="label">' + label + '</span>'
             '<div class="value">…</div><span class="detail">불러오는 중</span></div>'
-            for label in ('시장 자료', '섹터 관찰', '스크리닝', '계좌 자료')) + '</div></section>')
+            for label in ('시장 자료', '종목 차트', '재무 자료', '분석 기록')) + '</div></section>')
 
 
 def public_status(state, ready_file):
@@ -97,15 +100,18 @@ def run_dashboard(arguments, ready_file, state):
         state['failed'] = True
     except BaseException:
         state['failed'] = True
-        write_error(ready_file.with_suffix('.err.log'))
+        diagnostic = write_error(ready_file.with_suffix('.err.log'))
         if sys.stderr is not None:
-            traceback.print_exc()
+            sys.stderr.write(json.dumps(diagnostic) + '\n')
             sys.stderr.flush()
 
 
 def write_error(path):
-    # Latest diagnostic, bounded even when the same failed launch is retried.
-    atomic_write(path, traceback.format_exc()[-65536:])
+    # Store locations, never exception messages, request values or source lines.
+    exc = sys.exc_info()[1]
+    diagnostic = {'error_type': type(exc).__name__, 'error_frames': error_frames(exc)[-32:]}
+    atomic_write(path, json.dumps(diagnostic, ensure_ascii=True))
+    return diagnostic
 
 
 def announce(args, value):
